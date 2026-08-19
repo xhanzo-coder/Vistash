@@ -1,0 +1,28 @@
+[package]
+name = "vistash-core"
+description = "Vistash 的领域逻辑：库骨架、寻址、导入、媒体处理、色卡与索引"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# 本 crate 刻意不依赖 tauri。这张依赖表就是设计第一条的编译期检查：
+# 想在核心逻辑里调用 Tauri API 必须先改这里，而依赖表的改动在评审中看得见。
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+sha2 = "0.10"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "webp",
+  "gif",
+  "bmp",
+] }
+webp = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"

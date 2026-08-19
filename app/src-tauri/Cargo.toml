@@ -1,0 +1,30 @@
+[package]
+name = "vistash"
+description = "Vistash 本地图片素材管理与控制提示词生成"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+# 装配逻辑放在 lib、可执行入口只剩一行，使 main.rs 不含任何可能出错的代码。
+#
+# 名字刻意不叫 vistash_core：那是领域 crate 的名字，两个 crate 同名会让
+# `use vistash_core::` 到底指向哪一个取决于依赖解析顺序。
+name = "vistash_lib"
+# 只要 rlib。Tauri 模板默认还产出 staticlib 与 cdylib，那是 iOS 与 Android 的
+# 链接需要；本项目 Windows 优先且不含移动端目标，多产出两份只是让每次构建
+# 把同一份代码编三遍。新增移动端目标时再补回来。
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 全部领域逻辑来自 vistash-core。本 crate 只做窗口装配与 command 薄层，
+# 因此这里不出现 sha2、image、rusqlite 一类的领域依赖——它们出现在这张表里，
+# 就说明有业务判断漏到了 Tauri 层。
+vistash-core = { path = "../crates/vistash-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde.workspace = true
+serde_json.workspace = true

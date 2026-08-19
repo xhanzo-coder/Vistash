@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "promise", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "settings": {
+    "react": {
+      "version": "19.2"
+    }
+  },
+  "rules": {
+    // React 17 起的自动 JSX 运行时不再要求 React 在作用域内，tsconfig 的
+    // "jsx": "react-jsx" 已启用该运行时。eslint-plugin-react 的 jsx-runtime
+    // 预设同样关闭这条规则，oxlint 尚无对应的运行时设置项，故在此显式关闭。
+    "react/react-in-jsx-scope": "off",
+
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+
+    // 以下十条针对同一个风险：IPC 边界上的类型谎言。后端返回的 JSON 一旦被断言
+    // 成某个类型就不再校验，而 invoke 的返回值在类型系统里是 unknown。
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-type-assertion": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error"
+  },
+  "options": {
+    // 类型感知规则由 oxlint-tsgolint 提供，它基于 typescript-go，要求 TypeScript 7.0+。
+    "typeAware": true,
+    // 警告同样使命令以非零码退出。否则 lint 会变成一条"看起来通过"的命令。
+    "denyWarnings": true
+  },
+  "ignorePatterns": ["dist", "target", "src-tauri", "node_modules"]
+}

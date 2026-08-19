@@ -1,0 +1,53 @@
+# 生成物
+app/node_modules/
+app/dist/
+app/dist-ssr/
+app/target/
+app/src-tauri/gen/
+app/src-tauri/target/
+.vite/
+coverage/
+
+# 本机开发与工具产物
+.playwright-mcp/
+.research/
+.codex/skills/
+.claude/skills/
+.vscode/
+.idea/
+*.code-workspace
+*.log
+
+# 由 e8-skill-linker 链接的外部 Skill；仅提交项目自有的 OpenSpec Skill
+.agents/skills/*
+!.agents/skills/openspec-apply-change/
+!.agents/skills/openspec-apply-change/**
+!.agents/skills/openspec-archive-change/
+!.agents/skills/openspec-archive-change/**
+!.agents/skills/openspec-explore/
+!.agents/skills/openspec-explore/**
+!.agents/skills/openspec-propose/
+!.agents/skills/openspec-propose/**
+
+# 凭据、签名材料与本机配置
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+credentials.json
+secrets.json
+
+# 运行时用户数据
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# 本机
+*.local
+.DS_Store
+Thumbs.db

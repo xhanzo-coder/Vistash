@@ -1,0 +1,25 @@
+schema: spec-driven
+
+context: |
+  项目名称：Vistash。
+  项目目标：开发一个 Windows 优先、本地优先的桌面应用，只覆盖两项能力——本地图片素材管理，以及基于图像可观察证据生成能在指定生图模型上重建主体、构图、风格机制、光色与材质的控制提示词。
+  产品边界：明确排除从网页站点批量抓取素材；产品目标不得表述为"还原图像生成时使用的原始提示词"。
+  运行时技术栈：Tauri 2、React/TypeScript、Rust 与 SQLite。
+  主要开发 Agent：Codex 与 Claude。
+  项目的所有人类可读文档、OpenSpec 产物、任务说明和 Agent 输出统一使用简体中文。
+  Skill 名称、代码标识符、命令、文件路径以及 OpenSpec 解析所需的固定语法保留原文。
+  文本文件统一使用 UTF-8；Markdown、YAML、JSON、TOML、HTML、CSS、JavaScript、TypeScript 和源代码文件使用无 BOM 的 UTF-8。
+
+rules:
+  proposal:
+    - 所有可读标题和正文必须使用简体中文。
+    - 内容应明确说明背景、变更、能力范围和影响，不得只记录实现步骤。
+  specs:
+    - 需求名称、场景名称和描述必须使用简体中文。
+    - 必须保留 ADDED Requirements、MODIFIED Requirements、REMOVED Requirements、RENAMED Requirements、Requirement、Scenario、WHEN、THEN 等 OpenSpec 固定解析关键字。
+  design:
+    - 所有可读标题和正文必须使用简体中文。
+    - 必须记录关键决策、备选方案、风险、迁移步骤和待确定问题。
+  tasks:
+    - 所有任务组名称和任务说明必须使用简体中文。
+    - 每项任务必须保持 OpenSpec 可解析的复选框格式，并且只在验证通过后标记完成。
