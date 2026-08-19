@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { asAppError } from "../../shared/errors";
 import { loadThumbnail, releaseImageUrl } from "../../shared/ipc";
@@ -15,10 +15,32 @@ import { ErrorLine } from "../library/ErrorLine";
  * 与"素材本身是空白图像"无法区分。
  */
 function Thumbnail({ asset }: { asset: AssetRow }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [shouldLoad, setShouldLoad] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<AppError | null>(null);
 
   useEffect(() => {
+    const container = containerRef.current;
+    if (container === null) {
+      throw new Error("缩略图容器在挂载后不存在");
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldLoad(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "600px" },
+    );
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!shouldLoad) return undefined;
     let current: string | null = null;
     let cancelled = false;
 
@@ -42,11 +64,25 @@ function Thumbnail({ asset }: { asset: AssetRow }) {
       cancelled = true;
       if (current !== null) releaseImageUrl(current);
     };
-  }, [asset.hash]);
+  }, [asset.hash, shouldLoad]);
 
-  if (error !== null) return <ErrorLine error={error} />;
-  if (url === null) return <p>正在载入缩略图…</p>;
-  return <img src={url} alt={asset.original_filename} />;
+  return (
+    <div
+      ref={containerRef}
+      aria-busy={shouldLoad && url === null && error === null}
+      style={{ aspectRatio: `${asset.width} / ${asset.height}` }}
+    >
+      {error !== null ? (
+        <ErrorLine error={error} />
+      ) : url !== null ? (
+        <img src={url} alt={asset.original_filename} loading="lazy" />
+      ) : shouldLoad ? (
+        <p>正在载入缩略图…</p>
+      ) : (
+        <p>等待载入缩略图…</p>
+      )}
+    </div>
+  );
 }
 
 /**

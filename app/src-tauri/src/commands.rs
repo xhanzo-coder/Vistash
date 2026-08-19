@@ -4,20 +4,21 @@
 //! "什么情况下算重复""缩略图缺失该怎么办"一类的判断都在 `vistash-core` 里，因为那些
 //! 判断需要被 `cargo test` 直接验证，而本模块的每个函数都要求先有一个 WebView 才能跑。
 //!
-//! 唯一的例外是"导入完成后把结果写进索引"这一步。`import` 与 `index` 在设计第一条里
-//! 是同一层的两个模块，彼此没有依赖箭头，因此必须由它们上面的一层来串。这里刻意把它
-//! 写成没有任何分支的两行——一旦这段出现条件判断，它就该搬进核心 crate。
+//! 本层还承担两个适配职责：把核心导入观察点转为 Tauri typed `Channel`，以及在导入完成
+//! 后更新 SQLite 索引。`import` 与 `index` 在设计第一条里是同一层的两个模块，彼此没有
+//! 依赖箭头，因此只能由它们上面的命令层编排；重复判定、回滚和媒体处理仍全部留在核心。
 //!
 //! IPC 边界上的字段名一律用 Rust 侧的 snake_case，不做 camelCase 改写：核心类型与
 //! 这里的 DTO 混用两种命名，前端就得记住哪个类型用哪种。
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::Serialize;
+use tauri::ipc::Channel;
 use vistash_core::error::{AppError, Code, Result};
 use vistash_core::hashing::ContentHash;
-use vistash_core::import::{self, ImportFailure, ImportOptions, NoopObserver};
+use vistash_core::import::{self, ImportFailure, ImportObserver, ImportOptions};
 use vistash_core::index::{AssetRow, Index};
 use vistash_core::library::Library;
 use vistash_core::media::MediaType;
@@ -26,13 +27,15 @@ use vistash_core::settings::AppSettings;
 /// 一个已打开的库及其索引。
 struct Opened {
     lib: Library,
-    index: Index,
+    index: Mutex<Index>,
+    /// 同一个库一次只允许一个批量写入任务，避免两个拖入事件竞争去重与落盘。
+    import_gate: Mutex<()>,
 }
 
 /// 应用运行期状态。
 pub struct AppState {
     settings_path: PathBuf,
-    opened: Option<Opened>,
+    opened: Option<Arc<Opened>>,
     /// 启动时恢复上次的库失败的原因。首次运行时为 `None`。
     restore_problem: Option<AppError>,
 }
@@ -69,7 +72,7 @@ impl AppState {
 }
 
 /// 打开一个已存在的库及其派生数据。不创建库。
-fn open_at(root: &Path) -> Result<Opened> {
+fn open_at(root: &Path) -> Result<Arc<Opened>> {
     open_derived(Library::open(root)?)
 }
 
@@ -78,10 +81,14 @@ fn open_at(root: &Path) -> Result<Opened> {
 /// 两者都可以被删掉重建，因此这里做的都是自愈动作而不是校验：索引的 `user_version`
 /// 不匹配即重扫重建，缩略图的格式版本不匹配即清空待重算。选库与启动恢复两条路径都必须
 /// 走这里，否则换了缩略图编码参数之后，其中一条路径会继续读回旧格式的字节。
-fn open_derived(lib: Library) -> Result<Opened> {
+fn open_derived(lib: Library) -> Result<Arc<Opened>> {
     import::ensure_thumbnail_format(&lib)?;
     let index = Index::open(&lib)?;
-    Ok(Opened { lib, index })
+    Ok(Arc::new(Opened {
+        lib,
+        index: Mutex::new(index),
+        import_gate: Mutex::new(()),
+    }))
 }
 
 pub type Shared = Mutex<AppState>;
@@ -112,6 +119,10 @@ fn lock_poisoned() -> AppError {
     )
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
+    mutex.lock().map_err(|_| lock_poisoned())
+}
+
 fn not_selected() -> AppError {
     AppError::detailed(Code::LibraryNotFound, "尚未选择库")
 }
@@ -126,9 +137,14 @@ fn status_of(state: &AppState) -> LibraryStatus {
     }
 }
 
+fn current_opened(state: &tauri::State<'_, Shared>) -> Result<Arc<Opened>> {
+    let guard = lock(state)?;
+    guard.opened.as_ref().cloned().ok_or_else(not_selected)
+}
+
 #[tauri::command]
 pub fn library_status(state: tauri::State<'_, Shared>) -> Result<LibraryStatus> {
-    let guard = state.lock().map_err(|_| lock_poisoned())?;
+    let guard = lock(&state)?;
     Ok(status_of(&guard))
 }
 
@@ -138,7 +154,7 @@ pub fn open_library(path: String, state: tauri::State<'_, Shared>) -> Result<Lib
     let root = PathBuf::from(&path);
     let opened = open_derived(Library::open_or_create(&root)?)?;
 
-    let mut guard = state.lock().map_err(|_| lock_poisoned())?;
+    let mut guard = lock(&state)?;
     // 只在成功打开之后才落盘记住。若在选择时就写入，一个打不开的目录会被记住，
     // 于是下次启动仍然撞在同一个错误上。
     let settings = AppSettings {
@@ -154,27 +170,89 @@ pub fn open_library(path: String, state: tauri::State<'_, Shared>) -> Result<Lib
 /// 网格用的素材列表，不含回收站中的素材。
 #[tauri::command]
 pub fn list_assets(state: tauri::State<'_, Shared>) -> Result<Vec<AssetRow>> {
-    let guard = state.lock().map_err(|_| lock_poisoned())?;
-    let opened = guard.opened.as_ref().ok_or_else(not_selected)?;
-    opened.index.list_assets(false)
+    let opened = current_opened(&state)?;
+    let index = lock(&opened.index)?;
+    index.list_assets(false)
 }
 
-/// 导入拖入或选中的路径。目录会被递归展开为其中受支持的图片。
+/// 一次批量导入的进度。
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportProgress {
+    /// 已结束处理的素材数。
+    pub done: usize,
+    /// 本批次展开后的素材总数。
+    pub total: usize,
+    /// 当前即将处理的文件；全部结束时为 `None`。
+    pub current_filename: Option<String>,
+}
+
+struct ChannelObserver {
+    channel: Channel<ImportProgress>,
+    disconnected: bool,
+}
+
+impl ImportObserver for ChannelObserver {
+    fn should_cancel(&self) -> bool {
+        self.disconnected
+    }
+
+    fn on_progress(&mut self, done: usize, total: usize, source: &Path) {
+        let current_filename = source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        if self
+            .channel
+            .send(ImportProgress {
+                done,
+                total,
+                current_filename,
+            })
+            .is_err()
+        {
+            self.disconnected = true;
+        }
+    }
+}
+
+/// 导入拖入或选中的路径。目录扫描与媒体处理全部在 blocking worker 中执行。
 #[tauri::command]
-pub fn import_paths(paths: Vec<String>, state: tauri::State<'_, Shared>) -> Result<ImportOutcome> {
-    // 先确认库已打开再扫磁盘：反过来的话，没选库时会白白递归遍历一遍拖入的目录，
-    // 然后才报"尚未选择库"。
-    let mut guard = state.lock().map_err(|_| lock_poisoned())?;
-    let opened = guard.opened.as_mut().ok_or_else(not_selected)?;
-    let expanded = import::expand_sources(&paths.into_iter().map(PathBuf::from).collect::<Vec<_>>())?;
+pub async fn import_paths(
+    paths: Vec<String>,
+    on_progress: Channel<ImportProgress>,
+    state: tauri::State<'_, Shared>,
+) -> Result<ImportOutcome> {
+    let opened = current_opened(&state)?;
+    tauri::async_runtime::spawn_blocking(move || import_paths_blocking(paths, on_progress, &opened))
+        .await
+        .map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("后台导入任务异常终止：{error}"),
+            )
+        })?
+}
+
+fn import_paths_blocking(
+    paths: Vec<String>,
+    on_progress: Channel<ImportProgress>,
+    opened: &Opened,
+) -> Result<ImportOutcome> {
+    let _import_guard = lock(&opened.import_gate)?;
+    let expanded =
+        import::expand_sources(&paths.into_iter().map(PathBuf::from).collect::<Vec<_>>())?;
 
     // 本次不实现文件夹与标签的界面，因此导入不带归类信息。
     let opts = ImportOptions::default();
-    let report = import::import_many(&opened.lib, &expanded.sources, &opts, &mut NoopObserver);
+    let mut observer = ChannelObserver {
+        channel: on_progress,
+        disconnected: false,
+    };
+    let report = import::import_many(&opened.lib, &expanded.sources, &opts, &mut observer);
 
-    // 见模块头：这两行是本模块唯一允许的编排，且不含任何分支。
+    // 见模块头：命令层只把核心产出的侧车送入同层索引，不重新判断导入结果。
+    let mut index = lock(&opened.index)?;
     for sidecar in &report.imported {
-        opened.index.upsert_asset(sidecar)?;
+        index.upsert_asset(sidecar)?;
     }
 
     Ok(ImportOutcome {
@@ -204,8 +282,8 @@ fn safe_ext(recorded: &str) -> Result<&'static str> {
 }
 
 /// 取出素材在库内的扩展名，路径拼接只用它的返回值。
-fn ext_of(opened: &Opened, hash: &ContentHash) -> Result<&'static str> {
-    safe_ext(&opened.index.asset_ext(hash.as_str())?)
+fn ext_of(index: &Index, hash: &ContentHash) -> Result<&'static str> {
+    safe_ext(&index.asset_ext(hash.as_str())?)
 }
 
 /// 素材的缩略图字节。缺失时按需重新生成。
@@ -219,9 +297,11 @@ pub fn asset_thumbnail(
 ) -> Result<tauri::ipc::Response> {
     // 先校验再用。ContentHash 存在的意义就是让未校验的字符串无法参与库内路径拼接。
     let hash = ContentHash::parse(&hash)?;
-    let guard = state.lock().map_err(|_| lock_poisoned())?;
-    let opened = guard.opened.as_ref().ok_or_else(not_selected)?;
-    let ext = ext_of(opened, &hash)?;
+    let opened = current_opened(&state)?;
+    let ext = {
+        let index = lock(&opened.index)?;
+        ext_of(&index, &hash)?
+    };
     let bytes = import::ensure_thumbnail(&opened.lib, &hash, ext)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -233,9 +313,11 @@ pub fn asset_original(
     state: tauri::State<'_, Shared>,
 ) -> Result<tauri::ipc::Response> {
     let hash = ContentHash::parse(&hash)?;
-    let guard = state.lock().map_err(|_| lock_poisoned())?;
-    let opened = guard.opened.as_ref().ok_or_else(not_selected)?;
-    let ext = ext_of(opened, &hash)?;
+    let opened = current_opened(&state)?;
+    let ext = {
+        let index = lock(&opened.index)?;
+        ext_of(&index, &hash)?
+    };
     let bytes = opened.lib.read_body(&hash, ext)?;
     Ok(tauri::ipc::Response::new(bytes))
 }

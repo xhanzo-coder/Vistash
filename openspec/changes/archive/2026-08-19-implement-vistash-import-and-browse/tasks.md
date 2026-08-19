@@ -40,14 +40,18 @@
 - [x] 5.4 实现选库界面：首次运行的选择流程与打开已有库的流程
 - [x] 5.5 实现拖入文件与文件夹的导入入口，以及带错误码的逐项失败呈现
 - [x] 5.6 实现缩略图网格：只消费后端产出的缩略图，缺失时按需重新生成，生成失败必须显式呈现原因而非留空
-- [ ] 5.7 实现单图预览：呈现原图、色卡与 HEX 复制
+- [x] 5.7 实现单图预览：呈现原图、色卡与 HEX 复制
 - [x] 5.8 验证界面层不读取像素：前端不得使用 `Canvas`、`OffscreenCanvas` 或 `ImageData` 做缩放、采样或聚类
+- [x] 5.9 先在 IPC 公共边界建立进度 Channel 的失败测试，再把 `import_paths` 改为 async command 并在 blocking worker 中执行目录扫描与导入
+- [x] 5.10 将当前库改为共享句柄，以独立导入门防止重叠写入、以独立索引锁缩短状态锁持有范围
+- [x] 5.11 在界面呈现已处理数量、总数量与当前文件名，并在一次导入期间拒绝启动重叠任务
+- [x] 5.12 先在 `AssetGrid` 公共组件边界建立离屏缩略图不请求 IPC 的失败测试，再用 `IntersectionObserver` 按视口加载并保留素材画幅比例
 
 ## 6. 验证与收尾
 
 - [x] 6.1 运行全部测试与 lint、类型检查，确认三条命令均通过
-- [ ] 6.2 用真实素材走通完整链路：选库、导入、网格、预览、色卡、HEX 复制
-- [ ] 6.3 记录导入 100 张素材的耗时基线并写入 `design.md`，作为后续是否并行化的实测依据
+- [x] 6.2 用真实素材走通完整链路：选库、导入、网格、预览、色卡、HEX 复制
+- [x] 6.3 记录导入 100 张素材的耗时基线并写入 `design.md`，作为后续是否并行化的实测依据
 - [x] 6.4 实测缩略图长边 512 与 WebP 质量参数，把结论写回 `design.md` 的待确定问题
 - [x] 6.5 执行 `code-review`，核对仓库规范与 OpenSpec 符合性
-- [ ] 6.6 运行 `openspec validate implement-vistash-import-and-browse --strict --no-interactive` 并修正全部问题
+- [x] 6.6 运行 `openspec validate implement-vistash-import-and-browse --strict --no-interactive` 并修正全部问题

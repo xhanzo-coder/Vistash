@@ -1,5 +1,8 @@
-## ADDED Requirements
+# app-shell Specification
 
+## Purpose
+TBD - created by archiving change implement-vistash-import-and-browse. Update Purpose after archive.
+## Requirements
 ### Requirement: 库位置由使用者显式选择并被记住
 
 首次运行时，应用 MUST（必须）要求使用者显式选择库位置，MUST NOT（禁止）在默认路径静默创建库。原因是库会承载素材本体的完整副本，规模可增长到数十 GB，落在系统盘的默认目录会产生使用者未同意的后果。
@@ -103,3 +106,19 @@
 
 - **WHEN** 预览显示素材原图
 - **THEN** 原图通过标准图像元素渲染，界面层不读取其像素值
+
+### Requirement: 批量导入期间界面保持响应并呈现进度
+
+批量导入的目录扫描、哈希、文件复制、图像解码、缩略图生成、色卡计算与索引写入 MUST（必须）在窗口事件线程之外执行。导入进行期间窗口 MUST（必须）继续响应重绘、移动、最小化与导航输入，MUST NOT（禁止）因批量处理而被 Windows 标记为未响应。
+
+完成源文件展开后，界面 MUST（必须）呈现已处理数量、总数量与当前文件名，并 MUST（必须）随每个素材开始处理而更新。一次导入尚未结束时，后续拖入 MUST NOT（禁止）启动与其重叠的库写入；界面 MUST（必须）保留当前任务的进度状态。
+
+#### Scenario: 导入一百张素材
+
+- **WHEN** 使用者拖入一个包含一百张受支持图片的目录
+- **THEN** 导入在后台执行，窗口持续响应，界面进度从零推进到一百
+
+#### Scenario: 导入进行时再次拖入
+
+- **WHEN** 前一批素材仍在导入且使用者再次拖入文件
+- **THEN** 应用不启动重叠的第二个导入任务，当前任务继续执行且进度不被重置

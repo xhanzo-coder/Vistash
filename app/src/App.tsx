@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssetGrid } from "./features/assets/AssetGrid";
 import { AssetPreview } from "./features/assets/AssetPreview";
@@ -6,7 +6,13 @@ import { ErrorLine } from "./features/library/ErrorLine";
 import { LibraryPicker } from "./features/library/LibraryPicker";
 import { asAppError } from "./shared/errors";
 import { importPaths, libraryStatus, listAssets, onPathsDropped } from "./shared/ipc";
-import type { AppError, AssetRow, ImportOutcome, LibraryStatus } from "./shared/types";
+import type {
+  AppError,
+  AssetRow,
+  ImportOutcome,
+  ImportProgress,
+  LibraryStatus,
+} from "./shared/types";
 
 /** 一级导航入口。 */
 type Section = "assets" | "prompts";
@@ -14,8 +20,8 @@ type Section = "assets" | "prompts";
 /**
  * 应用根组件。
  *
- * 状态只有四块：库状态、素材列表、选中项、导入结果。设计第六条据此决定不引入状态管理库——
- * 只有这几块时，引入 Redux 或 Zustand 是先付抽象成本而没有对应收益。
+ * 库、素材、选中项与导入状态都只由根组件协调。设计第六条据此决定不引入状态管理库——
+ * 尚无跨路由共享或复杂派生缓存时，引入 Redux 或 Zustand 只有抽象成本。
  */
 export function App() {
   const [status, setStatus] = useState<LibraryStatus | null>(null);
@@ -26,6 +32,8 @@ export function App() {
   const [selected, setSelected] = useState<AssetRow | null>(null);
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const importingRef = useRef(false);
 
   useEffect(() => {
     const load = async () => {
@@ -63,15 +71,19 @@ export function App() {
 
   const runImport = useCallback(
     async (paths: string[]) => {
-      if (paths.length === 0) return;
+      if (paths.length === 0 || importingRef.current) return;
+      importingRef.current = true;
       setImporting(true);
+      setImportProgress(null);
       try {
-        setOutcome(await importPaths(paths));
+        setOutcome(await importPaths(paths, setImportProgress));
         await refresh();
       } catch (raw) {
         setAssetsError(asAppError(raw));
       } finally {
+        importingRef.current = false;
         setImporting(false);
+        setImportProgress(null);
       }
     },
     [refresh],
@@ -165,6 +177,20 @@ export function App() {
         </button>
       </nav>
 
+      {importing && (
+        <p role="status">
+          {importProgress === null
+            ? "正在扫描待导入文件…"
+            : `正在导入 ${importProgress.done}/${importProgress.total}${
+                importProgress.current_filename === null
+                  ? ""
+                  : `：${importProgress.current_filename}`
+              }`}
+        </p>
+      )}
+      {outcome !== null && <ImportSummary outcome={outcome} />}
+      {assetsError !== null && <ErrorLine error={assetsError} />}
+
       <main>
         {section === "prompts" ? (
           /*
@@ -189,9 +215,6 @@ export function App() {
           <section>
             <h2>素材</h2>
             <p>把图片文件或文件夹拖进窗口即可导入。支持 PNG、JPEG、WebP、GIF 与 BMP。</p>
-            {importing && <p role="status">正在导入…</p>}
-            {outcome !== null && <ImportSummary outcome={outcome} />}
-            {assetsError !== null && <ErrorLine error={assetsError} />}
             <AssetGrid assets={assets} onSelect={setSelected} />
           </section>
         )}
