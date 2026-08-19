@@ -13,7 +13,7 @@ use crate::colorcard::ColorCard;
 use crate::error::{AppError, Code, Result};
 use crate::library::{FolderList, Library};
 use crate::sidecar::AssetSidecar;
-use rusqlite::Connection;
+use rusqlite::{params_from_iter, Connection};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -131,6 +131,14 @@ pub struct IndexSnapshot {
     pub folders: Vec<String>,
 }
 
+/// 索引查询的文件夹范围。根文件夹不是持久化节点，因此单独建模。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderSelection<'a> {
+    All,
+    Root,
+    Exact(&'a str),
+}
+
 fn sql_err(what: &str, e: rusqlite::Error) -> AppError {
     AppError::detailed(Code::LibraryIndexRebuildFailed, format!("{what}: {e}"))
 }
@@ -146,6 +154,94 @@ fn io_err(what: &str, path: &Path, e: std::io::Error) -> AppError {
 #[derive(Debug)]
 pub struct Index {
     conn: Connection,
+}
+
+fn upsert_asset_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    sidecar: &AssetSidecar,
+) -> Result<()> {
+    let hash = sidecar.hash.as_str();
+
+    // 先删子表再删主表：即便外键未生效也不会留下孤儿行。
+    for table in ["asset_tags", "asset_folders", "asset_colors"] {
+        tx.execute(&format!("DELETE FROM {table} WHERE hash = ?1"), [hash])
+            .map_err(|error| sql_err(&format!("清理 {table} 失败"), error))?;
+    }
+    tx.execute("DELETE FROM assets WHERE hash = ?1", [hash])
+        .map_err(|error| sql_err("清理 assets 失败", error))?;
+
+    let card: &ColorCard = &sidecar.color_card;
+    tx.execute(
+        "INSERT INTO assets (
+            hash, hash_algo, media_type, ext, byte_size, width, height,
+            imported_at, original_filename, source_path, deleted_at,
+            color_card_status, color_card_algo_version,
+            color_card_failure_reason, color_card_sampled_pixel_count
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            hash,
+            sidecar.hash_algo,
+            sidecar.media_type.as_str(),
+            sidecar.ext,
+            sidecar.byte_size,
+            sidecar.width,
+            sidecar.height,
+            sidecar.imported_at.to_rfc3339(),
+            sidecar.original_filename,
+            sidecar.source_path,
+            sidecar.deleted_at.map(|time| time.to_rfc3339()),
+            card.status.as_str(),
+            card.algo_version,
+            card.failure_reason.map(|code| code.as_str()),
+            card.sampled_pixel_count,
+        ],
+    )
+    .map_err(|error| sql_err("写入素材失败", error))?;
+
+    {
+        let mut statement = tx
+            .prepare("INSERT OR IGNORE INTO asset_tags (hash, tag) VALUES (?1, ?2)")
+            .map_err(|error| sql_err("准备标签写入失败", error))?;
+        for tag in &sidecar.tags {
+            statement
+                .execute(rusqlite::params![hash, tag])
+                .map_err(|error| sql_err("写入标签失败", error))?;
+        }
+    }
+    {
+        let mut statement = tx
+            .prepare("INSERT OR IGNORE INTO asset_folders (hash, folder) VALUES (?1, ?2)")
+            .map_err(|error| sql_err("准备素材文件夹写入失败", error))?;
+        for folder in &sidecar.folders {
+            statement
+                .execute(rusqlite::params![hash, folder])
+                .map_err(|error| sql_err("写入素材文件夹失败", error))?;
+        }
+    }
+    {
+        let mut statement = tx
+            .prepare(
+                "INSERT INTO asset_colors
+                   (hash, ordinal, hex, oklab_l, oklab_a, oklab_b, share, role)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )
+            .map_err(|error| sql_err("准备色卡写入失败", error))?;
+        for (ordinal, color) in card.colors.iter().enumerate() {
+            statement
+                .execute(rusqlite::params![
+                    hash,
+                    ordinal as i64,
+                    color.hex,
+                    color.oklab.l,
+                    color.oklab.a,
+                    color.oklab.b,
+                    color.share,
+                    color.role.as_str(),
+                ])
+                .map_err(|error| sql_err("写入色卡失败", error))?;
+        }
+    }
+    Ok(())
 }
 
 impl Index {
@@ -226,90 +322,20 @@ impl Index {
     }
 
     /// 写入或覆盖一个素材。整体在一个事务里，避免留下"有素材行但没有标签行"的中间态。
-    pub fn upsert_asset(&mut self, s: &AssetSidecar) -> Result<()> {
+    pub fn upsert_asset(&mut self, sidecar: &AssetSidecar) -> Result<()> {
+        self.upsert_assets(std::slice::from_ref(sidecar))
+    }
+
+    /// 在同一个事务里写入一批素材，避免批量导入时为每条索引反复同步磁盘。
+    pub fn upsert_assets(&mut self, sidecars: &[AssetSidecar]) -> Result<()> {
         let tx = self
             .conn
             .transaction()
-            .map_err(|e| sql_err("开启事务失败", e))?;
-        let hash = s.hash.as_str();
-
-        // 先删子表再删主表：即便外键未生效也不会留下孤儿行。
-        for table in ["asset_tags", "asset_folders", "asset_colors"] {
-            tx.execute(&format!("DELETE FROM {table} WHERE hash = ?1"), [hash])
-                .map_err(|e| sql_err(&format!("清理 {table} 失败"), e))?;
+            .map_err(|error| sql_err("开启事务失败", error))?;
+        for sidecar in sidecars {
+            upsert_asset_in_transaction(&tx, sidecar)?;
         }
-        tx.execute("DELETE FROM assets WHERE hash = ?1", [hash])
-            .map_err(|e| sql_err("清理 assets 失败", e))?;
-
-        let card: &ColorCard = &s.color_card;
-        tx.execute(
-            "INSERT INTO assets (
-                hash, hash_algo, media_type, ext, byte_size, width, height,
-                imported_at, original_filename, source_path, deleted_at,
-                color_card_status, color_card_algo_version,
-                color_card_failure_reason, color_card_sampled_pixel_count
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-            rusqlite::params![
-                hash,
-                s.hash_algo,
-                s.media_type.as_str(),
-                s.ext,
-                s.byte_size,
-                s.width,
-                s.height,
-                s.imported_at.to_rfc3339(),
-                s.original_filename,
-                s.source_path,
-                s.deleted_at.map(|t| t.to_rfc3339()),
-                card.status.as_str(),
-                card.algo_version,
-                card.failure_reason.map(|c| c.as_str()),
-                card.sampled_pixel_count,
-            ],
-        )
-        .map_err(|e| sql_err("写入素材失败", e))?;
-
-        {
-            let mut stmt = tx
-                .prepare("INSERT OR IGNORE INTO asset_tags (hash, tag) VALUES (?1, ?2)")
-                .map_err(|e| sql_err("准备标签写入失败", e))?;
-            for tag in &s.tags {
-                stmt.execute(rusqlite::params![hash, tag])
-                    .map_err(|e| sql_err("写入标签失败", e))?;
-            }
-        }
-        {
-            let mut stmt = tx
-                .prepare("INSERT OR IGNORE INTO asset_folders (hash, folder) VALUES (?1, ?2)")
-                .map_err(|e| sql_err("准备素材文件夹写入失败", e))?;
-            for folder in &s.folders {
-                stmt.execute(rusqlite::params![hash, folder])
-                    .map_err(|e| sql_err("写入素材文件夹失败", e))?;
-            }
-        }
-        {
-            let mut stmt = tx
-                .prepare(
-                    "INSERT INTO asset_colors
-                       (hash, ordinal, hex, oklab_l, oklab_a, oklab_b, share, role)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                )
-                .map_err(|e| sql_err("准备色卡写入失败", e))?;
-            for (ordinal, c) in card.colors.iter().enumerate() {
-                stmt.execute(rusqlite::params![
-                    hash,
-                    ordinal as i64,
-                    c.hex,
-                    c.oklab.l,
-                    c.oklab.a,
-                    c.oklab.b,
-                    c.share,
-                    c.role.as_str(),
-                ])
-                .map_err(|e| sql_err("写入色卡失败", e))?;
-            }
-        }
-        tx.commit().map_err(|e| sql_err("提交事务失败", e))
+        tx.commit().map_err(|error| sql_err("提交事务失败", error))
     }
 
     /// 索引中的素材条数，含回收站中的素材。
@@ -342,6 +368,98 @@ impl Index {
         self.load_assets(tail)
     }
 
+    /// 按位置、文件夹、全部标签和 Unicode 文件名组合查询。
+    pub fn query_assets(
+        &self,
+        deleted: bool,
+        folder: FolderSelection<'_>,
+        tags: &[String],
+        filename_text: &str,
+    ) -> Result<Vec<AssetRow>> {
+        let mut clauses = vec![if deleted {
+            "a.deleted_at IS NOT NULL".to_owned()
+        } else {
+            "a.deleted_at IS NULL".to_owned()
+        }];
+        let mut values = Vec::<String>::new();
+        match folder {
+            FolderSelection::All => {}
+            FolderSelection::Root => clauses.push(
+                "NOT EXISTS (SELECT 1 FROM asset_folders af WHERE af.hash = a.hash)".to_owned(),
+            ),
+            FolderSelection::Exact(path) => {
+                values.push(path.to_owned());
+                clauses.push(format!(
+                    "EXISTS (SELECT 1 FROM asset_folders af WHERE af.hash = a.hash AND af.folder = ?{})",
+                    values.len()
+                ));
+            }
+        }
+        for tag in tags {
+            values.push(tag.clone());
+            clauses.push(format!(
+                "EXISTS (SELECT 1 FROM asset_tags at WHERE at.hash = a.hash AND at.tag = ?{})",
+                values.len()
+            ));
+        }
+        let tail = format!(
+            "a WHERE {} ORDER BY a.imported_at DESC, a.hash",
+            clauses.join(" AND ")
+        );
+        self.load_assets_with_params(&tail, &values, Some(filename_text))
+    }
+
+    /// 正常素材使用的不同标签及其素材数量。
+    pub fn active_tag_counts(&self) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT t.tag, COUNT(*)
+                 FROM asset_tags t
+                 JOIN assets a ON a.hash = t.hash
+                 WHERE a.deleted_at IS NULL
+                 GROUP BY t.tag
+                 ORDER BY t.tag",
+            )
+            .map_err(|error| sql_err("准备标签计数查询失败", error))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|error| sql_err("查询标签计数失败", error))?;
+        let mut counts = Vec::new();
+        for row in rows {
+            let (tag, count) = row.map_err(|error| sql_err("读取标签计数失败", error))?;
+            counts.push((
+                tag,
+                usize::try_from(count).map_err(|_| {
+                    AppError::detailed(
+                        Code::LibraryIndexRebuildFailed,
+                        format!("标签计数不是有效非负整数：{count}"),
+                    )
+                })?,
+            ));
+        }
+        Ok(counts)
+    }
+
+    pub fn deleted_count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM assets WHERE deleted_at IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_err("统计回收站素材失败", error))?;
+        usize::try_from(count).map_err(|_| {
+            AppError::detailed(
+                Code::LibraryIndexRebuildFailed,
+                format!("回收站计数不是有效非负整数：{count}"),
+            )
+        })
+    }
+
     /// 某个素材在库内的扩展名。
     ///
     /// 存在的理由是安全边界：库内路径由 `<hash>.<ext>` 拼成，而 `ext` 若来自 IPC 入参，
@@ -349,18 +467,43 @@ impl Index {
     /// 比让调用方传进来可信——调用方传参这件事本身就是那道边界的缺口。
     pub fn asset_ext(&self, hash: &str) -> Result<String> {
         self.conn
-            .query_row("SELECT ext FROM assets WHERE hash = ?1", [hash], |r| r.get(0))
+            .query_row("SELECT ext FROM assets WHERE hash = ?1", [hash], |r| {
+                r.get(0)
+            })
             .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => AppError::detailed(
-                    Code::LibraryNotFound,
-                    format!("索引中没有这个素材：{hash}"),
-                ),
+                rusqlite::Error::QueryReturnedNoRows => {
+                    AppError::detailed(Code::LibraryNotFound, format!("索引中没有这个素材：{hash}"))
+                }
                 other => sql_err("查询素材扩展名失败", other),
+            })
+    }
+
+    pub fn asset_is_deleted(&self, hash: &str) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT deleted_at IS NOT NULL FROM assets WHERE hash = ?1",
+                [hash],
+                |row| row.get(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    AppError::detailed(Code::LibraryNotFound, format!("索引中没有这个素材：{hash}"))
+                }
+                other => sql_err("查询素材删除状态失败", other),
             })
     }
 
     /// 按给定的 WHERE/ORDER 尾句加载素材，并填充标签、文件夹与色卡。
     fn load_assets(&self, tail: &str) -> Result<Vec<AssetRow>> {
+        self.load_assets_with_params(tail, &[], None)
+    }
+
+    fn load_assets_with_params(
+        &self,
+        tail: &str,
+        values: &[String],
+        filename_text: Option<&str>,
+    ) -> Result<Vec<AssetRow>> {
         let sql = format!(
             "SELECT hash, hash_algo, media_type, ext, byte_size, width, height,
                     imported_at, original_filename, source_path, deleted_at,
@@ -373,7 +516,7 @@ impl Index {
             .prepare(&sql)
             .map_err(|e| sql_err("准备素材查询失败", e))?;
         let rows = stmt
-            .query_map([], |r| {
+            .query_map(params_from_iter(values.iter()), |r| {
                 Ok(AssetRow {
                     hash: r.get(0)?,
                     hash_algo: r.get(1)?,
@@ -399,6 +542,12 @@ impl Index {
         let mut assets: Vec<AssetRow> = Vec::new();
         for row in rows {
             assets.push(row.map_err(|e| sql_err("读取素材行失败", e))?);
+        }
+        if let Some(filename_text) = filename_text {
+            let needle = filename_text.to_lowercase();
+            if !needle.is_empty() {
+                assets.retain(|asset| asset.original_filename.to_lowercase().contains(&needle));
+            }
         }
         for a in &mut assets {
             a.tags = self.strings_for(
@@ -577,7 +726,11 @@ mod tests {
         // 索引必须在导入之前打开。若先导入再 open，open 会因索引文件不存在而走全量重建，
         // 于是"增量攒出来的索引"根本没被构造过，等价性测试就退化成了重建与重建自比。
         let mut index = Index::open(&f.lib).expect("打开索引");
-        assert_eq!(index.asset_count().expect("统计素材"), 0, "起点必须是空索引");
+        assert_eq!(
+            index.asset_count().expect("统计素材"),
+            0,
+            "起点必须是空索引"
+        );
 
         let report = import::import_many(&f.lib, &sources, &opts, &mut NoopObserver);
         assert!(
@@ -694,14 +847,17 @@ mod tests {
         let path = f.lib.index_path();
         {
             let conn = Connection::open(&path).expect("直连索引");
-            conn.execute("DELETE FROM assets", [])
-                .expect("清空素材表");
+            conn.execute("DELETE FROM assets", []).expect("清空素材表");
             conn.pragma_update(None, "user_version", INDEX_USER_VERSION + 7)
                 .expect("篡改版本号");
         }
 
         let reopened = Index::open(&f.lib).expect("打开索引");
-        assert_eq!(reopened.asset_count().expect("统计素材"), 3, "版本不匹配时应全量重扫重建");
+        assert_eq!(
+            reopened.asset_count().expect("统计素材"),
+            3,
+            "版本不匹配时应全量重扫重建"
+        );
         let version: i32 = reopened
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))

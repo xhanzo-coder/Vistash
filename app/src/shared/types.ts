@@ -80,3 +80,48 @@ export type ImportProgress = {
   /** 当前即将处理的文件；全部结束时为 null。 */
   current_filename: string | null;
 };
+
+export type FolderFilter =
+  | { kind: "all" }
+  | { kind: "root" }
+  | { kind: "path"; path: string };
+
+export type AssetQuery = {
+  text: string;
+  tags: string[];
+  folder: FolderFilter;
+  location: "active" | "trash";
+};
+
+export type TagUsage = {
+  tag: string;
+  count: number;
+};
+
+export type CatalogSnapshot = {
+  assets: AssetRow[];
+  folders: string[];
+  tags: TagUsage[];
+  trash_count: number;
+};
+
+export type FolderMutationProgress = {
+  done: number;
+  total: number;
+  current_filename: string;
+};
+
+export type RestoreOutcome = {
+  missing_folders: string[];
+};
+
+export type PurgeFailure = {
+  hash: string;
+  original_filename: string;
+  error: AppError;
+};
+
+export type PurgeReport = {
+  purged: number;
+  failures: PurgeFailure[];
+};

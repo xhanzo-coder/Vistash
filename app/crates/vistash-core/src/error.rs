@@ -45,6 +45,8 @@ pub enum Code {
     ImportDuplicateInTrash,
     ImportCancelled,
     // trash 域
+    TrashDeleteFailed,
+    TrashRestoreFailed,
     TrashRestoreTargetFolderMissing,
     TrashPurgeFailed,
     // color_card 域
@@ -62,6 +64,11 @@ pub enum Code {
     LibraryIndexRebuildFailed,
     LibraryThumbnailFailed,
     LibrarySettingsCorrupt,
+    LibraryFolderInvalid,
+    LibraryFolderExists,
+    LibraryFolderNotFound,
+    LibraryTagInvalid,
+    LibraryAssetMetadataWriteFailed,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -75,6 +82,8 @@ pub const ALL_CODES: &[Code] = &[
     Code::ImportDuplicateInLibrary,
     Code::ImportDuplicateInTrash,
     Code::ImportCancelled,
+    Code::TrashDeleteFailed,
+    Code::TrashRestoreFailed,
     Code::TrashRestoreTargetFolderMissing,
     Code::TrashPurgeFailed,
     Code::ColorCardDecodeFailed,
@@ -90,6 +99,11 @@ pub const ALL_CODES: &[Code] = &[
     Code::LibraryIndexRebuildFailed,
     Code::LibraryThumbnailFailed,
     Code::LibrarySettingsCorrupt,
+    Code::LibraryFolderInvalid,
+    Code::LibraryFolderExists,
+    Code::LibraryFolderNotFound,
+    Code::LibraryTagInvalid,
+    Code::LibraryAssetMetadataWriteFailed,
 ];
 
 impl Code {
@@ -105,7 +119,10 @@ impl Code {
             | ImportDuplicateInLibrary
             | ImportDuplicateInTrash
             | ImportCancelled => Domain::Import,
-            TrashRestoreTargetFolderMissing | TrashPurgeFailed => Domain::Trash,
+            TrashDeleteFailed
+            | TrashRestoreFailed
+            | TrashRestoreTargetFolderMissing
+            | TrashPurgeFailed => Domain::Trash,
             ColorCardDecodeFailed | ColorCardInsufficientOpaquePixels | ColorCardClusterFailed => {
                 Domain::ColorCard
             }
@@ -118,7 +135,12 @@ impl Code {
             | LibraryIoFailed
             | LibraryIndexRebuildFailed
             | LibraryThumbnailFailed
-            | LibrarySettingsCorrupt => Domain::Library,
+            | LibrarySettingsCorrupt
+            | LibraryFolderInvalid
+            | LibraryFolderExists
+            | LibraryFolderNotFound
+            | LibraryTagInvalid
+            | LibraryAssetMetadataWriteFailed => Domain::Library,
         }
     }
 
@@ -134,6 +156,8 @@ impl Code {
             ImportDuplicateInLibrary => "import.duplicate_in_library",
             ImportDuplicateInTrash => "import.duplicate_in_trash",
             ImportCancelled => "import.cancelled",
+            TrashDeleteFailed => "trash.delete_failed",
+            TrashRestoreFailed => "trash.restore_failed",
             TrashRestoreTargetFolderMissing => "trash.restore_target_folder_missing",
             TrashPurgeFailed => "trash.purge_failed",
             ColorCardDecodeFailed => "color_card.decode_failed",
@@ -149,6 +173,11 @@ impl Code {
             LibraryIndexRebuildFailed => "library.index_rebuild_failed",
             LibraryThumbnailFailed => "library.thumbnail_failed",
             LibrarySettingsCorrupt => "library.settings_corrupt",
+            LibraryFolderInvalid => "library.folder_invalid",
+            LibraryFolderExists => "library.folder_exists",
+            LibraryFolderNotFound => "library.folder_not_found",
+            LibraryTagInvalid => "library.tag_invalid",
+            LibraryAssetMetadataWriteFailed => "library.asset_metadata_write_failed",
         }
     }
 
@@ -260,7 +289,10 @@ mod tests {
     #[test]
     fn unknown_code_string_is_refused() {
         assert!(serde_json::from_str::<Code>("\"import.不存在的码\"").is_err());
-        assert_eq!(Code::parse("library.not_found"), Some(Code::LibraryNotFound));
+        assert_eq!(
+            Code::parse("library.not_found"),
+            Some(Code::LibraryNotFound)
+        );
         assert_eq!(Code::parse("library.NOT_FOUND"), None);
     }
 

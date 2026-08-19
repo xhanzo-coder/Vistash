@@ -14,20 +14,23 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
+use vistash_core::catalog::{
+    AssetLocation, AssetQuery, Catalog, CatalogSnapshot, FolderFilter, FolderMutationProgress,
+    FolderName, FolderPath, PurgeReport, RestoreOutcome, Tag,
+};
 use vistash_core::error::{AppError, Code, Result};
 use vistash_core::hashing::ContentHash;
 use vistash_core::import::{self, ImportFailure, ImportObserver, ImportOptions};
-use vistash_core::index::{AssetRow, Index};
+use vistash_core::index::AssetRow;
 use vistash_core::library::Library;
 use vistash_core::media::MediaType;
 use vistash_core::settings::AppSettings;
 
 /// 一个已打开的库及其索引。
 struct Opened {
-    lib: Library,
-    index: Mutex<Index>,
+    catalog: Mutex<Catalog>,
     /// 同一个库一次只允许一个批量写入任务，避免两个拖入事件竞争去重与落盘。
     import_gate: Mutex<()>,
 }
@@ -83,10 +86,9 @@ fn open_at(root: &Path) -> Result<Arc<Opened>> {
 /// 走这里，否则换了缩略图编码参数之后，其中一条路径会继续读回旧格式的字节。
 fn open_derived(lib: Library) -> Result<Arc<Opened>> {
     import::ensure_thumbnail_format(&lib)?;
-    let index = Index::open(&lib)?;
+    let catalog = Catalog::open(lib)?;
     Ok(Arc::new(Opened {
-        lib,
-        index: Mutex::new(index),
+        catalog: Mutex::new(catalog),
         import_gate: Mutex::new(()),
     }))
 }
@@ -127,14 +129,21 @@ fn not_selected() -> AppError {
     AppError::detailed(Code::LibraryNotFound, "尚未选择库")
 }
 
-fn status_of(state: &AppState) -> LibraryStatus {
-    LibraryStatus {
-        path: state
-            .opened
-            .as_ref()
-            .map(|o| o.lib.root().to_string_lossy().into_owned()),
+fn status_of(state: &AppState) -> Result<LibraryStatus> {
+    let path = match state.opened.as_ref() {
+        Some(opened) => Some(
+            lock(&opened.catalog)?
+                .library()
+                .root()
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None => None,
+    };
+    Ok(LibraryStatus {
+        path,
         problem: state.restore_problem.clone(),
-    }
+    })
 }
 
 fn current_opened(state: &tauri::State<'_, Shared>) -> Result<Arc<Opened>> {
@@ -142,10 +151,76 @@ fn current_opened(state: &tauri::State<'_, Shared>) -> Result<Arc<Opened>> {
     guard.opened.as_ref().cloned().ok_or_else(not_selected)
 }
 
+async fn with_catalog<T>(
+    state: tauri::State<'_, Shared>,
+    operation: impl FnOnce(&mut Catalog) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let opened = current_opened(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut catalog = lock(&opened.catalog)?;
+        operation(&mut catalog)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台目录任务异常终止：{error}"),
+        )
+    })?
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FolderFilterInput {
+    All,
+    Root,
+    Path { path: String },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetLocationInput {
+    Active,
+    Trash,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AssetQueryInput {
+    pub text: String,
+    pub tags: Vec<String>,
+    pub folder: FolderFilterInput,
+    pub location: AssetLocationInput,
+}
+
+impl AssetQueryInput {
+    fn into_core(self) -> Result<AssetQuery> {
+        Ok(AssetQuery {
+            text: self.text,
+            tags: self
+                .tags
+                .iter()
+                .map(|tag| Tag::parse(tag))
+                .collect::<Result<Vec<_>>>()?,
+            folder: match self.folder {
+                FolderFilterInput::All => FolderFilter::All,
+                FolderFilterInput::Root => FolderFilter::Root,
+                FolderFilterInput::Path { path } => FolderFilter::Path(FolderPath::parse(&path)?),
+            },
+            location: match self.location {
+                AssetLocationInput::Active => AssetLocation::Active,
+                AssetLocationInput::Trash => AssetLocation::Trash,
+            },
+        })
+    }
+}
+
 #[tauri::command]
 pub fn library_status(state: tauri::State<'_, Shared>) -> Result<LibraryStatus> {
     let guard = lock(&state)?;
-    Ok(status_of(&guard))
+    status_of(&guard)
 }
 
 /// 打开使用者选择的目录；该目录还不是库时创建一个。
@@ -154,25 +229,145 @@ pub fn open_library(path: String, state: tauri::State<'_, Shared>) -> Result<Lib
     let root = PathBuf::from(&path);
     let opened = open_derived(Library::open_or_create(&root)?)?;
 
+    let opened_path = lock(&opened.catalog)?
+        .library()
+        .root()
+        .to_string_lossy()
+        .into_owned();
     let mut guard = lock(&state)?;
     // 只在成功打开之后才落盘记住。若在选择时就写入，一个打不开的目录会被记住，
     // 于是下次启动仍然撞在同一个错误上。
     let settings = AppSettings {
         format_version: vistash_core::settings::SETTINGS_FORMAT_VERSION,
-        last_library_path: Some(opened.lib.root().to_string_lossy().into_owned()),
+        last_library_path: Some(opened_path),
     };
     settings.write_atomic(&guard.settings_path)?;
     guard.opened = Some(opened);
     guard.restore_problem = None;
-    Ok(status_of(&guard))
+    status_of(&guard)
 }
 
 /// 网格用的素材列表，不含回收站中的素材。
 #[tauri::command]
 pub fn list_assets(state: tauri::State<'_, Shared>) -> Result<Vec<AssetRow>> {
     let opened = current_opened(&state)?;
-    let index = lock(&opened.index)?;
-    index.list_assets(false)
+    let catalog = lock(&opened.catalog)?;
+    Ok(catalog
+        .snapshot(&AssetQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            folder: FolderFilter::All,
+            location: AssetLocation::Active,
+        })?
+        .assets)
+}
+
+#[tauri::command]
+pub async fn catalog_snapshot(
+    query: AssetQueryInput,
+    state: tauri::State<'_, Shared>,
+) -> Result<CatalogSnapshot> {
+    let query = query.into_core()?;
+    with_catalog(state, move |catalog| catalog.snapshot(&query)).await
+}
+
+#[tauri::command]
+pub async fn create_folder(
+    parent: Option<String>,
+    name: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let parent = parent.as_deref().map(FolderPath::parse).transpose()?;
+    let name = FolderName::parse(&name)?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .create_folder(parent.as_ref(), &name)?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn rename_folder(
+    path: String,
+    new_name: String,
+    on_progress: Channel<FolderMutationProgress>,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let path = FolderPath::parse(&path)?;
+    let new_name = FolderName::parse(&new_name)?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .rename_folder(&path, &new_name, |progress| {
+                on_progress.send(progress).map_err(|error| {
+                    AppError::detailed(
+                        Code::LibraryAssetMetadataWriteFailed,
+                        format!("发送文件夹重命名进度失败：{error}"),
+                    )
+                })
+            })?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_folder(path: String, state: tauri::State<'_, Shared>) -> Result<()> {
+    let path = FolderPath::parse(&path)?;
+    with_catalog(state, move |catalog| catalog.delete_folder(&path)).await
+}
+
+#[tauri::command]
+pub async fn set_asset_folders(
+    hash: String,
+    folders: Vec<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    let folders = folders
+        .iter()
+        .map(|folder| FolderPath::parse(folder))
+        .collect::<Result<Vec<_>>>()?;
+    with_catalog(state, move |catalog| {
+        catalog.set_asset_folders(&hash, &folders)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_asset_tags(
+    hash: String,
+    tags: Vec<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    let tags = tags
+        .iter()
+        .map(|tag| Tag::parse(tag))
+        .collect::<Result<Vec<_>>>()?;
+    with_catalog(state, move |catalog| catalog.set_asset_tags(&hash, &tags)).await
+}
+
+#[tauri::command]
+pub async fn delete_asset(hash: String, state: tauri::State<'_, Shared>) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| catalog.delete_asset(&hash)).await
+}
+
+#[tauri::command]
+pub async fn restore_asset(
+    hash: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<RestoreOutcome> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| catalog.restore_asset(&hash)).await
+}
+
+#[tauri::command]
+pub async fn purge_trash(state: tauri::State<'_, Shared>) -> Result<PurgeReport> {
+    with_catalog(state, Catalog::purge_trash).await
 }
 
 /// 一次批量导入的进度。
@@ -241,19 +436,18 @@ fn import_paths_blocking(
     let expanded =
         import::expand_sources(&paths.into_iter().map(PathBuf::from).collect::<Vec<_>>())?;
 
-    // 本次不实现文件夹与标签的界面，因此导入不带归类信息。
+    // 拖入导入不自动推测文件夹或标签；导入后由使用者在素材详情中归类。
     let opts = ImportOptions::default();
     let mut observer = ChannelObserver {
         channel: on_progress,
         disconnected: false,
     };
-    let report = import::import_many(&opened.lib, &expanded.sources, &opts, &mut observer);
+    let library = lock(&opened.catalog)?.library().clone();
+    let report = import::import_many(&library, &expanded.sources, &opts, &mut observer);
 
     // 见模块头：命令层只把核心产出的侧车送入同层索引，不重新判断导入结果。
-    let mut index = lock(&opened.index)?;
-    for sidecar in &report.imported {
-        index.upsert_asset(sidecar)?;
-    }
+    let mut catalog = lock(&opened.catalog)?;
+    catalog.index_imported(&report.imported)?;
 
     Ok(ImportOutcome {
         imported: report.imported.len(),
@@ -282,8 +476,8 @@ fn safe_ext(recorded: &str) -> Result<&'static str> {
 }
 
 /// 取出素材在库内的扩展名，路径拼接只用它的返回值。
-fn ext_of(index: &Index, hash: &ContentHash) -> Result<&'static str> {
-    safe_ext(&index.asset_ext(hash.as_str())?)
+fn ext_of(catalog: &Catalog, hash: &ContentHash) -> Result<&'static str> {
+    safe_ext(&catalog.asset_ext(hash.as_str())?)
 }
 
 /// 素材的缩略图字节。缺失时按需重新生成。
@@ -298,11 +492,11 @@ pub fn asset_thumbnail(
     // 先校验再用。ContentHash 存在的意义就是让未校验的字符串无法参与库内路径拼接。
     let hash = ContentHash::parse(&hash)?;
     let opened = current_opened(&state)?;
-    let ext = {
-        let index = lock(&opened.index)?;
-        ext_of(&index, &hash)?
+    let (library, ext) = {
+        let catalog = lock(&opened.catalog)?;
+        (catalog.library().clone(), ext_of(&catalog, &hash)?)
     };
-    let bytes = import::ensure_thumbnail(&opened.lib, &hash, ext)?;
+    let bytes = import::ensure_thumbnail(&library, &hash, ext)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -314,11 +508,7 @@ pub fn asset_original(
 ) -> Result<tauri::ipc::Response> {
     let hash = ContentHash::parse(&hash)?;
     let opened = current_opened(&state)?;
-    let ext = {
-        let index = lock(&opened.index)?;
-        ext_of(&index, &hash)?
-    };
-    let bytes = opened.lib.read_body(&hash, ext)?;
+    let bytes = lock(&opened.catalog)?.read_asset_body(&hash)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -394,10 +584,7 @@ mod tests {
             let path = entry.path();
             if path.is_dir() {
                 walk_sources(&path, visit);
-            } else if path
-                .extension()
-                .is_some_and(|e| e == "ts" || e == "tsx")
-            {
+            } else if path.extension().is_some_and(|e| e == "ts" || e == "tsx") {
                 let text = std::fs::read_to_string(&path)
                     .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", path.display()));
                 visit(&path, &text);
@@ -425,7 +612,10 @@ mod tests {
             "p/n/g",
         ] {
             let err = safe_ext(bad).expect_err(&format!("本应拒绝 {bad:?}"));
-            assert_eq!(err.code, vistash_core::error::Code::ImportUnsupportedMediaType);
+            assert_eq!(
+                err.code,
+                vistash_core::error::Code::ImportUnsupportedMediaType
+            );
         }
     }
 
