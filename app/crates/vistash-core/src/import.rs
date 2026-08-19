@@ -40,7 +40,8 @@ pub enum ImportStage {
 ///
 /// `after_stage` 是刻意留出的故障注入接缝。回滚不变式无法用真实故障复现——磁盘不会
 /// 按需在第三步失败——所以要么留一个注入点并真的测它，要么这条不变式永远只是注释。
-/// 生产实现是 [`NoopObserver`]，测试实现在本文件的测试模块里；两个实现，接缝为真。
+/// 生产环境由 Tauri 命令层实现进度 Channel，核心 crate 的无界面调用可使用
+/// [`NoopObserver`]，测试实现在本文件的测试模块里；接缝存在多个真实实现。
 pub trait ImportObserver {
     fn should_cancel(&self) -> bool {
         false

@@ -7,12 +7,12 @@
  *
  * 组件从本模块导入函数，**不导入 `@tauri-apps/api`**。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { asAppError, IpcError } from "./errors";
-import type { AssetRow, ImportOutcome, LibraryStatus } from "./types";
+import type { AssetRow, ImportOutcome, ImportProgress, LibraryStatus } from "./types";
 
 /** 唯一的 `invoke` 出口。所有失败都在这里收敛成 `IpcError`。 */
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -52,9 +52,13 @@ export function listAssets(): Promise<AssetRow[]> {
   return call<AssetRow[]>("list_assets");
 }
 
-/** 导入给定的文件或目录路径。 */
-export function importPaths(paths: string[]): Promise<ImportOutcome> {
-  return call<ImportOutcome>("import_paths", { paths });
+/** 导入给定的文件或目录路径，并把单次任务的进度交给调用方。 */
+export function importPaths(
+  paths: string[],
+  onProgress: (progress: ImportProgress) => void,
+): Promise<ImportOutcome> {
+  const progress = new Channel<ImportProgress>(onProgress);
+  return call<ImportOutcome>("import_paths", { paths, onProgress: progress });
 }
 
 /**

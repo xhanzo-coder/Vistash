@@ -70,3 +70,13 @@ export type ImportOutcome = {
   skipped_non_images: number;
   failures: ImportFailure[];
 };
+
+/** `commands::ImportProgress` */
+export type ImportProgress = {
+  /** 已结束处理的素材数。 */
+  done: number;
+  /** 本批次展开后的素材总数。 */
+  total: number;
+  /** 当前即将处理的文件；全部结束时为 null。 */
+  current_filename: string | null;
+};

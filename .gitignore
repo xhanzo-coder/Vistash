@@ -7,6 +7,7 @@ app/src-tauri/gen/
 app/src-tauri/target/
 .vite/
 coverage/
+test/pinterest_images/
 
 # 本机开发与工具产物
 .playwright-mcp/
