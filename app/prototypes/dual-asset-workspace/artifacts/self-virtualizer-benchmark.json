@@ -1,0 +1,41 @@
+{
+  "fixture_items_per_library": 10000,
+  "implementation": "prototype-small-owned-positioner",
+  "initial_load_ms_including_vite_and_networkidle": 571.61,
+  "initial_rendered_items": 21,
+  "details_rendered_items": 33,
+  "details_switch_ms": 66.04,
+  "scroll": {
+    "maxFramePairMs": 35.3,
+    "averageFramePairMs": 32.99,
+    "finalScrollTop": 40500,
+    "renderedItems": 33
+  },
+  "long_tasks_ms": [],
+  "js_heap_used_mb_before_scroll": 12.84,
+  "js_heap_used_mb_after_scroll": 26.65,
+  "layout_count_delta": 45,
+  "recalc_style_count_delta": 45,
+  "resize_samples": {
+    "1200": {
+      "settle_ms": 125.29780000113533,
+      "rendered_items": 33,
+      "horizontal_overflow_px": 0
+    },
+    "900": {
+      "settle_ms": 137.3266999999032,
+      "rendered_items": 32,
+      "horizontal_overflow_px": 0
+    },
+    "720": {
+      "settle_ms": 137.9560000004858,
+      "rendered_items": 32,
+      "horizontal_overflow_px": 0
+    },
+    "1440": {
+      "settle_ms": 137.1369999997114,
+      "rendered_items": 33,
+      "horizontal_overflow_px": 0
+    }
+  }
+}

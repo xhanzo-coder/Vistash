@@ -7,12 +7,14 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "prototype:dual-assets": "vite --config prototypes/dual-asset-workspace/vite.config.ts",
     "lint": "oxlint --type-aware",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri"
   },
   "devDependencies": {
+    "@tanstack/react-virtual": "3.14.10",
     "@tauri-apps/cli": "^2.11.4",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

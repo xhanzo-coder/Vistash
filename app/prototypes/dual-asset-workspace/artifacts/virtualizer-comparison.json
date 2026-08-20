@@ -1,0 +1,117 @@
+{
+  "scope": "throwaway-prototype-only",
+  "browser": "Playwright Chromium; WebView2 仍需 Windows 原生壳验收",
+  "results": {
+    "owned": {
+      "fixture_items_per_library": 10000,
+      "implementation": "owned",
+      "initial_load_ms_including_vite_and_networkidle": 593.47,
+      "initial_rendered_items": 21,
+      "details_rendered_items": 21,
+      "details_switch_ms": 66.18,
+      "filter_to_one_dom": 1,
+      "filter_result_text": "1 项",
+      "filter_restore_dom": 21,
+      "scroll_to_index": [],
+      "scroll": {
+        "maxFramePairMs": 35.1,
+        "averageFramePairMs": 32.9,
+        "finalScrollTop": 40500,
+        "renderedItems": 33
+      },
+      "long_tasks_ms": [],
+      "js_heap_used_mb_before_scroll": 13.05,
+      "js_heap_used_mb_after_scroll": 30.25,
+      "layout_count_delta": 45,
+      "recalc_style_count_delta": 45,
+      "resize_samples": {
+        "1200": {
+          "settle_ms": 134.36,
+          "rendered_items": 21,
+          "horizontal_overflow_px": 0
+        },
+        "900": {
+          "settle_ms": 136.0,
+          "rendered_items": 21,
+          "horizontal_overflow_px": 0
+        },
+        "720": {
+          "settle_ms": 138.14,
+          "rendered_items": 21,
+          "horizontal_overflow_px": 0
+        },
+        "1440": {
+          "settle_ms": 137.29,
+          "rendered_items": 21,
+          "horizontal_overflow_px": 0
+        }
+      }
+    },
+    "tanstack": {
+      "fixture_items_per_library": 10000,
+      "implementation": "tanstack",
+      "initial_load_ms_including_vite_and_networkidle": 573.22,
+      "initial_rendered_items": 22,
+      "details_rendered_items": 17,
+      "details_switch_ms": 42.94,
+      "filter_to_one_dom": 1,
+      "filter_result_text": "1 项",
+      "filter_restore_dom": 22,
+      "scroll_to_index": [
+        {
+          "target": 0,
+          "minRendered": 0,
+          "maxRendered": 21,
+          "scrollTop": 0
+        },
+        {
+          "target": 4999,
+          "minRendered": 4982,
+          "maxRendered": 5013,
+          "scrollTop": 369818
+        },
+        {
+          "target": 9999,
+          "minRendered": 9982,
+          "maxRendered": 9999,
+          "scrollTop": 740109
+        }
+      ],
+      "scroll": {
+        "maxFramePairMs": 35.2,
+        "averageFramePairMs": 32.88,
+        "finalScrollTop": 40500,
+        "renderedItems": 32
+      },
+      "long_tasks_ms": [
+        64
+      ],
+      "js_heap_used_mb_before_scroll": 11.26,
+      "js_heap_used_mb_after_scroll": 29.34,
+      "layout_count_delta": 48,
+      "recalc_style_count_delta": 45,
+      "resize_samples": {
+        "1200": {
+          "settle_ms": 135.65,
+          "rendered_items": 17,
+          "horizontal_overflow_px": 0
+        },
+        "900": {
+          "settle_ms": 136.43,
+          "rendered_items": 16,
+          "horizontal_overflow_px": 0
+        },
+        "720": {
+          "settle_ms": 137.84,
+          "rendered_items": 16,
+          "horizontal_overflow_px": 0
+        },
+        "1440": {
+          "settle_ms": 136.41,
+          "rendered_items": 17,
+          "horizontal_overflow_px": 0
+        }
+      }
+    }
+  }
+}
