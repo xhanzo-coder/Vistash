@@ -82,8 +82,8 @@ export function AssetPreview({
   }
 
   return (
-    <section>
-      <button type="button" onClick={onClose}>
+    <section className="asset-preview">
+      <button type="button" className="back-button" onClick={onClose}>
         返回网格
       </button>
 
@@ -95,12 +95,20 @@ export function AssetPreview({
 
       {error !== null && <ErrorLine error={error} />}
       {url === null && error === null && <p>正在载入原图…</p>}
-      {url !== null && <img src={url} alt={asset.original_filename} />}
+      {url !== null && (
+        <img
+          className="preview-image"
+          src={url}
+          alt={asset.original_filename}
+          width={asset.width}
+          height={asset.height}
+        />
+      )}
 
       <h3>色卡</h3>
       {asset.color_card_status === "ok" ? (
         <>
-          <ul>
+          <ul className="color-card">
             {/*
               key 带上序号而不是只用 hex。同一张色卡里 hex 不会重复（相同 RGB 的像素必然
               归入同一个簇，因此不可能成为两个簇的代表色），但那是个需要推一遍才能确信的

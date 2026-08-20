@@ -21,6 +21,8 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "import.cancelled": "导入被中断，该素材未入库。",
 
   // trash 域
+  "trash.delete_failed": "把素材移入库内回收站失败。",
+  "trash.restore_failed": "从库内回收站还原素材失败。",
   "trash.restore_target_folder_missing": "还原失败：素材删除前所属的文件夹已不存在。",
   "trash.purge_failed": "彻底删除失败。",
 
@@ -40,4 +42,9 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "library.index_rebuild_failed": "索引重建失败。索引是派生数据，可在修复后重试。",
   "library.thumbnail_failed": "缩略图生成失败。",
   "library.settings_corrupt": "应用设置文件损坏，已无法读出上次打开的库。请重新选择库位置。",
+  "library.folder_invalid": "文件夹名称或路径无效。",
+  "library.folder_exists": "同名文件夹已经存在。",
+  "library.folder_not_found": "指定的文件夹不存在。",
+  "library.tag_invalid": "标签不能为空且不能包含控制字符。",
+  "library.asset_metadata_write_failed": "写入素材组织元数据失败。",
 };

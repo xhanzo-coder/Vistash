@@ -12,7 +12,17 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { asAppError, IpcError } from "./errors";
-import type { AssetRow, ImportOutcome, ImportProgress, LibraryStatus } from "./types";
+import type {
+  AssetQuery,
+  AssetRow,
+  CatalogSnapshot,
+  FolderMutationProgress,
+  ImportOutcome,
+  ImportProgress,
+  LibraryStatus,
+  PurgeReport,
+  RestoreOutcome,
+} from "./types";
 
 /** 唯一的 `invoke` 出口。所有失败都在这里收敛成 `IpcError`。 */
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -50,6 +60,47 @@ export function openLibrary(path: string): Promise<LibraryStatus> {
 /** 网格用的素材列表，不含回收站中的素材。 */
 export function listAssets(): Promise<AssetRow[]> {
   return call<AssetRow[]>("list_assets");
+}
+
+export function catalogSnapshot(query: AssetQuery): Promise<CatalogSnapshot> {
+  return call<CatalogSnapshot>("catalog_snapshot", { query });
+}
+
+export function createFolder(parent: string | null, name: string): Promise<string> {
+  return call<string>("create_folder", { parent, name });
+}
+
+export function renameFolder(
+  path: string,
+  newName: string,
+  onProgress: (progress: FolderMutationProgress) => void,
+): Promise<string> {
+  const progress = new Channel<FolderMutationProgress>(onProgress);
+  return call<string>("rename_folder", { path, newName, onProgress: progress });
+}
+
+export function deleteFolder(path: string): Promise<void> {
+  return call<void>("delete_folder", { path });
+}
+
+export function setAssetFolders(hash: string, folders: string[]): Promise<void> {
+  return call<void>("set_asset_folders", { hash, folders });
+}
+
+export function setAssetTags(hash: string, tags: string[]): Promise<void> {
+  return call<void>("set_asset_tags", { hash, tags });
+}
+
+export function deleteAsset(hash: string): Promise<void> {
+  return call<void>("delete_asset", { hash });
+}
+
+export function restoreAsset(hash: string): Promise<RestoreOutcome> {
+  return call<RestoreOutcome>("restore_asset", { hash });
+}
+
+export function purgeTrash(): Promise<PurgeReport> {
+  return call<PurgeReport>("purge_trash");
 }
 
 /** 导入给定的文件或目录路径，并把单次任务的进度交给调用方。 */

@@ -5,6 +5,7 @@
 //! `implement-vistash-import-and-browse` 的设计第一条：色卡确定性、导入回滚
 //! 与索引重建三类测试若需要启动窗口，就会慢到不会被真正执行。
 
+pub mod catalog;
 pub mod colorcard;
 pub mod error;
 pub mod hashing;

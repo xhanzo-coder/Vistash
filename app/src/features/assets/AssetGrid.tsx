@@ -69,13 +69,20 @@ function Thumbnail({ asset }: { asset: AssetRow }) {
   return (
     <div
       ref={containerRef}
+      className="thumbnail-frame"
       aria-busy={shouldLoad && url === null && error === null}
       style={{ aspectRatio: `${asset.width} / ${asset.height}` }}
     >
       {error !== null ? (
         <ErrorLine error={error} />
       ) : url !== null ? (
-        <img src={url} alt={asset.original_filename} loading="lazy" />
+        <img
+          src={url}
+          alt={asset.original_filename}
+          width={asset.width}
+          height={asset.height}
+          loading="lazy"
+        />
       ) : shouldLoad ? (
         <p>正在载入缩略图…</p>
       ) : (
@@ -99,18 +106,24 @@ export function AssetGrid({
   onSelect: (asset: AssetRow) => void;
 }) {
   if (assets.length === 0) {
-    return <p>库里还没有素材。把图片文件或文件夹拖进窗口即可导入。</p>;
+    return (
+      <div className="empty-state">
+        <p className="eyebrow">NO ASSETS</p>
+        <h3>这里还没有匹配的素材</h3>
+        <p>调整查询条件，或把图片文件与文件夹拖进窗口导入。</p>
+      </div>
+    );
   }
 
   return (
-    <ul>
+    <ul className="asset-grid">
       {assets.map((asset) => (
-        <li key={asset.hash}>
+        <li key={asset.hash} className="asset-card">
           <button type="button" onClick={() => onSelect(asset)}>
             {/* key 用 hash：缩略图的载入状态必须随素材而重置，而不是跟着列表位置。 */}
             <Thumbnail key={asset.hash} asset={asset} />
-            <span>{asset.original_filename}</span>
-            <span>
+            <span className="asset-name">{asset.original_filename}</span>
+            <span className="asset-dimensions">
               {asset.width} × {asset.height}
             </span>
           </button>

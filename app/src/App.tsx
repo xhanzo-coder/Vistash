@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AssetGrid } from "./features/assets/AssetGrid";
-import { AssetPreview } from "./features/assets/AssetPreview";
+import { AssetWorkspace } from "./features/assets/AssetWorkspace";
 import { ErrorLine } from "./features/library/ErrorLine";
 import { LibraryPicker } from "./features/library/LibraryPicker";
 import { asAppError } from "./shared/errors";
-import { importPaths, libraryStatus, listAssets, onPathsDropped } from "./shared/ipc";
+import { importPaths, libraryStatus, onPathsDropped } from "./shared/ipc";
 import type {
   AppError,
-  AssetRow,
   ImportOutcome,
   ImportProgress,
   LibraryStatus,
@@ -27,12 +25,11 @@ export function App() {
   const [status, setStatus] = useState<LibraryStatus | null>(null);
   const [statusError, setStatusError] = useState<AppError | null>(null);
   const [section, setSection] = useState<Section>("assets");
-  const [assets, setAssets] = useState<AssetRow[]>([]);
   const [assetsError, setAssetsError] = useState<AppError | null>(null);
-  const [selected, setSelected] = useState<AssetRow | null>(null);
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null);
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const [catalogVersion, setCatalogVersion] = useState(0);
   const importingRef = useRef(false);
 
   useEffect(() => {
@@ -48,27 +45,6 @@ export function App() {
 
   const opened = status?.path ?? null;
 
-  // 先取数据再改状态：若一进函数就 setAssetsError(null)，从 effect 调用它就等于在
-  // effect 里同步 setState，会白多跑一轮渲染。
-  const refresh = useCallback(async () => {
-    try {
-      const next = await listAssets();
-      setAssets(next);
-      setAssetsError(null);
-    } catch (raw) {
-      setAssetsError(asAppError(raw));
-    }
-  }, []);
-
-  useEffect(() => {
-    if (opened === null) return undefined;
-    const load = async () => {
-      await refresh();
-    };
-    void load();
-    return undefined;
-  }, [opened, refresh]);
-
   const runImport = useCallback(
     async (paths: string[]) => {
       if (paths.length === 0 || importingRef.current) return;
@@ -77,7 +53,7 @@ export function App() {
       setImportProgress(null);
       try {
         setOutcome(await importPaths(paths, setImportProgress));
-        await refresh();
+        setCatalogVersion((version) => version + 1);
       } catch (raw) {
         setAssetsError(asAppError(raw));
       } finally {
@@ -86,7 +62,7 @@ export function App() {
         setImportProgress(null);
       }
     },
-    [refresh],
+    [],
   );
 
   // 拖入监听只在库已打开时挂上：没有库时导入无处可去，而拖进来却什么都不发生
@@ -141,18 +117,22 @@ export function App() {
         problem={status.problem}
         onOpened={(next) => {
           setStatus(next);
-          setSelected(null);
           setOutcome(null);
+          setCatalogVersion((version) => version + 1);
         }}
       />
     );
   }
 
   return (
-    <div>
-      <header>
-        <h1>Vistash</h1>
-        <p>当前库：{status.path}</p>
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content">跳到主内容</a>
+      <header className="app-header">
+        <div className="brand-block">
+          <p className="eyebrow">VISUAL ARCHIVE / WINDOWS</p>
+          <h1>Vistash</h1>
+        </div>
+        <p className="library-path" title={status.path}>当前库：{status.path}</p>
       </header>
 
       {/*
@@ -160,7 +140,7 @@ export function App() {
         侧栏——规格的理由是结构性的：提示词是一等资产，存在不关联任何素材的手写记录，
         侧栏在结构上容纳不了这类记录。
       */}
-      <nav aria-label="主导航">
+      <nav aria-label="主导航" className="primary-nav">
         <button
           type="button"
           aria-current={section === "assets" ? "page" : undefined}
@@ -191,7 +171,7 @@ export function App() {
       {outcome !== null && <ImportSummary outcome={outcome} />}
       {assetsError !== null && <ErrorLine error={assetsError} />}
 
-      <main>
+      <main id="main-content" className="app-main">
         {section === "prompts" ? (
           /*
             未实现的入口必须显式说明"尚未实现"，禁止渲染成空列表：空列表与"库中确实没有
@@ -205,18 +185,8 @@ export function App() {
               以免日后加入时改动导航层级。
             </p>
           </section>
-        ) : selected !== null ? (
-          <AssetPreview
-            key={selected.hash}
-            asset={selected}
-            onClose={() => setSelected(null)}
-          />
         ) : (
-          <section>
-            <h2>素材</h2>
-            <p>把图片文件或文件夹拖进窗口即可导入。支持 PNG、JPEG、WebP、GIF 与 BMP。</p>
-            <AssetGrid assets={assets} onSelect={setSelected} />
-          </section>
+          <AssetWorkspace refreshVersion={catalogVersion} />
         )}
       </main>
     </div>
