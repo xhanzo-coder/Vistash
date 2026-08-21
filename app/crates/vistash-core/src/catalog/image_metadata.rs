@@ -197,6 +197,35 @@ impl Catalog {
         Ok(target)
     }
 
+    /// 读取一条可修改的正常库素材侧车。
+    ///
+    /// 与提示词侧的 `load_editable_prompt` 同一语义：先区分"在回收站"（状态问题，
+    /// 去回收站还原后才能改）与"哪里都找不到"（ID 有误或列表过期），两者都拒绝
+    /// 而不是让调用方拿到一个指向缺失路径的 IO 错误。
+    fn load_editable_sidecar(&self, hash: &ContentHash, what: &str) -> Result<(PathBuf, AssetSidecar)> {
+        let path = self.library.sidecar_path(hash);
+        if !path.exists() {
+            if self.library.trash_sidecar_path(hash).exists() {
+                return Err(AppError::detailed(
+                    Code::LibraryAssetMetadataWriteFailed,
+                    format!("回收站素材不能修改{what}：{hash}"),
+                ));
+            }
+            return Err(AppError::detailed(
+                Code::LibraryAssetMetadataWriteFailed,
+                format!("正常库中不存在该素材：{hash}"),
+            ));
+        }
+        let sidecar = AssetSidecar::read(&path)?;
+        if sidecar.is_deleted() {
+            return Err(AppError::detailed(
+                Code::LibraryAssetMetadataWriteFailed,
+                format!("回收站素材不能修改{what}：{hash}"),
+            ));
+        }
+        Ok((path, sidecar))
+    }
+
     pub fn set_asset_folders(&mut self, hash: &ContentHash, folders: &[FolderPath]) -> Result<()> {
         let list = self.library.read_folders()?;
         for folder in folders {
@@ -207,14 +236,7 @@ impl Catalog {
                 ));
             }
         }
-        let path = self.library.sidecar_path(hash);
-        let mut sidecar = AssetSidecar::read(&path)?;
-        if sidecar.is_deleted() {
-            return Err(AppError::detailed(
-                Code::LibraryAssetMetadataWriteFailed,
-                format!("回收站素材不能修改文件夹：{hash}"),
-            ));
-        }
+        let (path, mut sidecar) = self.load_editable_sidecar(hash, "文件夹")?;
         let mut canonical: Vec<String> = folders
             .iter()
             .map(|folder| folder.as_str().to_owned())
@@ -235,14 +257,7 @@ impl Catalog {
     }
 
     pub fn set_asset_tags(&mut self, hash: &ContentHash, tags: &[Tag]) -> Result<()> {
-        let path = self.library.sidecar_path(hash);
-        let mut sidecar = AssetSidecar::read(&path)?;
-        if sidecar.is_deleted() {
-            return Err(AppError::detailed(
-                Code::LibraryAssetMetadataWriteFailed,
-                format!("回收站素材不能修改标签：{hash}"),
-            ));
-        }
+        let (path, mut sidecar) = self.load_editable_sidecar(hash, "标签")?;
         let mut canonical: Vec<String> = tags.iter().map(|tag| tag.as_str().to_owned()).collect();
         canonical.sort();
         canonical.dedup();
@@ -251,6 +266,41 @@ impl Catalog {
             AppError::detailed(
                 Code::LibraryAssetMetadataWriteFailed,
                 format!("写入素材标签失败：{error:?}"),
+            )
+        })?;
+        if let Err(error) = self.index_mut()?.upsert_asset(&sidecar) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
+
+    /// 设置素材备注（多行纯文本，逐字保留）。
+    ///
+    /// 与提示词备注同一语义：备注是独立自动保存流，写入不推进任何时间字段，
+    /// 也不触碰组织与收藏状态。
+    pub fn set_asset_note(&mut self, hash: &ContentHash, note: &str) -> Result<()> {
+        let (path, mut sidecar) = self.load_editable_sidecar(hash, "备注")?;
+        sidecar.note = note.to_owned();
+        sidecar.write_atomic(&path).map_err(|error| {
+            AppError::detailed(
+                Code::LibraryAssetMetadataWriteFailed,
+                format!("写入素材备注失败：{error:?}"),
+            )
+        })?;
+        if let Err(error) = self.index_mut()?.upsert_asset(&sidecar) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
+
+    /// 设置素材收藏（纯二值）。
+    pub fn set_asset_favorite(&mut self, hash: &ContentHash, favorite: bool) -> Result<()> {
+        let (path, mut sidecar) = self.load_editable_sidecar(hash, "收藏状态")?;
+        sidecar.favorite = favorite;
+        sidecar.write_atomic(&path).map_err(|error| {
+            AppError::detailed(
+                Code::LibraryAssetMetadataWriteFailed,
+                format!("写入素材收藏状态失败：{error:?}"),
             )
         })?;
         if let Err(error) = self.index_mut()?.upsert_asset(&sidecar) {
@@ -498,6 +548,7 @@ fn metadata_error(what: &str, path: &Path, error: std::io::Error) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::query::{AssetLocation, AssetQuery, FolderFilter};
     use crate::catalog::testing::{fixture, import_with, write_png};
     use crate::error::Code;
     #[cfg(not(debug_assertions))]
@@ -712,6 +763,178 @@ mod tests {
         assert!(stored.tags.is_empty());
     }
 
+
+    #[test]
+    fn asset_note_and_favorite_write_without_touching_other_fields() {
+        let mut fixture = fixture();
+        let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
+        let sidecar = import_with(&mut fixture.catalog, &source, &["参考"], &["人物"]);
+        let path = fixture.catalog.library().sidecar_path(&sidecar.hash);
+        let before = AssetSidecar::read(&path).expect("读取侧车");
+
+        fixture
+            .catalog
+            .set_asset_note(&sidecar.hash, "第一行\n第二行  末尾空格 ")
+            .expect("写入备注");
+        let noted = AssetSidecar::read(&path).expect("读回侧车");
+        // 备注是独立自动保存流：逐字保留换行与空格，不触碰组织、收藏与导入时间。
+        assert_eq!(noted.note, "第一行\n第二行  末尾空格 ");
+        assert_eq!(noted.folders, before.folders);
+        assert_eq!(noted.tags, before.tags);
+        assert!(!noted.favorite);
+        assert_eq!(noted.imported_at, before.imported_at);
+
+        fixture
+            .catalog
+            .set_asset_favorite(&sidecar.hash, true)
+            .expect("设置收藏");
+        let favored = AssetSidecar::read(&path).expect("读回侧车");
+        assert!(favored.favorite);
+        assert_eq!(favored.note, noted.note, "收藏写入不得改动备注");
+        assert_eq!(favored.imported_at, before.imported_at);
+    }
+
+    #[test]
+    fn asset_note_and_favorite_survive_an_index_rebuild() {
+        let mut fixture = fixture();
+        let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
+        let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+        fixture
+            .catalog
+            .set_asset_note(&sidecar.hash, "重建后仍在")
+            .expect("写入备注");
+        fixture
+            .catalog
+            .set_asset_favorite(&sidecar.hash, true)
+            .expect("设置收藏");
+
+        fixture.catalog.rebuild_index().expect("重建索引");
+
+        let snapshot = fixture
+            .catalog
+            .snapshot(&AssetQuery {
+                text: String::new(),
+                tags: Vec::new(),
+                folder: FolderFilter::All,
+                favorite: None,
+                location: AssetLocation::Active,
+            })
+            .expect("查询快照");
+        assert_eq!(snapshot.assets.len(), 1);
+        assert_eq!(snapshot.assets[0].note, "重建后仍在");
+        assert!(snapshot.assets[0].favorite);
+    }
+
+    #[test]
+    fn trashed_assets_refuse_note_and_favorite_writes_without_touching_bytes() {
+        let mut fixture = fixture();
+        let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
+        let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+        fixture.catalog.delete_asset(&sidecar.hash).expect("删除");
+        let trash_path = fixture
+            .catalog
+            .library()
+            .trash_sidecar_path(&sidecar.hash);
+        let before = std::fs::read(&trash_path).expect("读取回收站侧车字节");
+
+        let note_error = fixture
+            .catalog
+            .set_asset_note(&sidecar.hash, "不应写入")
+            .expect_err("本应拒绝修改回收站素材");
+        let favorite_error = fixture
+            .catalog
+            .set_asset_favorite(&sidecar.hash, true)
+            .expect_err("本应拒绝收藏回收站素材");
+        assert_eq!(
+            note_error.code,
+            Code::LibraryAssetMetadataWriteFailed
+        );
+        assert_eq!(
+            favorite_error.code,
+            Code::LibraryAssetMetadataWriteFailed
+        );
+        assert_eq!(
+            std::fs::read(&trash_path).expect("读回回收站侧车字节"),
+            before,
+            "被拒绝的写入不得改动回收站侧车"
+        );
+    }
+
+    #[test]
+    fn a_failed_note_write_leaves_the_sidecar_untouched() {
+        let mut fixture = fixture();
+        let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
+        let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+        let path = fixture.catalog.library().sidecar_path(&sidecar.hash);
+        let before = std::fs::read(&path).expect("读取侧车字节");
+        // 用同名目录占住原子写入的临时文件路径，确定性注入写入失败。
+        let tmp = path.with_extension("json.tmp");
+        std::fs::create_dir(&tmp).expect("占用临时文件路径");
+
+        let error = fixture
+            .catalog
+            .set_asset_note(&sidecar.hash, "不应落盘")
+            .expect_err("本应写入失败");
+        assert_eq!(error.code, Code::LibraryAssetMetadataWriteFailed);
+        assert_eq!(
+            std::fs::read(&path).expect("读回侧车字节"),
+            before,
+            "失败的写入不得改动权威文件"
+        );
+    }
+
+    #[test]
+    fn asset_query_filters_by_favorite() {
+        let mut fixture = fixture();
+        let favored_source = write_png(&fixture.source, "收藏.png", [255, 0, 0, 255]);
+        let favored = import_with(&mut fixture.catalog, &favored_source, &[], &[]);
+        fixture
+            .catalog
+            .set_asset_favorite(&favored.hash, true)
+            .expect("设置收藏");
+        let plain_source = write_png(&fixture.source, "普通.png", [0, 255, 0, 255]);
+        let plain = import_with(&mut fixture.catalog, &plain_source, &[], &[]);
+
+        let only_favorites = fixture
+            .catalog
+            .snapshot(&AssetQuery {
+                text: String::new(),
+                tags: Vec::new(),
+                folder: FolderFilter::All,
+                favorite: Some(true),
+                location: AssetLocation::Active,
+            })
+            .expect("查询收藏");
+        assert_eq!(only_favorites.assets.len(), 1);
+        assert_eq!(only_favorites.assets[0].hash, favored.hash.as_str());
+
+        let only_plain = fixture
+            .catalog
+            .snapshot(&AssetQuery {
+                text: String::new(),
+                tags: Vec::new(),
+                folder: FolderFilter::All,
+                favorite: Some(false),
+                location: AssetLocation::Active,
+            })
+            .expect("查询未收藏");
+        assert_eq!(only_plain.assets.len(), 1);
+        assert_eq!(only_plain.assets[0].hash, plain.hash.as_str());
+
+        // 回收站排除：收藏素材进回收站后，正常库的收藏查询不再含它。
+        fixture.catalog.delete_asset(&favored.hash).expect("删除");
+        let after_delete = fixture
+            .catalog
+            .snapshot(&AssetQuery {
+                text: String::new(),
+                tags: Vec::new(),
+                folder: FolderFilter::All,
+                favorite: Some(true),
+                location: AssetLocation::Active,
+            })
+            .expect("查询收藏");
+        assert!(after_delete.assets.is_empty());
+    }
 
     #[test]
     fn rename_folder_updates_descendants_and_every_asset_membership() {

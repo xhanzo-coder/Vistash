@@ -664,12 +664,13 @@ impl Index {
         self.load_prompts("WHERE deleted_at IS NULL ORDER BY id", &[])
     }
 
-    /// 按位置、文件夹、全部标签和 Unicode 文件名组合查询。
+    /// 按位置、文件夹、全部标签、收藏与 Unicode 文件名组合查询。
     pub fn query_assets(
         &self,
         deleted: bool,
         folder: FolderSelection<'_>,
         tags: &[String],
+        favorite: Option<bool>,
         filename_text: &str,
     ) -> Result<Vec<AssetRow>> {
         let mut clauses = vec![if deleted {
@@ -678,6 +679,9 @@ impl Index {
             "a.deleted_at IS NULL".to_owned()
         }];
         let mut values = Vec::<String>::new();
+        if let Some(favorite) = favorite {
+            clauses.push(format!("a.favorite = {}", if favorite { "1" } else { "0" }));
+        }
         match folder {
             FolderSelection::All => {}
             FolderSelection::Root => clauses.push(

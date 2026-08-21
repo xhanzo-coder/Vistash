@@ -32,6 +32,8 @@ pub struct AssetQuery {
     pub text: String,
     pub tags: Vec<Tag>,
     pub folder: FolderFilter,
+    /// 收藏筛选。`None` 表示不限。与提示词侧共用同一语义。
+    pub favorite: Option<bool>,
     pub location: AssetLocation,
 }
 
@@ -108,7 +110,7 @@ impl Catalog {
             .map(|tag| tag.as_str().to_owned())
             .collect();
         let index = self.index()?;
-        let assets = index.query_assets(deleted, folder, &tags, &query.text)?;
+        let assets = index.query_assets(deleted, folder, &tags, query.favorite, &query.text)?;
 
         Ok(CatalogSnapshot {
             assets,
@@ -188,6 +190,7 @@ mod tests {
                     Tag::parse("逆光").expect("标签"),
                 ],
                 folder: FolderFilter::All,
+                favorite: None,
                 location: AssetLocation::Active,
             })
             .expect("查询目录");
@@ -216,6 +219,7 @@ mod tests {
                 text: String::new(),
                 tags: Vec::new(),
                 folder: FolderFilter::Root,
+                favorite: None,
                 location: AssetLocation::Active,
             })
             .expect("查询根文件夹");
@@ -237,6 +241,7 @@ mod tests {
                 text: String::new(),
                 tags: Vec::new(),
                 folder: FolderFilter::Path(FolderPath::parse("参考").expect("文件夹")),
+                favorite: None,
                 location: AssetLocation::Active,
             })
             .expect("查询文件夹");
@@ -264,6 +269,7 @@ mod tests {
                 text: String::new(),
                 tags: Vec::new(),
                 folder: FolderFilter::All,
+                favorite: None,
                 location: AssetLocation::Trash,
             })
             .expect("查询回收站");
@@ -294,6 +300,7 @@ mod tests {
                 text: String::new(),
                 tags: Vec::new(),
                 folder: FolderFilter::All,
+                favorite: None,
                 location: AssetLocation::Active,
             })
             .expect("查询目录");
@@ -339,6 +346,7 @@ mod tests {
             text: "人物".to_owned(),
             tags: vec![Tag::parse("人物").expect("标签")],
             folder: FolderFilter::Path(FolderPath::parse("参考").expect("路径")),
+            favorite: None,
             location: AssetLocation::Active,
         };
         let before = fixture.catalog.snapshot(&query).expect("重建前快照");
@@ -368,6 +376,7 @@ mod tests {
             text: "人物".to_owned(),
             tags: vec![Tag::parse("人物").expect("标签")],
             folder: FolderFilter::All,
+            favorite: None,
             location: AssetLocation::Trash,
         };
         let before = fixture.catalog.snapshot(&query).expect("重建前快照");
@@ -591,6 +600,7 @@ mod tests {
                 Tag::parse("逆光").expect("标签"),
             ],
             folder: FolderFilter::Path(folder),
+            favorite: None,
             location: AssetLocation::Active,
         };
 

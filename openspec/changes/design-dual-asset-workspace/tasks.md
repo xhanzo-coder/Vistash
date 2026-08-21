@@ -172,7 +172,19 @@
 
 ## 6. 图片备注/收藏、普通关联与封面
 
-- [ ] 6.1 先建立图片 note 与 favorite 写入、重建、回收站排除与写入失败测试，再扩展图片查询和侧车
+- [x] 6.1 先建立图片 note 与 favorite 写入、重建、回收站排除与写入失败测试，再扩展图片查询和侧车
+
+> 6.1 落在 `catalog/image_metadata.rs` 与 `index.rs`（2026-08-21）：5 条测试先行（setter
+> stub 红）后实现转绿。`set_asset_note` 逐字保留换行与空格、不推进 `imported_at`、
+> 不触碰组织与收藏；`set_asset_favorite` 纯二值。两者与既有 `set_asset_folders`/
+> `set_asset_tags` 一并收敛到新的 `load_editable_sidecar` 助手，统一"回收站素材拒绝
+> 组织写入、正常库中不存在也给出明确错误"的语义（此前对已删除素材的修改会退化成
+> 指向缺失路径的 IO 错误，与提示词侧 `load_editable_prompt` 对齐后不再如此）。查询
+> 扩展：`AssetQuery.favorite` 与 `Index::query_assets` 收藏字面量子句（与提示词侧同
+> 语义），`AssetQueryInput` 加 `#[serde(default)]` 保持前端兼容；重建等价性由"写入
+> 后重建索引仍带 note/favorite"钉住；写失败用占住 `<hash>.json.tmp` 的同名目录确定性
+> 注入，失败后权威文件逐字节不变。v2 侧车在 3.3 已含 note/favorite 列，本任务无需
+> 再改侧车结构。
 - [ ] 6.2 先建立图片—提示词多对多、重复关联幂等、两侧反查与解除不改素材测试
 - [ ] 6.3 实现 PromptAsset 单权威方的 link/unlink 与索引反查，禁止关联类型和双写图片侧车
 - [ ] 6.4 先建立两类回收站关联可见、还原恢复、提示词 purge 不写图片与图片 purge 批量清理关联失败时保留图片对测试

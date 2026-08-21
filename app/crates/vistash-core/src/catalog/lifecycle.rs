@@ -737,6 +737,7 @@ mod tests {
                     text: String::new(),
                     tags: Vec::new(),
                     folder: FolderFilter::All,
+                    favorite: None,
                     location: AssetLocation::Trash,
                 })
                 .expect("查询回收站")

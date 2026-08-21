@@ -230,6 +230,9 @@ pub struct AssetQueryInput {
     pub text: String,
     pub tags: Vec<String>,
     pub folder: FolderFilterInput,
+    /// 收藏筛选。缺省表示不限，与提示词查询的同一字段语义一致。
+    #[serde(default)]
+    pub favorite: Option<bool>,
     pub location: AssetLocationInput,
 }
 
@@ -247,6 +250,7 @@ impl AssetQueryInput {
                 FolderFilterInput::Root => FolderFilter::Root,
                 FolderFilterInput::Path { path } => FolderFilter::Path(FolderPath::parse(&path)?),
             },
+            favorite: self.favorite,
             location: match self.location {
                 AssetLocationInput::Active => AssetLocation::Active,
                 AssetLocationInput::Trash => AssetLocation::Trash,
@@ -354,6 +358,7 @@ pub fn list_assets(state: tauri::State<'_, Shared>) -> Result<Vec<AssetRow>> {
             text: String::new(),
             tags: Vec::new(),
             folder: FolderFilter::All,
+            favorite: None,
             location: AssetLocation::Active,
         })?
         .assets)
