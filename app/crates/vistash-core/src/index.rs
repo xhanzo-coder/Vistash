@@ -664,6 +664,32 @@ impl Index {
         self.load_prompts("WHERE deleted_at IS NULL ORDER BY id", &[])
     }
 
+    /// 素材是否在索引中（含回收站）。
+    ///
+    /// 关联校验只关心"库里有这张图"：关联到回收站图片是合法状态（界面呈现为
+    /// "已删除"），指向从未入库的哈希才是错误。
+    pub fn asset_exists(&self, hash: &str) -> Result<bool> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM assets WHERE hash = ?1")
+            .map_err(|e| sql_err("准备素材存在性查询失败", e))?;
+        stmt.exists([hash])
+            .map_err(|e| sql_err("查询素材存在性失败", e))
+    }
+
+    /// 反查关联了某张图片的全部提示词（含回收站），按 ID 排序。
+    ///
+    /// 反查必须包含回收站提示词：设计第三条要求图片反查能显示"关联提示词已
+    /// 删除"，过滤掉它们会让这个状态无从呈现。轻量行足够——反查用于列表与
+    /// 计数，完整正文经按需详情读取。
+    pub fn prompts_for_image(&self, hash: &str) -> Result<Vec<PromptRow>> {
+        self.load_prompts(
+            "p JOIN prompt_images pi ON pi.prompt_id = p.id \
+             WHERE pi.image_hash = ?1 ORDER BY p.id",
+            &[hash.to_owned()],
+        )
+    }
+
     /// 按位置、文件夹、全部标签、收藏与 Unicode 文件名组合查询。
     pub fn query_assets(
         &self,

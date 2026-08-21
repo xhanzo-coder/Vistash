@@ -100,6 +100,9 @@ pub enum Code {
     PromptTrashRestoreFailed,
     /// 彻底删除一条回收站提示词失败。逐项隔离：一条失败不阻止其余条目继续清理。
     PromptTrashPurgeFailed,
+    /// 关联目标图片不在库中。关联只能指向真实入库的图片，否则界面会把一个
+    /// 永远无法解析的引用呈现成"已删除"。
+    PromptLinkedImageNotFound,
     // migration 域：库格式 v1 到 v2 的一次性迁移
     MigrationJournalCorrupt,
     MigrationJournalFormatTooNew,
@@ -159,6 +162,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::PromptTrashDeleteFailed,
     Code::PromptTrashRestoreFailed,
     Code::PromptTrashPurgeFailed,
+    Code::PromptLinkedImageNotFound,
     Code::MigrationJournalCorrupt,
     Code::MigrationJournalFormatTooNew,
     Code::MigrationJournalWriteFailed,
@@ -218,7 +222,8 @@ impl Code {
             | PromptFolderExists
             | PromptTrashDeleteFailed
             | PromptTrashRestoreFailed
-            | PromptTrashPurgeFailed => Domain::Prompt,
+            | PromptTrashPurgeFailed
+            | PromptLinkedImageNotFound => Domain::Prompt,
             MigrationJournalCorrupt
             | MigrationJournalFormatTooNew
             | MigrationJournalWriteFailed
@@ -280,6 +285,7 @@ impl Code {
             PromptTrashDeleteFailed => "prompt.trash_delete_failed",
             PromptTrashRestoreFailed => "prompt.trash_restore_failed",
             PromptTrashPurgeFailed => "prompt.trash_purge_failed",
+            PromptLinkedImageNotFound => "prompt.linked_image_not_found",
             MigrationJournalCorrupt => "migration.journal_corrupt",
             MigrationJournalFormatTooNew => "migration.journal_format_too_new",
             MigrationJournalWriteFailed => "migration.journal_write_failed",

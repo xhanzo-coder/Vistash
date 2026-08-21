@@ -393,27 +393,6 @@ impl Catalog {
         Ok(())
     }
 
-    /// 读取一条可修改的提示词：必须存在于正常库，且不处于回收站状态。
-    ///
-    /// 返回权威文件路径与内容，供各组织写入入口共用同一套拒绝语义。
-    fn load_editable_prompt(&self, id: &PromptId, what: &str) -> Result<(std::path::PathBuf, PromptAsset)> {
-        let path = self.library.prompt_path(id);
-        if !path.exists() {
-            return Err(AppError::detailed(
-                Code::PromptNotFound,
-                format!("正常库中不存在这条提示词：{id}"),
-            ));
-        }
-        let prompt = PromptAsset::read(&path)?;
-        if prompt.is_deleted() {
-            return Err(AppError::detailed(
-                Code::PromptWriteFailed,
-                format!("回收站提示词不能修改{what}：{id}"),
-            ));
-        }
-        Ok((path, prompt))
-    }
-
     /// 设置一条提示词的共享标签（幂等，词表与图片共用）。
     pub fn set_prompt_tags(&mut self, id: &PromptId, tags: &[Tag]) -> Result<()> {
         // 词法校验先于任何读取：非法标签在触碰库之前就被拒绝。

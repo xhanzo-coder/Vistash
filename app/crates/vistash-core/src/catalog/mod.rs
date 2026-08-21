@@ -21,6 +21,7 @@
 
 mod image_metadata;
 mod lifecycle;
+mod linking;
 mod prompt_lifecycle;
 mod prompt_metadata;
 mod query;
@@ -45,6 +46,7 @@ use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
 use crate::index::Index;
 use crate::library::Library;
+use crate::prompt::PromptId;
 use crate::sidecar::AssetSidecar;
 use std::path::Path;
 
@@ -159,6 +161,40 @@ impl Catalog {
     fn inject_metadata_failure_at(&mut self, write_index: usize) {
         self.fail_metadata_write_at = Some(write_index);
         self.metadata_writes_seen = 0;
+    }
+
+    /// 读取一条可修改的提示词：必须存在于正常库，且不处于回收站状态。
+    ///
+    /// 返回权威文件路径与内容，供提示词元数据与普通关联两个领域模块共用同一套
+    /// 拒绝语义；原先放在 `prompt_metadata` 里，普通关联模块落地后上移到此处。
+    fn load_editable_prompt(
+        &self,
+        id: &PromptId,
+        what: &str,
+    ) -> Result<(std::path::PathBuf, crate::prompt::PromptAsset)> {
+        let path = self.library.prompt_path(id);
+        if !path.exists() {
+            // 先区分"在回收站"（状态问题，还原后才能改）与"哪里都找不到"
+            // （ID 有误或列表过期），与图片侧的 load_editable_sidecar 同语义。
+            if self.library.prompt_trash_path(id).exists() {
+                return Err(AppError::detailed(
+                    Code::PromptWriteFailed,
+                    format!("回收站提示词不能修改{what}：{id}"),
+                ));
+            }
+            return Err(AppError::detailed(
+                Code::PromptNotFound,
+                format!("正常库中不存在这条提示词：{id}"),
+            ));
+        }
+        let prompt = crate::prompt::PromptAsset::read(&path)?;
+        if prompt.is_deleted() {
+            return Err(AppError::detailed(
+                Code::PromptWriteFailed,
+                format!("回收站提示词不能修改{what}：{id}"),
+            ));
+        }
+        Ok((path, prompt))
     }
 }
 
