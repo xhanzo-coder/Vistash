@@ -93,6 +93,11 @@ pub enum Code {
     /// 提示词文件夹清单中已有同名路径。与图片文件夹无关：两棵树允许同路径字面值
     /// 各自存在，重复只发生在提示词树内部。
     PromptFolderExists,
+    /// 把提示词移入库内提示词回收站失败。与图片侧的 `trash.delete_failed` 分开：
+    /// 两棵树的同名路径可以各自存在，失败也必须能归因到各自那一侧。
+    PromptTrashDeleteFailed,
+    /// 从库内提示词回收站还原提示词失败。分开的理由同上。
+    PromptTrashRestoreFailed,
     // migration 域：库格式 v1 到 v2 的一次性迁移
     MigrationJournalCorrupt,
     MigrationJournalFormatTooNew,
@@ -149,6 +154,8 @@ pub const ALL_CODES: &[Code] = &[
     Code::PromptNotFound,
     Code::PromptFolderNotFound,
     Code::PromptFolderExists,
+    Code::PromptTrashDeleteFailed,
+    Code::PromptTrashRestoreFailed,
     Code::MigrationJournalCorrupt,
     Code::MigrationJournalFormatTooNew,
     Code::MigrationJournalWriteFailed,
@@ -205,7 +212,9 @@ impl Code {
             | PromptLinkedImageDuplicated
             | PromptNotFound
             | PromptFolderNotFound
-            | PromptFolderExists => Domain::Prompt,
+            | PromptFolderExists
+            | PromptTrashDeleteFailed
+            | PromptTrashRestoreFailed => Domain::Prompt,
             MigrationJournalCorrupt
             | MigrationJournalFormatTooNew
             | MigrationJournalWriteFailed
@@ -264,6 +273,8 @@ impl Code {
             PromptNotFound => "prompt.not_found",
             PromptFolderNotFound => "prompt.folder_not_found",
             PromptFolderExists => "prompt.folder_exists",
+            PromptTrashDeleteFailed => "prompt.trash_delete_failed",
+            PromptTrashRestoreFailed => "prompt.trash_restore_failed",
             MigrationJournalCorrupt => "migration.journal_corrupt",
             MigrationJournalFormatTooNew => "migration.journal_format_too_new",
             MigrationJournalWriteFailed => "migration.journal_write_failed",

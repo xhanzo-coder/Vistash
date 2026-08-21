@@ -60,6 +60,8 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "prompt.not_found": "找不到这条提示词。它可能已被删除，或列表已过期——请刷新后重试。",
   "prompt.folder_not_found": "指定的提示词文件夹不存在。提示词文件夹与素材文件夹是两棵独立的树。",
   "prompt.folder_exists": "同名提示词文件夹已经存在。",
+  "prompt.trash_delete_failed": "把提示词移入提示词回收站失败。原提示词未被改动，可重试。",
+  "prompt.trash_restore_failed": "从提示词回收站还原提示词失败。回收站中的提示词未被改动，可重试。",
 
   // migration 域
   "migration.journal_corrupt": "库迁移记录损坏，已停止迁移。程序不会据此继续或回滚——两者都可能写坏权威数据。请保留库目录并联系支持。",

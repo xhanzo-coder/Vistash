@@ -21,6 +21,7 @@
 
 mod image_metadata;
 mod lifecycle;
+mod prompt_lifecycle;
 mod prompt_metadata;
 mod query;
 #[cfg(test)]
@@ -28,6 +29,7 @@ mod testing;
 
 pub use image_metadata::{FolderMutationProgress, FolderName, FolderPath, Tag};
 pub use lifecycle::{PurgeFailure, PurgeReport, RestoreOutcome};
+pub use prompt_lifecycle::PromptRestoreOutcome;
 pub use prompt_metadata::{NewPrompt, PromptEdit};
 pub use query::{
     AssetLocation, AssetQuery, CatalogSnapshot, FolderFilter, PromptLocation, PromptQuery,
@@ -36,6 +38,8 @@ pub use query::{
 
 #[cfg(test)]
 use lifecycle::LifecycleStage;
+#[cfg(test)]
+use prompt_lifecycle::PromptLifecycleStage;
 
 use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
@@ -56,6 +60,8 @@ pub struct Catalog {
     fail_lifecycle_stage: Option<LifecycleStage>,
     #[cfg(test)]
     fail_purge_hash: Option<ContentHash>,
+    #[cfg(test)]
+    fail_prompt_lifecycle_stage: Option<PromptLifecycleStage>,
 }
 
 impl Catalog {
@@ -72,6 +78,8 @@ impl Catalog {
             fail_lifecycle_stage: None,
             #[cfg(test)]
             fail_purge_hash: None,
+            #[cfg(test)]
+            fail_prompt_lifecycle_stage: None,
         })
     }
 
