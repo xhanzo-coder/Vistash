@@ -101,8 +101,18 @@
 > 失败后权威文件逐字段保持保存前内容。按需详情读取与"正常库中不存在"走新增稳定错误码
 > `prompt.not_found`（与瞬时 IO 失败区分）；创建时归属未知提示词文件夹报新增码
 > `prompt.folder_not_found`，两码已同步 `errorText.ts` 中文文案。
-- [ ] 4.3 先建立提示词文件夹创建/重命名/删除、多文件夹成员、根位置与中途写入回滚测试
-- [ ] 4.4 实现独立提示词文件夹树与批量 MetadataTransaction，确保同名图片/提示词路径不混合
+- [x] 4.3 先建立提示词文件夹创建/重命名/删除、多文件夹成员、根位置与中途写入回滚测试
+- [x] 4.4 实现独立提示词文件夹树与批量 MetadataTransaction，确保同名图片/提示词路径不混合
+
+> 4.3/4.4 落在 `catalog/prompt_metadata.rs`（2026-08-21）：6 条测试先行（stub 红）后实现
+> 转绿。`create_prompt_folder`/`rename_prompt_folder`/`delete_prompt_folder` 与图片侧逻辑
+> 平行但只读写 `prompt-folders.json`——测试以"两棵树各建同名根 `人物`、重命名提示词子树后
+> 图片侧车与图片清单逐字节不动"钉住独立性。`set_prompt_folders` 覆盖多文件夹成员（集合
+> 语义、排序去重）与空集即根位置。批量提交走提示词侧专用的 `PromptMetadataTransaction`
+> （捕获提示词文件 + 清单原始字节，任一写入失败逆序回滚），中途注入失败后三份文件逐字节
+> 复原；索引更新失败仍走全量重建兜底。新增错误码 `prompt.folder_exists`（含前端文案），
+> 并把 `before_metadata_write`/`inject_metadata_failure_at` 上移到 `catalog/mod.rs` 供两个
+> 领域模块共用；`Index` 新增 `list_prompts()`（只列正常库，回收站原文件夹由还原语义处理）。
 - [ ] 4.5 先建立共享标签词面、提示词标签幂等、分库计数、note 自动保存数据边界和 favorite 筛选测试
 - [ ] 4.6 实现提示词文件夹/标签、note/favorite 原子写入与派生索引维护
 - [ ] 4.7 建立 `PromptQuery` 公开测试，覆盖标题/正文 Unicode 子串、精确/根文件夹、多标签 AND、收藏、正常/回收站与稳定排序

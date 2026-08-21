@@ -9,9 +9,11 @@
 //! 混在一个入口里会让"哪次按键触发哪份写入"变得无法回答。
 
 use super::Catalog;
+use super::{FolderName, FolderPath};
 use crate::error::{AppError, Code, Result};
-use crate::prompt::{PromptAsset, PromptId, PROMPT_FORMAT_VERSION};
+use crate::prompt::{PromptAsset, PromptFolderList, PromptId, PROMPT_FORMAT_VERSION};
 use chrono::Utc;
+use std::path::Path;
 
 /// 创建一条提示词所需的输入。
 ///
@@ -34,6 +36,50 @@ pub struct PromptEdit {
     pub title: Option<String>,
     pub model: Option<String>,
     pub parameters: Option<String>,
+}
+
+/// 捕获一次批量提示词权威写入前的原始字节，供任一写入失败时逆序回滚。
+///
+/// 与图片侧的 `MetadataTransaction` 分开而不是共用一个泛型实现，理由与
+/// `prompt.rs` 中分开两个 `write_json_atomic` 相同：回滚失败的错误码不同
+/// （`prompt.write_failed` 对 `library.asset_metadata_write_failed`），合并后
+/// 错误码就得变成参数，"提示词写失败报什么码"会分散到每个调用点。
+struct PromptMetadataTransaction {
+    originals: Vec<(std::path::PathBuf, Vec<u8>)>,
+}
+
+impl PromptMetadataTransaction {
+    fn capture(prompts: &[(std::path::PathBuf, PromptAsset)], folders_path: &Path) -> Result<Self> {
+        let mut originals = Vec::with_capacity(prompts.len() + 1);
+        for (path, _) in prompts {
+            originals.push((
+                path.clone(),
+                std::fs::read(path)
+                    .map_err(|error| prompt_metadata_error("读取原提示词文件失败", path, error))?,
+            ));
+        }
+        originals.push((
+            folders_path.to_path_buf(),
+            std::fs::read(folders_path).map_err(|error| {
+                prompt_metadata_error("读取原提示词文件夹清单失败", folders_path, error)
+            })?,
+        ));
+        Ok(Self { originals })
+    }
+
+    fn rollback(&self) -> Result<()> {
+        for (path, bytes) in self.originals.iter().rev() {
+            super::write_raw_atomic(path, bytes, Code::PromptWriteFailed)?;
+        }
+        Ok(())
+    }
+}
+
+fn prompt_metadata_error(what: &str, path: &Path, error: std::io::Error) -> AppError {
+    AppError::detailed(
+        Code::PromptWriteFailed,
+        format!("{what} {}: {error}", path.display()),
+    )
 }
 
 impl Catalog {
@@ -119,6 +165,284 @@ impl Catalog {
             return self.rebuild_after_index_failure(error).map(|()| prompt);
         }
         Ok(prompt)
+    }
+
+    /// 在提示词文件夹树中创建文件夹。
+    ///
+    /// 与图片侧 `create_folder` 逻辑相同，但读写的是提示词文件夹清单——两棵树的
+    /// 独立性正体现在这里没有共享任何一份清单文件。
+    pub fn create_prompt_folder(
+        &mut self,
+        parent: Option<&FolderPath>,
+        name: &FolderName,
+    ) -> Result<FolderPath> {
+        let mut list = self.library.read_prompt_folders()?;
+        if let Some(parent) = parent {
+            if !list.folders.iter().any(|path| path == parent.as_str()) {
+                return Err(AppError::detailed(
+                    Code::PromptFolderNotFound,
+                    format!("父文件夹不存在：{}", parent.as_str()),
+                ));
+            }
+        }
+        let target = match parent {
+            Some(parent) => parent.join(name),
+            None => FolderPath::parse(name.as_str())?,
+        };
+        if list.folders.iter().any(|path| path == target.as_str()) {
+            return Err(AppError::detailed(
+                Code::PromptFolderExists,
+                format!("文件夹已经存在：{}", target.as_str()),
+            ));
+        }
+        list.folders.push(target.as_str().to_owned());
+        list.folders.sort();
+        self.library.write_prompt_folders(&list)?;
+        if let Err(error) = self.index_mut()?.set_prompt_folders(&list) {
+            self.rebuild_after_index_failure(error)?;
+        }
+        Ok(target)
+    }
+
+    /// 设置一条提示词所属的提示词文件夹（多文件夹成员，空集表示根位置）。
+    pub fn set_prompt_folders(&mut self, id: &PromptId, folders: &[FolderPath]) -> Result<()> {
+        let list = self.library.read_prompt_folders()?;
+        for folder in folders {
+            if !list.folders.iter().any(|path| path == folder.as_str()) {
+                return Err(AppError::detailed(
+                    Code::PromptFolderNotFound,
+                    format!("文件夹不存在：{}", folder.as_str()),
+                ));
+            }
+        }
+        let path = self.library.prompt_path(id);
+        if !path.exists() {
+            return Err(AppError::detailed(
+                Code::PromptNotFound,
+                format!("正常库中不存在这条提示词：{id}"),
+            ));
+        }
+        let mut prompt = PromptAsset::read(&path)?;
+        if prompt.is_deleted() {
+            return Err(AppError::detailed(
+                Code::PromptWriteFailed,
+                format!("回收站提示词不能修改文件夹：{id}"),
+            ));
+        }
+        let mut canonical: Vec<String> = folders
+            .iter()
+            .map(|folder| folder.as_str().to_owned())
+            .collect();
+        canonical.sort();
+        canonical.dedup();
+        prompt.folders = canonical;
+        prompt.write_atomic(&path)?;
+        if let Err(error) = self.index_mut()?.upsert_prompt(&prompt) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
+
+    /// 重命名提示词文件夹子树，并同步改写受影响提示词的归属。
+    pub fn rename_prompt_folder(
+        &mut self,
+        source: &FolderPath,
+        new_name: &FolderName,
+    ) -> Result<FolderPath> {
+        let original_list = self.library.read_prompt_folders()?;
+        if !original_list
+            .folders
+            .iter()
+            .any(|path| path == source.as_str())
+        {
+            return Err(AppError::detailed(
+                Code::PromptFolderNotFound,
+                format!("文件夹不存在：{}", source.as_str()),
+            ));
+        }
+        let target = match source.parent() {
+            Some(parent) => parent.join(new_name),
+            None => FolderPath::parse(new_name.as_str())?,
+        };
+        let source_tree: Vec<FolderPath> = original_list
+            .folders
+            .iter()
+            .map(|path| FolderPath::parse(path))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|path| path == source || path.is_descendant_of(source))
+            .collect();
+        let mapped_paths: Vec<FolderPath> = source_tree
+            .iter()
+            .map(|path| {
+                path.rebase(source, &target).ok_or_else(|| {
+                    AppError::detailed(
+                        Code::PromptFolderNotFound,
+                        format!("路径不在重命名子树中：{}", path.as_str()),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for mapped in &mapped_paths {
+            if original_list.folders.iter().any(|existing| {
+                existing == mapped.as_str()
+                    && !source_tree
+                        .iter()
+                        .any(|source_path| source_path.as_str() == existing)
+            }) {
+                return Err(AppError::detailed(
+                    Code::PromptFolderExists,
+                    format!("重命名目标已经存在：{}", mapped.as_str()),
+                ));
+            }
+        }
+        let mut next_folders: Vec<String> = original_list
+            .folders
+            .iter()
+            .map(|existing| {
+                let path = FolderPath::parse(existing)?;
+                let mapped = match path.rebase(source, &target) {
+                    Some(mapped) => mapped,
+                    None => path,
+                };
+                Ok(mapped.as_str().to_owned())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        next_folders.sort();
+        next_folders.dedup();
+        let next_list = PromptFolderList {
+            format_version: original_list.format_version,
+            folders: next_folders,
+        };
+
+        let mut changed_prompts = Vec::new();
+        for row in self.index()?.list_prompts()? {
+            let mut affected = false;
+            for existing in &row.folders {
+                let path = FolderPath::parse(existing)?;
+                if path == *source || path.is_descendant_of(source) {
+                    affected = true;
+                    break;
+                }
+            }
+            if !affected {
+                continue;
+            }
+            let id = PromptId::parse(&row.id)?;
+            let path = self.library.prompt_path(&id);
+            let mut prompt = PromptAsset::read(&path)?;
+            prompt.folders = prompt
+                .folders
+                .iter()
+                .map(|existing| {
+                    let path = FolderPath::parse(existing)?;
+                    let mapped = match path.rebase(source, &target) {
+                        Some(mapped) => mapped,
+                        None => path,
+                    };
+                    Ok(mapped.as_str().to_owned())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            prompt.folders.sort();
+            prompt.folders.dedup();
+            changed_prompts.push((path, prompt));
+        }
+        self.commit_prompt_metadata(&changed_prompts, &next_list)?;
+        Ok(target)
+    }
+
+    /// 删除提示词文件夹子树，并从受影响提示词上摘除这些归属。
+    pub fn delete_prompt_folder(&mut self, source: &FolderPath) -> Result<()> {
+        let original_list = self.library.read_prompt_folders()?;
+        if !original_list
+            .folders
+            .iter()
+            .any(|path| path == source.as_str())
+        {
+            return Err(AppError::detailed(
+                Code::PromptFolderNotFound,
+                format!("文件夹不存在：{}", source.as_str()),
+            ));
+        }
+        let mut remaining_folders = Vec::new();
+        for folder in &original_list.folders {
+            let path = FolderPath::parse(folder)?;
+            if path != *source && !path.is_descendant_of(source) {
+                remaining_folders.push(folder.clone());
+            }
+        }
+        let next_list = PromptFolderList {
+            format_version: original_list.format_version,
+            folders: remaining_folders,
+        };
+
+        let mut changed_prompts = Vec::new();
+        for row in self.index()?.list_prompts()? {
+            let mut affected = false;
+            for existing in &row.folders {
+                let path = FolderPath::parse(existing)?;
+                if path == *source || path.is_descendant_of(source) {
+                    affected = true;
+                    break;
+                }
+            }
+            if !affected {
+                continue;
+            }
+            let id = PromptId::parse(&row.id)?;
+            let path = self.library.prompt_path(&id);
+            let mut prompt = PromptAsset::read(&path)?;
+            let mut retained = Vec::new();
+            for existing in &prompt.folders {
+                let path = FolderPath::parse(existing)?;
+                if path != *source && !path.is_descendant_of(source) {
+                    retained.push(existing.clone());
+                }
+            }
+            prompt.folders = retained;
+            changed_prompts.push((path, prompt));
+        }
+        self.commit_prompt_metadata(&changed_prompts, &next_list)?;
+        Ok(())
+    }
+
+    /// 批量提交提示词权威写入：任一文件写失败即逆序回滚全部字节。
+    fn commit_prompt_metadata(
+        &mut self,
+        prompts: &[(std::path::PathBuf, PromptAsset)],
+        folders: &PromptFolderList,
+    ) -> Result<()> {
+        let transaction =
+            PromptMetadataTransaction::capture(prompts, &self.library.prompt_folders_path())?;
+        for (path, prompt) in prompts {
+            if let Err(error) = self.before_metadata_write() {
+                transaction.rollback()?;
+                return Err(error);
+            }
+            if let Err(error) = prompt.write_atomic(path) {
+                transaction.rollback()?;
+                return Err(AppError::detailed(
+                    Code::PromptWriteFailed,
+                    format!("批量写入提示词失败：{error:?}"),
+                ));
+            }
+        }
+        if let Err(error) = self.before_metadata_write() {
+            transaction.rollback()?;
+            return Err(error);
+        }
+        if let Err(error) = self.library.write_prompt_folders(folders) {
+            transaction.rollback()?;
+            return Err(AppError::detailed(
+                Code::PromptWriteFailed,
+                format!("批量写入提示词文件夹清单失败：{error:?}"),
+            ));
+        }
+        let updated: Vec<PromptAsset> = prompts.iter().map(|(_, prompt)| prompt.clone()).collect();
+        if let Err(error) = self.index_mut()?.upsert_prompts(&updated) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
     }
 }
 
@@ -335,5 +659,297 @@ mod tests {
             })
             .expect_err("未知提示词文件夹必须被拒绝");
         assert_eq!(error.code, Code::PromptFolderNotFound);
+    }
+
+    fn folder(raw: &str) -> FolderPath {
+        FolderPath::parse(raw).expect("合法文件夹路径")
+    }
+
+    #[test]
+    fn prompt_folders_form_a_tree_independent_of_image_folders() {
+        let mut fixture = fixture();
+        // 图片树先有同名根文件夹：提示词树必须允许同路径字面值各自存在。
+        fixture
+            .catalog
+            .create_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建图片文件夹");
+        let root = fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建同名提示词根文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(
+                Some(&root),
+                &crate::catalog::FolderName::parse("室内").expect("文件夹名"),
+            )
+            .expect("创建子文件夹");
+
+        let prompt_list = fixture.catalog.library().read_prompt_folders().expect("读回提示词清单");
+        assert_eq!(prompt_list.folders, vec!["人物".to_owned(), "人物/室内".to_owned()]);
+        let image_list = fixture.catalog.library().read_folders().expect("读回图片清单");
+        assert_eq!(
+            image_list.folders,
+            vec!["人物".to_owned()],
+            "提示词文件夹不得写进图片清单"
+        );
+    }
+
+    #[test]
+    fn renaming_a_prompt_folder_remaps_descendants_and_member_prompts() {
+        let mut fixture = fixture();
+        let people = fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建根文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
+            .expect("创建子文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
+            .expect("创建另一根文件夹");
+        // 同名图片文件夹与其中一张图片：重命名提示词文件夹不得波及它们。
+        fixture
+            .catalog
+            .create_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建同名图片文件夹");
+        let source = fixture.source.join("样例.png");
+        crate::catalog::testing::write_png(&fixture.source, "样例.png", [255, 0, 0, 255]);
+        let image = crate::catalog::testing::import_with(
+            &mut fixture.catalog,
+            &source,
+            &["人物"],
+            &[],
+        );
+        let created = fixture
+            .catalog
+            .create_prompt(&NewPrompt {
+                body: "正文".to_owned(),
+                title: None,
+                model: None,
+                parameters: None,
+                folders: vec!["人物/室内".to_owned(), "构图".to_owned()],
+                tags: vec![],
+            })
+            .expect("创建多文件夹成员提示词");
+
+        let renamed = fixture
+            .catalog
+            .rename_prompt_folder(&folder("人物"), &crate::catalog::FolderName::parse("人像").expect("文件夹名"))
+            .expect("重命名提示词文件夹");
+
+        assert_eq!(renamed.as_str(), "人像");
+        let prompt_list = fixture.catalog.library().read_prompt_folders().expect("读回提示词清单");
+        assert_eq!(
+            prompt_list.folders,
+            vec!["人像".to_owned(), "人像/室内".to_owned(), "构图".to_owned()]
+        );
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        assert_eq!(detail.folders, vec!["人像/室内".to_owned(), "构图".to_owned()]);
+        let snapshot = fixture.catalog.index().expect("索引").snapshot().expect("快照");
+        let row = snapshot
+            .prompts
+            .iter()
+            .find(|row| row.id == created.id.as_str())
+            .expect("索引中应有这条提示词");
+        assert_eq!(row.folders, vec!["人像/室内".to_owned(), "构图".to_owned()]);
+        // 图片侧逐字节未动：同名字面值属于两棵独立的树。
+        let image_sidecar = crate::sidecar::AssetSidecar::read(
+            &fixture.catalog.library().sidecar_path(&image.hash),
+        )
+        .expect("读回图片侧车");
+        assert_eq!(image_sidecar.folders, vec!["人物".to_owned()]);
+        let image_list = fixture.catalog.library().read_folders().expect("读回图片清单");
+        assert_eq!(image_list.folders, vec!["人物".to_owned()]);
+    }
+
+    #[test]
+    fn deleting_a_prompt_folder_strips_membership_but_keeps_other_folders() {
+        let mut fixture = fixture();
+        let people = fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建根文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
+            .expect("创建子文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
+            .expect("创建另一根文件夹");
+        let created = fixture
+            .catalog
+            .create_prompt(&NewPrompt {
+                body: "正文".to_owned(),
+                title: None,
+                model: None,
+                parameters: None,
+                folders: vec!["人物/室内".to_owned(), "构图".to_owned()],
+                tags: vec![],
+            })
+            .expect("创建提示词");
+
+        fixture
+            .catalog
+            .delete_prompt_folder(&folder("人物"))
+            .expect("删除提示词文件夹");
+
+        let prompt_list = fixture.catalog.library().read_prompt_folders().expect("读回提示词清单");
+        assert_eq!(prompt_list.folders, vec!["构图".to_owned()], "子目录一并移除");
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        assert_eq!(detail.folders, vec!["构图".to_owned()], "其余归属保留");
+        let snapshot = fixture.catalog.index().expect("索引").snapshot().expect("快照");
+        let row = snapshot
+            .prompts
+            .iter()
+            .find(|row| row.id == created.id.as_str())
+            .expect("索引中应有这条提示词");
+        assert_eq!(row.folders, vec!["构图".to_owned()]);
+    }
+
+    #[test]
+    fn membership_updates_cover_multi_folder_and_root_locations() {
+        let mut fixture = fixture();
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建根文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
+            .expect("创建另一根文件夹");
+        let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
+
+        // 多文件夹成员：归属是集合语义，重复与顺序由权威写入规范化。
+        fixture
+            .catalog
+            .set_prompt_folders(&created.id, &[folder("构图"), folder("人物"), folder("构图")])
+            .expect("设置多个文件夹");
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        assert_eq!(detail.folders, vec!["人物".to_owned(), "构图".to_owned()]);
+
+        // 清空归属即回到根位置：空集是合法状态而不是错误。
+        fixture
+            .catalog
+            .set_prompt_folders(&created.id, &[])
+            .expect("清空归属");
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        assert!(detail.folders.is_empty(), "空归属即根位置");
+    }
+
+    #[test]
+    fn an_interrupted_prompt_folder_rename_rolls_back_every_byte() {
+        let mut fixture = fixture();
+        let people = fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建根文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
+            .expect("创建子文件夹");
+        let first = fixture
+            .catalog
+            .create_prompt(&NewPrompt {
+                body: "第一条".to_owned(),
+                title: None,
+                model: None,
+                parameters: None,
+                folders: vec!["人物/室内".to_owned()],
+                tags: vec![],
+            })
+            .expect("创建第一条");
+        let second = fixture
+            .catalog
+            .create_prompt(&NewPrompt {
+                body: "第二条".to_owned(),
+                title: None,
+                model: None,
+                parameters: None,
+                folders: vec!["人物/室内".to_owned()],
+                tags: vec![],
+            })
+            .expect("创建第二条");
+        let paths = [
+            fixture.catalog.library().prompt_path(&first.id),
+            fixture.catalog.library().prompt_path(&second.id),
+            fixture.catalog.library().prompt_folders_path(),
+        ];
+        let before: Vec<(std::path::PathBuf, Vec<u8>)> = paths
+            .iter()
+            .map(|path| (path.clone(), std::fs::read(path).expect("读取原始字节")))
+            .collect();
+
+        // 注入第 1 次（第二条提示词）写入失败：第一条已改写、清单未写，
+        // 回滚必须把全部字节恢复原状。
+        fixture.catalog.inject_metadata_failure_at(1);
+        let error = fixture
+            .catalog
+            .rename_prompt_folder(&folder("人物"), &crate::catalog::FolderName::parse("人像").expect("文件夹名"))
+            .expect_err("注入失败后本应失败");
+        assert_eq!(error.code, Code::LibraryAssetMetadataWriteFailed);
+
+        for (path, original) in &before {
+            let current = std::fs::read(path).expect("读取回滚后字节");
+            assert_eq!(&current, original, "回滚后字节不一致：{}", path.display());
+        }
+    }
+
+    #[test]
+    fn duplicate_or_missing_prompt_folders_are_refused() {
+        let mut fixture = fixture();
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建根文件夹");
+        let error = fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect_err("重复创建本应被拒");
+        assert_eq!(error.code, Code::PromptFolderExists);
+        let error = fixture
+            .catalog
+            .create_prompt_folder(
+                Some(&folder("不存在")),
+                &crate::catalog::FolderName::parse("室内").expect("文件夹名"),
+            )
+            .expect_err("父文件夹缺失本应被拒");
+        assert_eq!(error.code, Code::PromptFolderNotFound);
+        let error = fixture
+            .catalog
+            .rename_prompt_folder(&folder("不存在"), &crate::catalog::FolderName::parse("改名").expect("文件夹名"))
+            .expect_err("重命名不存在的文件夹本应被拒");
+        assert_eq!(error.code, Code::PromptFolderNotFound);
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
+            .expect("创建另一根文件夹");
+        let error = fixture
+            .catalog
+            .rename_prompt_folder(&folder("人物"), &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
+            .expect_err("重命名到已存在的同级路径本应被拒");
+        assert_eq!(error.code, Code::PromptFolderExists);
+        let error = fixture
+            .catalog
+            .delete_prompt_folder(&folder("不存在"))
+            .expect_err("删除不存在的文件夹本应被拒");
+        assert_eq!(error.code, Code::PromptFolderNotFound);
+
+        let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
+        let error = fixture
+            .catalog
+            .set_prompt_folders(&created.id, &[folder("不存在")])
+            .expect_err("归属未知文件夹本应被拒");
+        assert_eq!(error.code, Code::PromptFolderNotFound);
+        let missing = crate::prompt::PromptId::parse("018f3c9e-6c00-7000-8000-00000000dead")
+            .expect("构造 ID");
+        let error = fixture
+            .catalog
+            .set_prompt_folders(&missing, &[])
+            .expect_err("给不存在的提示词设置归属本应报告缺失");
+        assert_eq!(error.code, Code::PromptNotFound);
     }
 }

@@ -486,27 +486,6 @@ impl Catalog {
         Ok(())
     }
 
-    fn before_metadata_write(&mut self) -> Result<()> {
-        #[cfg(test)]
-        {
-            let current = self.metadata_writes_seen;
-            self.metadata_writes_seen += 1;
-            if self.fail_metadata_write_at == Some(current) {
-                return Err(AppError::detailed(
-                    Code::LibraryAssetMetadataWriteFailed,
-                    format!("注入第 {current} 个元数据写入失败"),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn inject_metadata_failure_at(&mut self, write_index: usize) {
-        self.fail_metadata_write_at = Some(write_index);
-        self.metadata_writes_seen = 0;
-    }
-
 }
 
 fn metadata_error(what: &str, path: &Path, error: std::io::Error) -> AppError {

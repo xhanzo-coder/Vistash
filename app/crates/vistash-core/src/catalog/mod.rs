@@ -121,6 +121,30 @@ impl Catalog {
         })
     }
 
+    /// 每次权威元数据写入前调用。测试可注入第 n 次写入失败，验证批量事务的回滚。
+    ///
+    /// 图片与提示词两个领域模块共用这一个计数器：注入点是"第几次权威写入"，
+    /// 与写入的是哪棵树无关。
+    fn before_metadata_write(&mut self) -> Result<()> {
+        #[cfg(test)]
+        {
+            let current = self.metadata_writes_seen;
+            self.metadata_writes_seen += 1;
+            if self.fail_metadata_write_at == Some(current) {
+                return Err(AppError::detailed(
+                    Code::LibraryAssetMetadataWriteFailed,
+                    format!("注入第 {current} 个元数据写入失败"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn inject_metadata_failure_at(&mut self, write_index: usize) {
+        self.fail_metadata_write_at = Some(write_index);
+        self.metadata_writes_seen = 0;
+    }
 }
 
 fn write_raw_atomic(path: &Path, bytes: &[u8], code: Code) -> Result<()> {

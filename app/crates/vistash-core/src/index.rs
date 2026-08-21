@@ -656,6 +656,14 @@ impl Index {
         self.load_assets(tail)
     }
 
+    /// 全部正常提示词的轻量行，按 ID 排序。
+    ///
+    /// 文件夹重命名/删除需要遍历受影响的提示词权威文件；与图片侧一致，只遍历
+    /// 正常库——回收站素材的原文件夹由还原语义处理，不随组织操作改写。
+    pub fn list_prompts(&self) -> Result<Vec<PromptRow>> {
+        self.load_prompts("WHERE deleted_at IS NULL ORDER BY id")
+    }
+
     /// 按位置、文件夹、全部标签和 Unicode 文件名组合查询。
     pub fn query_assets(
         &self,

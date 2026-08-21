@@ -90,6 +90,9 @@ pub enum Code {
     /// 提示词文件夹清单中不存在该文件夹。提示词文件夹与图片文件夹是两棵树，
     /// 归属必须指向自己那棵树里真实存在的路径。
     PromptFolderNotFound,
+    /// 提示词文件夹清单中已有同名路径。与图片文件夹无关：两棵树允许同路径字面值
+    /// 各自存在，重复只发生在提示词树内部。
+    PromptFolderExists,
     // migration 域：库格式 v1 到 v2 的一次性迁移
     MigrationJournalCorrupt,
     MigrationJournalFormatTooNew,
@@ -145,6 +148,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::PromptLinkedImageDuplicated,
     Code::PromptNotFound,
     Code::PromptFolderNotFound,
+    Code::PromptFolderExists,
     Code::MigrationJournalCorrupt,
     Code::MigrationJournalFormatTooNew,
     Code::MigrationJournalWriteFailed,
@@ -200,7 +204,8 @@ impl Code {
             | PromptCoverNotLinked
             | PromptLinkedImageDuplicated
             | PromptNotFound
-            | PromptFolderNotFound => Domain::Prompt,
+            | PromptFolderNotFound
+            | PromptFolderExists => Domain::Prompt,
             MigrationJournalCorrupt
             | MigrationJournalFormatTooNew
             | MigrationJournalWriteFailed
@@ -258,6 +263,7 @@ impl Code {
             PromptLinkedImageDuplicated => "prompt.linked_image_duplicated",
             PromptNotFound => "prompt.not_found",
             PromptFolderNotFound => "prompt.folder_not_found",
+            PromptFolderExists => "prompt.folder_exists",
             MigrationJournalCorrupt => "migration.journal_corrupt",
             MigrationJournalFormatTooNew => "migration.journal_format_too_new",
             MigrationJournalWriteFailed => "migration.journal_write_failed",
