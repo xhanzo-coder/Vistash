@@ -201,6 +201,24 @@ impl Default for FolderList {
     }
 }
 
+impl FolderList {
+    /// 从路径读取图片文件夹清单。
+    ///
+    /// 独立于 [`Library::read_folders` 存在的理由与 `Index::rebuild_at` 相同：迁移在
+    /// 能构造 `Library` 之前就要按路径读这份清单。错误语义必须与经由 `Library` 的
+    /// 读取完全一致，因此后者直接委托到这里——两处各写一遍迟早出现一处接受、
+    /// 另一处拒绝的组合。
+    pub fn read(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path).map_err(|e| io_failed("读取文件夹清单失败", path, e))?;
+        serde_json::from_slice(&bytes).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!("{FOLDERS_FILE} 无法解析 {}: {e}", path.display()),
+            )
+        })
+    }
+}
+
 /// 一个已打开的库。
 ///
 /// 持有它即代表"根目录存在且 `library.json` 已校验通过"，因此下游模块不需要重复
@@ -423,14 +441,7 @@ impl Library {
     }
 
     pub fn read_folders(&self) -> Result<FolderList> {
-        let p = self.folders_path();
-        let bytes = std::fs::read(&p).map_err(|e| io_failed("读取文件夹清单失败", &p, e))?;
-        serde_json::from_slice(&bytes).map_err(|e| {
-            AppError::detailed(
-                Code::LibraryMetadataCorrupt,
-                format!("{FOLDERS_FILE} 无法解析 {}: {e}", p.display()),
-            )
-        })
+        FolderList::read(&self.folders_path())
     }
 
     pub fn write_folders(&self, list: &FolderList) -> Result<()> {

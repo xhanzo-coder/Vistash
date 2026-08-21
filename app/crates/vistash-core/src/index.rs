@@ -11,14 +11,21 @@
 
 use crate::colorcard::ColorCard;
 use crate::error::{AppError, Code, Result};
-use crate::library::{FolderList, Library};
+use crate::library::{
+    FolderList, Library, FOLDERS_FILE, INDEX_FILE, OBJECTS_DIR, PROMPT_FOLDERS_FILE,
+    PROMPT_OBJECTS_DIR, PROMPTS_DIR, PROMPT_TRASH_DIR, TRASH_DIR,
+};
+use crate::prompt::{PromptAsset, PromptFolderList};
 use crate::sidecar::AssetSidecar;
 use rusqlite::{params_from_iter, Connection};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 /// 索引结构版本。表结构、列语义或写入口径的任何改动都必须提升此值——提升即触发全量重建。
-pub const INDEX_USER_VERSION: i32 = 1;
+///
+/// v2：新增 prompts、prompt_folders、prompt_tags、prompt_images，并为 assets 增加
+/// note/favorite 列（设计第五条）。
+pub const INDEX_USER_VERSION: i32 = 2;
 
 /// 表结构。
 ///
@@ -40,7 +47,9 @@ CREATE TABLE assets (
   color_card_status              TEXT NOT NULL,
   color_card_algo_version        INTEGER NOT NULL,
   color_card_failure_reason      TEXT,
-  color_card_sampled_pixel_count INTEGER NOT NULL
+  color_card_sampled_pixel_count INTEGER NOT NULL,
+  note                           TEXT NOT NULL,
+  favorite                       INTEGER NOT NULL
 );
 
 CREATE TABLE asset_tags (
@@ -74,9 +83,61 @@ CREATE TABLE folders (
   path TEXT PRIMARY KEY NOT NULL
 );
 
+-- 提示词行是权威文件的派生物。正文整体入列：正文搜索与“标题缺省时取首行”
+-- 都必须能在索引上回答，按需详情才读权威文件。cover_image_hash 存显式指定的
+-- 封面；NULL 表示“用默认封面”，即第一张关联图片——那是查询时的派生规则，
+-- 不是存储时的猜测，因此这里不把派生值写进列里。
+CREATE TABLE prompts (
+  id               TEXT PRIMARY KEY NOT NULL,
+  body             TEXT NOT NULL,
+  title            TEXT,
+  model            TEXT,
+  parameters       TEXT,
+  note             TEXT NOT NULL,
+  favorite         INTEGER NOT NULL,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  deleted_at       TEXT,
+  cover_image_hash TEXT
+);
+
+CREATE TABLE prompt_folders (
+  id     TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+  folder TEXT NOT NULL,
+  PRIMARY KEY (id, folder)
+);
+
+-- 提示词文件夹清单独立成表且来自 prompt-folders.json，与成员关系表分开：
+-- 命名与图片侧对齐——清单表是 folders / prompt_folder_list，成员表是
+-- asset_folders / prompt_folders。
+CREATE TABLE prompt_folder_list (
+  path TEXT PRIMARY KEY NOT NULL
+);
+
+CREATE TABLE prompt_tags (
+  id  TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (id, tag)
+);
+
+-- 普通关联的反查表（设计第三条）：提示词文件是关联的唯一权威方，图片侧车不写
+-- 反向列表，从图片找提示词全靠这张表。image_hash 刻意没有指向 assets 的外键：
+-- 关联是跨领域的软引用，回收站中的图片其行仍在索引里，而“外部改写造成的悬空
+-- 关联”应当被查询层标记为已删除，而不是让整次重建失败。
+CREATE TABLE prompt_images (
+  prompt_id  TEXT NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+  image_hash TEXT NOT NULL,
+  ordinal    INTEGER NOT NULL,
+  PRIMARY KEY (prompt_id, image_hash)
+);
+
 CREATE INDEX idx_asset_tags_tag ON asset_tags(tag);
 CREATE INDEX idx_asset_folders_folder ON asset_folders(folder);
 CREATE INDEX idx_assets_deleted_at ON assets(deleted_at);
+CREATE INDEX idx_prompts_deleted_at ON prompts(deleted_at);
+CREATE INDEX idx_prompt_tags_tag ON prompt_tags(tag);
+CREATE INDEX idx_prompt_folders_folder ON prompt_folders(folder);
+CREATE INDEX idx_prompt_images_image ON prompt_images(image_hash);
 ";
 
 /// 索引里的一条颜色。
@@ -111,12 +172,45 @@ pub struct AssetRow {
     pub color_card_algo_version: u32,
     pub color_card_failure_reason: Option<String>,
     pub color_card_sampled_pixel_count: u64,
+    /// 多行纯文本备注，逐字保留。详情列表的备注摘要列从这里回答。
+    pub note: String,
+    /// 二值收藏状态。收藏筛选从这里回答。
+    pub favorite: bool,
     /// 按字典序排序。排序是快照可比较的前提。
     pub tags: Vec<String>,
     /// 按字典序排序。
     pub folders: Vec<String>,
     /// 按 `ordinal` 升序，与侧车中的顺序一致（占比降序）。
     pub colors: Vec<ColorRow>,
+}
+
+/// 索引里的一条提示词。
+///
+/// 与 [`AssetRow`] 同一原则：时间戳以字符串保存，索引只负责回答查询，强类型读权威
+/// 文件。这里刻意不含 `deleted_from_folders`——还原要回到删除前位置，那个信息只在
+/// 权威文件里，图片侧的还原同样不经过索引。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PromptRow {
+    pub id: String,
+    /// 当前正文。正文搜索与"标题缺省时取首行"都从这里回答。
+    pub body: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub parameters: Option<String>,
+    /// 多行纯文本备注，逐字保留。
+    pub note: String,
+    pub favorite: bool,
+    /// 按字典序排序。排序是快照可比较的前提。
+    pub folders: Vec<String>,
+    /// 按字典序排序。
+    pub tags: Vec<String>,
+    /// 按 `ordinal` 升序，与权威文件中的顺序一致：默认封面取第一张关联图片，
+    /// 因此顺序属于查询语义而不是展示细节。
+    pub linked_image_hashes: Vec<String>,
+    pub cover_image_hash: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub deleted_at: Option<String>,
 }
 
 /// 索引的全量快照。
@@ -127,8 +221,12 @@ pub struct AssetRow {
 pub struct IndexSnapshot {
     /// 按 `hash` 排序。
     pub assets: Vec<AssetRow>,
-    /// 按路径排序。
+    /// 按路径排序，来自 `folders.json`。
     pub folders: Vec<String>,
+    /// 按 `id` 排序。
+    pub prompts: Vec<PromptRow>,
+    /// 按路径排序，来自 `prompt-folders.json`。与图片文件夹清单是两份独立文件。
+    pub prompt_folders: Vec<String>,
 }
 
 /// 索引查询的文件夹范围。根文件夹不是持久化节点，因此单独建模。
@@ -176,8 +274,9 @@ fn upsert_asset_in_transaction(
             hash, hash_algo, media_type, ext, byte_size, width, height,
             imported_at, original_filename, source_path, deleted_at,
             color_card_status, color_card_algo_version,
-            color_card_failure_reason, color_card_sampled_pixel_count
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            color_card_failure_reason, color_card_sampled_pixel_count,
+            note, favorite
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         rusqlite::params![
             hash,
             sidecar.hash_algo,
@@ -194,6 +293,8 @@ fn upsert_asset_in_transaction(
             card.algo_version,
             card.failure_reason.map(|code| code.as_str()),
             card.sampled_pixel_count,
+            sidecar.note,
+            sidecar.favorite,
         ],
     )
     .map_err(|error| sql_err("写入素材失败", error))?;
@@ -244,6 +345,91 @@ fn upsert_asset_in_transaction(
     Ok(())
 }
 
+/// 在事务内写入或覆盖一条提示词及其子表。
+///
+/// 覆盖语义与图片 upsert 相同（编辑就是覆盖，设计第二条）：先删子表再删主表，
+/// 重复写入不得让标签、文件夹或关联累积。
+fn upsert_prompt_in_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    prompt: &PromptAsset,
+) -> Result<()> {
+    let id = prompt.id.as_str();
+
+    // 先删子表再删主表：即便外键未生效也不会留下孤儿行。三张子表引用主表的
+    // 列名不同，逐表写明而不做字符串拼接。
+    for (table, column) in [
+        ("prompt_folders", "id"),
+        ("prompt_tags", "id"),
+        ("prompt_images", "prompt_id"),
+    ] {
+        tx.execute(
+            &format!("DELETE FROM {table} WHERE {column} = ?1"),
+            [id],
+        )
+        .map_err(|error| sql_err(&format!("清理 {table} 失败"), error))?;
+    }
+    tx.execute("DELETE FROM prompts WHERE id = ?1", [id])
+        .map_err(|error| sql_err("清理 prompts 失败", error))?;
+
+    tx.execute(
+        "INSERT INTO prompts (
+            id, body, title, model, parameters, note, favorite,
+            created_at, updated_at, deleted_at, cover_image_hash
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![
+            id,
+            prompt.body,
+            prompt.title,
+            prompt.model,
+            prompt.parameters,
+            prompt.note,
+            prompt.favorite,
+            prompt.created_at.to_rfc3339(),
+            prompt.updated_at.to_rfc3339(),
+            prompt.deleted_at.map(|time| time.to_rfc3339()),
+            prompt.cover_image_hash.as_ref().map(|hash| hash.as_str()),
+        ],
+    )
+    .map_err(|error| sql_err("写入提示词失败", error))?;
+
+    {
+        let mut statement = tx
+            .prepare("INSERT OR IGNORE INTO prompt_folders (id, folder) VALUES (?1, ?2)")
+            .map_err(|error| sql_err("准备提示词文件夹写入失败", error))?;
+        for folder in &prompt.folders {
+            statement
+                .execute(rusqlite::params![id, folder])
+                .map_err(|error| sql_err("写入提示词文件夹失败", error))?;
+        }
+    }
+    {
+        let mut statement = tx
+            .prepare("INSERT OR IGNORE INTO prompt_tags (id, tag) VALUES (?1, ?2)")
+            .map_err(|error| sql_err("准备提示词标签写入失败", error))?;
+        for tag in &prompt.tags {
+            statement
+                .execute(rusqlite::params![id, tag])
+                .map_err(|error| sql_err("写入提示词标签失败", error))?;
+        }
+    }
+    {
+        // 关联按 ordinal 原样落表，不用 INSERT OR IGNORE：权威文件已拒绝重复哈希，
+        // 主键 (prompt_id, image_hash) 与之一致，这里若撞键说明上游违反了不变量，
+        // 必须失败而不是吞掉一行。
+        let mut statement = tx
+            .prepare(
+                "INSERT INTO prompt_images (prompt_id, image_hash, ordinal) VALUES (?1, ?2, ?3)",
+            )
+            .map_err(|error| sql_err("准备关联写入失败", error))?;
+        for (ordinal, hash) in prompt.linked_image_hashes.iter().enumerate() {
+            statement
+                .execute(rusqlite::params![id, hash.as_str(), ordinal as i64])
+                .map_err(|error| sql_err("写入关联失败", error))?;
+        }
+    }
+    Ok(())
+}
+
 impl Index {
     /// 打开索引，版本不符或文件不存在时全量重建。
     pub fn open(lib: &Library) -> Result<Self> {
@@ -265,7 +451,17 @@ impl Index {
 
     /// 全量重建：删除既有索引文件，重扫库目录内的元数据文件。
     pub fn rebuild(lib: &Library) -> Result<Self> {
-        let path = lib.index_path();
+        Self::rebuild_at(lib.root())
+    }
+
+    /// 以库根路径为入口的全量重建。
+    ///
+    /// 存在的理由是迁移（设计第四条）：迁移必须在提交 v2 `library.json` **之前**重建
+    /// 索引，而那一刻构造不出 `Library`——`Library::open` 只认 v2 元数据。重建实际
+    /// 只用到路径推导与两份文件夹清单，不需要库级元数据，因此以根路径为入口恰好
+    /// 覆盖迁移的需要，也让 `rebuild` 与迁移回调共用同一条实现。
+    pub fn rebuild_at(root: &Path) -> Result<Self> {
+        let path = root.join(INDEX_FILE);
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| io_err("删除旧索引失败", &path, e))?;
         }
@@ -276,17 +472,30 @@ impl Index {
             .map_err(|e| sql_err("写入索引版本失败", e))?;
         let mut index = Self { conn };
 
-        // 文件夹先于素材写入，且来源是 folders.json 而不是素材的 folders 字段。
-        index.set_folders(&lib.read_folders()?)?;
+        // 两份文件夹清单都先于素材写入，且都来自各自的清单文件而不是素材元数据：
+        // 派生会使不含任何素材的文件夹在索引重建后消失。
+        let folders = FolderList::read(&root.join(FOLDERS_FILE))?;
+        index.set_folders(&folders)?;
+        let prompt_folders = PromptFolderList::read(&root.join(PROMPT_FOLDERS_FILE))?;
+        index.set_prompt_folders(&prompt_folders)?;
 
-        // objects 与 trash 都要扫：侧车以 deleted_at 自证状态，两棵树的侧车都是权威
-        // 元数据。只扫 objects 会让回收站里的素材在重建后从索引中消失。
-        for tree in [lib.objects_dir(), lib.trash_dir()] {
-            for sidecar_path in collect_sidecars(&tree)? {
-                // 单个侧车损坏即整次重建失败，不跳过。跳过会静默丢掉一个素材，而使用者
+        // objects 与 trash 都要扫：侧车与提示词文件都以 deleted_at 自证状态，两棵树
+        // 的文件都是权威元数据。只扫 objects 会让回收站里的素材在重建后从索引中消失。
+        for tree in [root.join(OBJECTS_DIR), root.join(TRASH_DIR)] {
+            for sidecar_path in collect_json_files(&tree)? {
+                // 单个文件损坏即整次重建失败，不跳过。跳过会静默丢掉一个素材，而使用者
                 // 只会看到"素材少了一个"，无从归因。
                 let sidecar = AssetSidecar::read(&sidecar_path)?;
                 index.upsert_asset(&sidecar)?;
+            }
+        }
+        for tree in [
+            root.join(PROMPTS_DIR).join(PROMPT_OBJECTS_DIR),
+            root.join(PROMPTS_DIR).join(PROMPT_TRASH_DIR),
+        ] {
+            for prompt_path in collect_json_files(&tree)? {
+                let prompt = PromptAsset::read(&prompt_path)?;
+                index.upsert_prompt(&prompt)?;
             }
         }
         Ok(index)
@@ -338,6 +547,82 @@ impl Index {
         tx.commit().map_err(|error| sql_err("提交事务失败", error))
     }
 
+    // —— SQLite v2 提示词索引 ——
+
+    /// 写入或覆盖一条提示词及其文件夹、标签与关联。整体在一个事务里，
+    /// 避免留下"有提示词行但没有标签行"的中间态。
+    pub fn upsert_prompt(&mut self, prompt: &PromptAsset) -> Result<()> {
+        self.upsert_prompts(std::slice::from_ref(prompt))
+    }
+
+    /// 在同一个事务里写入一批提示词。
+    pub fn upsert_prompts(&mut self, prompts: &[PromptAsset]) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|error| sql_err("开启事务失败", error))?;
+        for prompt in prompts {
+            upsert_prompt_in_transaction(&tx, prompt)?;
+        }
+        tx.commit().map_err(|error| sql_err("提交事务失败", error))
+    }
+
+    /// 覆盖写入提示词文件夹清单。语义与 [`Index::set_folders`] 相同：
+    /// 清单来自 `prompt-folders.json` 而不是提示词元数据。
+    pub fn set_prompt_folders(&mut self, list: &PromptFolderList) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| sql_err("开启事务失败", e))?;
+        tx.execute("DELETE FROM prompt_folder_list", [])
+            .map_err(|e| sql_err("清空提示词文件夹表失败", e))?;
+        {
+            let mut stmt = tx
+                .prepare("INSERT INTO prompt_folder_list (path) VALUES (?1)")
+                .map_err(|e| sql_err("准备提示词文件夹写入失败", e))?;
+            for path in &list.folders {
+                stmt.execute([path])
+                    .map_err(|e| sql_err("写入提示词文件夹失败", e))?;
+            }
+        }
+        tx.commit().map_err(|e| sql_err("提交事务失败", e))
+    }
+
+    /// 正常提示词使用的不同标签及其数量。回收站提示词不计入；
+    /// 与图片侧的 [`Index::active_tag_counts`] 共享词表但分别计数（设计第二条）。
+    pub fn active_prompt_tag_counts(&self) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT t.tag, COUNT(*)
+                 FROM prompt_tags t
+                 JOIN prompts p ON p.id = t.id
+                 WHERE p.deleted_at IS NULL
+                 GROUP BY t.tag
+                 ORDER BY t.tag",
+            )
+            .map_err(|error| sql_err("准备提示词标签计数查询失败", error))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|error| sql_err("查询提示词标签计数失败", error))?;
+        let mut counts = Vec::new();
+        for row in rows {
+            let (tag, count) = row.map_err(|error| sql_err("读取标签计数失败", error))?;
+            counts.push((
+                tag,
+                usize::try_from(count).map_err(|_| {
+                    AppError::detailed(
+                        Code::LibraryIndexRebuildFailed,
+                        format!("标签计数不是有效非负整数：{count}"),
+                    )
+                })?,
+            ));
+        }
+        Ok(counts)
+    }
+
     /// 索引中的素材条数，含回收站中的素材。
     pub fn asset_count(&self) -> Result<usize> {
         let n: i64 = self
@@ -352,6 +637,9 @@ impl Index {
         Ok(IndexSnapshot {
             assets: self.load_assets("ORDER BY hash")?,
             folders: self.string_column("SELECT path FROM folders ORDER BY path")?,
+            prompts: self.load_prompts("ORDER BY id")?,
+            prompt_folders: self
+                .string_column("SELECT path FROM prompt_folder_list ORDER BY path")?,
         })
     }
 
@@ -508,7 +796,8 @@ impl Index {
             "SELECT hash, hash_algo, media_type, ext, byte_size, width, height,
                     imported_at, original_filename, source_path, deleted_at,
                     color_card_status, color_card_algo_version,
-                    color_card_failure_reason, color_card_sampled_pixel_count
+                    color_card_failure_reason, color_card_sampled_pixel_count,
+                    note, favorite
              FROM assets {tail}"
         );
         let mut stmt = self
@@ -533,6 +822,8 @@ impl Index {
                     color_card_algo_version: r.get(12)?,
                     color_card_failure_reason: r.get(13)?,
                     color_card_sampled_pixel_count: r.get(14)?,
+                    note: r.get(15)?,
+                    favorite: r.get(16)?,
                     tags: Vec::new(),
                     folders: Vec::new(),
                     colors: Vec::new(),
@@ -561,6 +852,58 @@ impl Index {
             a.colors = self.colors_for(&a.hash)?;
         }
         Ok(assets)
+    }
+
+    /// 按给定的 ORDER 尾句加载提示词，并填充文件夹、标签与关联。
+    fn load_prompts(&self, tail: &str) -> Result<Vec<PromptRow>> {
+        let sql = format!(
+            "SELECT id, body, title, model, parameters, note, favorite,
+                    created_at, updated_at, deleted_at, cover_image_hash
+             FROM prompts {tail}"
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| sql_err("准备提示词查询失败", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(PromptRow {
+                    id: r.get(0)?,
+                    body: r.get(1)?,
+                    title: r.get(2)?,
+                    model: r.get(3)?,
+                    parameters: r.get(4)?,
+                    note: r.get(5)?,
+                    favorite: r.get(6)?,
+                    created_at: r.get(7)?,
+                    updated_at: r.get(8)?,
+                    deleted_at: r.get(9)?,
+                    cover_image_hash: r.get(10)?,
+                    folders: Vec::new(),
+                    tags: Vec::new(),
+                    linked_image_hashes: Vec::new(),
+                })
+            })
+            .map_err(|e| sql_err("查询提示词失败", e))?;
+        let mut prompts: Vec<PromptRow> = Vec::new();
+        for row in rows {
+            prompts.push(row.map_err(|e| sql_err("读取提示词行失败", e))?);
+        }
+        for p in &mut prompts {
+            p.folders = self.strings_for(
+                "SELECT folder FROM prompt_folders WHERE id = ?1 ORDER BY folder",
+                &p.id,
+            )?;
+            p.tags = self.strings_for(
+                "SELECT tag FROM prompt_tags WHERE id = ?1 ORDER BY tag",
+                &p.id,
+            )?;
+            p.linked_image_hashes = self.strings_for(
+                "SELECT image_hash FROM prompt_images WHERE prompt_id = ?1 ORDER BY ordinal",
+                &p.id,
+            )?;
+        }
+        Ok(prompts)
     }
 
     fn string_column(&self, sql: &str) -> Result<Vec<String>> {
@@ -621,11 +964,11 @@ impl Index {
     }
 }
 
-/// 收集一棵树下的全部侧车路径，按路径排序。
+/// 收集一棵树下的全部元数据 JSON 路径（图片侧车或提示词文件），按路径排序。
 ///
 /// 排序使重建顺序确定：顺序影响不了内容，但影响失败时先撞上哪个损坏文件，
 /// 而"同一个库每次报同一个错"是可诊断的前提。
-fn collect_sidecars(tree: &Path) -> Result<Vec<PathBuf>> {
+fn collect_json_files(tree: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     walk(tree, &mut out)?;
     out.sort();
@@ -658,7 +1001,13 @@ mod tests {
     use super::*;
     use crate::hashing::ContentHash;
     use crate::import::{self, ImportOptions, NoopObserver};
+    use crate::prompt::{PromptId, PROMPT_FORMAT_VERSION};
     use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+    /// 固定的 UUIDv7 字面值。与 prompt.rs 测试同一原则：不生成 ID，失败信息必须可复现。
+    const PROMPT_FULL: &str = "018f3c9e-6c00-7000-8000-0000000000a1";
+    const PROMPT_MINIMAL: &str = "018f3c9e-6c00-7000-8000-0000000000b2";
+    const PROMPT_TRASHED: &str = "018f3c9e-6c00-7000-8000-0000000000c3";
 
     struct Fixture {
         _dir: tempfile::TempDir,
@@ -752,6 +1101,119 @@ mod tests {
         index.set_folders(&folders).expect("写入文件夹");
 
         (index, report.imported)
+    }
+
+    /// 构造一条只有必填字段的提示词。
+    fn sample_prompt(id_literal: &str) -> PromptAsset {
+        PromptAsset {
+            format_version: PROMPT_FORMAT_VERSION,
+            id: PromptId::parse(id_literal).expect("合法 ID"),
+            body: "样例正文".to_owned(),
+            title: None,
+            model: None,
+            parameters: None,
+            note: String::new(),
+            favorite: false,
+            folders: vec![],
+            tags: vec![],
+            linked_image_hashes: vec![],
+            cover_image_hash: None,
+            created_at: chrono::DateTime::from_timestamp(0, 0).expect("固定时间戳"),
+            updated_at: chrono::DateTime::from_timestamp(0, 0).expect("固定时间戳"),
+            deleted_at: None,
+            deleted_from_folders: None,
+        }
+    }
+
+    /// 把提示词权威文件写到它当前状态对应的树上：回收站中的写 trash 树。
+    fn write_prompt_file(lib: &Library, prompt: &PromptAsset) {
+        let path = if prompt.is_deleted() {
+            lib.prompt_trash_path(&prompt.id)
+        } else {
+            lib.prompt_path(&prompt.id)
+        };
+        prompt.write_atomic(&path).expect("写入提示词权威文件");
+    }
+
+    /// 在 [`seed`] 的基础上追加 v2 内容，全部走增量路径，使"增量攒出来的索引"成为
+    /// 等价性测试的一侧：
+    ///
+    /// - 第一张图片带多行备注与收藏（改侧车、重写文件、upsert）；
+    /// - 三条提示词：全字段、仅必填字段、回收站中带关联；
+    /// - 两份彼此独立的文件夹清单，各含一个空文件夹与一个两树同名的路径。
+    ///
+    /// 标签布局服务于分库计数断言：字面值 `人物` 同时出现在图片侧与提示词侧，
+    /// 若计数被合并，任何一侧都会数出 2。
+    fn seed_v2(f: &Fixture) -> (Index, Vec<AssetSidecar>, Vec<PromptAsset>) {
+        let (mut index, imported) = seed(f);
+
+        let mut noted = imported[0].clone();
+        noted.note = "第一行\n\n第三行  末尾两个空格  ".to_owned();
+        noted.favorite = true;
+        noted.tags = vec!["参考".to_owned(), "人物".to_owned()];
+        noted
+            .write_atomic(&f.lib.sidecar_path(&noted.hash))
+            .expect("重写侧车");
+        index.upsert_asset(&noted).expect("写入带备注素材");
+
+        let mut full = sample_prompt(PROMPT_FULL);
+        full.body = "逆光人像，胶片颗粒，暖色高光".to_owned();
+        full.title = Some("逆光人像".to_owned());
+        full.model = Some("某生图模型 v3".to_owned());
+        full.parameters = Some("steps=30, cfg=6".to_owned());
+        full.note = "提示词备注".to_owned();
+        full.favorite = true;
+        full.folders = vec!["人物/室内".to_owned()];
+        full.tags = vec!["人物".to_owned(), "逆光".to_owned()];
+        full.linked_image_hashes = vec![imported[2].hash.clone(), imported[0].hash.clone()];
+        full.cover_image_hash = Some(imported[0].hash.clone());
+
+        let minimal = sample_prompt(PROMPT_MINIMAL);
+
+        let mut trashed = sample_prompt(PROMPT_TRASHED);
+        trashed.body = "已删除的正文".to_owned();
+        trashed.folders = vec!["人物/室内".to_owned()];
+        trashed.tags = vec!["人物".to_owned()];
+        trashed.linked_image_hashes = vec![imported[1].hash.clone()];
+        trashed.deleted_at = Some(chrono::Utc::now());
+        trashed.deleted_from_folders = Some(vec!["人物/室内".to_owned()]);
+
+        for prompt in [&full, &minimal, &trashed] {
+            write_prompt_file(&f.lib, prompt);
+        }
+        index
+            .upsert_prompts(&[full.clone(), minimal.clone(), trashed.clone()])
+            .expect("批量写入提示词");
+
+        // 两份清单独立持久化。空文件夹与两树同名路径刻意都写进去：
+        // 前者验证"不含素材的文件夹重建后仍在"，后者验证两棵树互不混合。
+        let folders = FolderList {
+            format_version: crate::library::LIBRARY_FORMAT_VERSION,
+            folders: vec![
+                "参考/构图".to_owned(),
+                "人物/室内".to_owned(),
+                "空文件夹".to_owned(),
+            ],
+        };
+        f.lib.write_folders(&folders).expect("写入图片文件夹清单");
+        index.set_folders(&folders).expect("写入图片文件夹");
+
+        let prompt_folders = PromptFolderList {
+            format_version: PROMPT_FORMAT_VERSION,
+            folders: vec![
+                "构图参考".to_owned(),
+                "人物/室内".to_owned(),
+                "空提示词文件夹".to_owned(),
+            ],
+        };
+        f.lib
+            .write_prompt_folders(&prompt_folders)
+            .expect("写入提示词文件夹清单");
+        index
+            .set_prompt_folders(&prompt_folders)
+            .expect("写入提示词文件夹");
+
+        (index, imported, vec![full, minimal, trashed])
     }
 
     #[test]
@@ -984,6 +1446,8 @@ mod tests {
         let snap = index.snapshot().expect("取快照");
         assert!(snap.assets.is_empty());
         assert!(snap.folders.is_empty());
+        assert!(snap.prompts.is_empty(), "新库不应有任何提示词行");
+        assert!(snap.prompt_folders.is_empty(), "新库不应有任何提示词文件夹");
         assert!(f.lib.index_path().is_file(), "索引文件应被建立");
     }
 
@@ -999,5 +1463,228 @@ mod tests {
         }
         let after = index.snapshot().expect("取快照");
         assert_eq!(before, after, "重复写入改变了索引内容");
+    }
+
+    #[test]
+    fn rebuilding_from_disk_reproduces_the_incrementally_built_v2_index() {
+        // v2 版的核心承诺：图片 note/favorite、提示词全字段、两份文件夹清单，
+        // 全部能仅依据库目录内的元数据文件重建。比较的两侧刻意不同源：
+        // 一侧是导入/编辑时逐个 upsert 攒出来的，另一侧是删掉索引后从磁盘重扫的。
+        let f = fixture();
+        let (index, _, _prompts) = seed_v2(&f);
+        let before = index.snapshot().expect("取快照");
+        assert_eq!(before.assets.len(), 3);
+        assert_eq!(before.prompts.len(), 3, "三条提示词都应被索引");
+        assert_eq!(before.prompt_folders.len(), 3, "提示词文件夹清单应完整入索引");
+        drop(index);
+
+        std::fs::remove_file(f.lib.index_path()).expect("删除索引文件");
+        let rebuilt = Index::open(&f.lib).expect("重建索引");
+        let after = rebuilt.snapshot().expect("取重建后的快照");
+        assert_eq!(before, after, "重建后的索引与重建前不一致");
+    }
+
+    #[test]
+    fn the_rebuilt_index_keeps_notes_favorites_and_full_prompt_fields() {
+        // 等价断言两侧相等，但若两侧丢掉同样的东西也会相等。这条断言内容真的在：
+        // 备注逐字保留、收藏布尔保真、提示词可选字段与关联顺序在重建后可查。
+        let f = fixture();
+        let (index, imported, prompts) = seed_v2(&f);
+        drop(index);
+        std::fs::remove_file(f.lib.index_path()).expect("删除索引文件");
+        let rebuilt = Index::open(&f.lib).expect("重建索引");
+        let snap = rebuilt.snapshot().expect("取快照");
+
+        let noted = snap
+            .assets
+            .iter()
+            .find(|a| a.original_filename == "红蓝.png")
+            .expect("应能找到带备注的图片");
+        assert_eq!(
+            noted.note, "第一行\n\n第三行  末尾两个空格  ",
+            "图片备注未逐字保留"
+        );
+        assert!(noted.favorite, "图片收藏状态丢失");
+        let plain = snap
+            .assets
+            .iter()
+            .find(|a| a.original_filename == "纯青.png")
+            .expect("应能找到无备注图片");
+        assert_eq!(plain.note, "", "无备注图片的备注应为空字符串");
+        assert!(!plain.favorite, "未收藏图片的收藏应为假");
+
+        let full = &prompts[0];
+        let full_row = snap
+            .prompts
+            .iter()
+            .find(|p| p.id == full.id.as_str())
+            .expect("完整提示词应在索引中");
+        assert_eq!(full_row.body, full.body, "正文丢失");
+        assert_eq!(full_row.title.as_deref(), Some("逆光人像"), "标题丢失");
+        assert_eq!(full_row.model.as_deref(), Some("某生图模型 v3"), "模型丢失");
+        assert_eq!(
+            full_row.parameters.as_deref(),
+            Some("steps=30, cfg=6"),
+            "参数说明丢失"
+        );
+        assert_eq!(full_row.note, "提示词备注", "提示词备注丢失");
+        assert!(full_row.favorite, "提示词收藏丢失");
+        assert_eq!(full_row.folders, vec!["人物/室内".to_owned()], "文件夹丢失");
+        assert_eq!(
+            full_row.tags,
+            vec!["人物".to_owned(), "逆光".to_owned()],
+            "标签丢失"
+        );
+        // 关联顺序是权威数据：ordinal 必须原样保留，默认封面据此取第一张。
+        assert_eq!(
+            full_row.linked_image_hashes,
+            vec![
+                imported[2].hash.as_str().to_owned(),
+                imported[0].hash.as_str().to_owned(),
+            ],
+            "关联图片顺序未保留"
+        );
+        assert_eq!(
+            full_row.cover_image_hash.as_deref(),
+            Some(imported[0].hash.as_str()),
+            "显式封面丢失"
+        );
+
+        let minimal_row = snap
+            .prompts
+            .iter()
+            .find(|p| p.id == prompts[1].id.as_str())
+            .expect("最小提示词应在索引中");
+        assert_eq!(minimal_row.title, None, "缺省标题不得被猜出值");
+        assert!(minimal_row.linked_image_hashes.is_empty());
+        assert_eq!(minimal_row.cover_image_hash, None);
+        assert!(!minimal_row.favorite);
+
+        let trashed_row = snap
+            .prompts
+            .iter()
+            .find(|p| p.id == prompts[2].id.as_str())
+            .expect("回收站提示词应在索引中");
+        assert!(trashed_row.deleted_at.is_some(), "回收站提示词应带删除时刻");
+        // 关联规格：一方进入回收站时关联保留，反查数据不得因删除而消失。
+        assert_eq!(
+            trashed_row.linked_image_hashes,
+            vec![imported[1].hash.as_str().to_owned()],
+            "回收站提示词的关联丢失"
+        );
+    }
+
+    #[test]
+    fn an_empty_prompt_folder_survives_a_rebuild() {
+        // 提示词文件夹清单独立持久化（设计第二条），不从提示词元数据派生，
+        // 否则不含任何提示词的文件夹会在重建后消失。
+        let f = fixture();
+        let (index, _, _) = seed_v2(&f);
+        drop(index);
+        std::fs::remove_file(f.lib.index_path()).expect("删除索引文件");
+        let rebuilt = Index::open(&f.lib).expect("重建索引");
+        let snap = rebuilt.snapshot().expect("取快照");
+        assert!(
+            snap.prompt_folders.contains(&"空提示词文件夹".to_owned()),
+            "不含提示词的文件夹在重建后消失了：{:?}",
+            snap.prompt_folders
+        );
+        assert!(
+            snap.folders.contains(&"空文件夹".to_owned()),
+            "图片侧空文件夹被提示词清单覆盖了：{:?}",
+            snap.folders
+        );
+    }
+
+    #[test]
+    fn the_same_folder_path_stays_separate_between_the_two_folder_trees() {
+        // 规格场景"两库存在同名文件夹"：同一路径字面值在两棵树各自存在，
+        // 成员关系各归各——图片行的来自图片侧车，提示词行的来自提示词文件。
+        let f = fixture();
+        let (index, _, prompts) = seed_v2(&f);
+        let snap = index.snapshot().expect("取快照");
+
+        assert!(
+            snap.folders.contains(&"人物/室内".to_owned()),
+            "图片文件夹清单缺少同名路径：{:?}",
+            snap.folders
+        );
+        assert!(
+            snap.prompt_folders.contains(&"人物/室内".to_owned()),
+            "提示词文件夹清单缺少同名路径：{:?}",
+            snap.prompt_folders
+        );
+        let noted = snap
+            .assets
+            .iter()
+            .find(|a| a.original_filename == "红蓝.png")
+            .expect("应能找到图片行");
+        assert_eq!(
+            noted.folders,
+            vec!["参考/构图".to_owned()],
+            "图片获得了提示词文件夹的成员关系"
+        );
+        let full_row = snap
+            .prompts
+            .iter()
+            .find(|p| p.id == prompts[0].id.as_str())
+            .expect("应能找到提示词行");
+        assert_eq!(
+            full_row.folders,
+            vec!["人物/室内".to_owned()],
+            "提示词获得了图片文件夹的成员关系"
+        );
+    }
+
+    #[test]
+    fn prompt_tag_counts_exclude_trash_and_stay_separate_from_image_counts() {
+        // 共享词表、分库计数（规格）：同一字面值 `人物` 在两侧各计 1——
+        // 若计数被合并，任何一侧都会数出 2；回收站提示词的标签不计入提示词侧。
+        let f = fixture();
+        let (index, _, _) = seed_v2(&f);
+        assert_eq!(
+            index.active_prompt_tag_counts().expect("提示词标签计数"),
+            vec![("人物".to_owned(), 1), ("逆光".to_owned(), 1)],
+            "提示词侧计数错误：回收站提示词不应计入，图片侧不应混入"
+        );
+        assert_eq!(
+            index.active_tag_counts().expect("图片标签计数"),
+            vec![
+                // ORDER BY tag 按码点排序：人 < 参 < 黄。`黄` 只剩两张——
+                // 带备注素材的标签被 seed_v2 重写为 `参考`+`人物`。
+                ("人物".to_owned(), 1),
+                ("参考".to_owned(), 3),
+                ("黄".to_owned(), 2),
+            ],
+            "图片侧计数错误：提示词的标签使用不应混入"
+        );
+    }
+
+    #[test]
+    fn upserting_the_same_prompt_twice_does_not_duplicate_rows() {
+        // 编辑就是覆盖（设计第二条）。若提示词 upsert 不是覆盖语义，
+        // 标签、文件夹与关联会一轮一轮地累积。
+        let f = fixture();
+        let (mut index, _, prompts) = seed_v2(&f);
+        let before = index.snapshot().expect("取快照");
+        index.upsert_prompts(&prompts).expect("重复写入提示词");
+        let after = index.snapshot().expect("取快照");
+        assert_eq!(before, after, "重复写入改变了索引内容");
+    }
+
+    #[test]
+    fn a_corrupt_prompt_file_fails_the_rebuild_instead_of_being_skipped() {
+        // 与损坏侧车同一原则：跳过会静默丢掉一条提示词，使用者只会看到
+        // "素材少了一条"，无从归因。
+        let f = fixture();
+        let (index, _, _) = seed_v2(&f);
+        drop(index);
+
+        let bogus = f.lib.prompt_objects_dir().join("不是提示词.json");
+        std::fs::write(&bogus, "{ 这不是合法 JSON".as_bytes()).expect("写入损坏提示词");
+
+        std::fs::remove_file(f.lib.index_path()).expect("删除索引文件");
+        let err = Index::open(&f.lib).expect_err("重建本应因提示词损坏而失败");
+        assert_eq!(err.code, Code::PromptMetadataCorrupt);
     }
 }

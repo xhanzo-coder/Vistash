@@ -38,25 +38,24 @@
 > 提示词元数据与普通关联/封面两个模块本次未建立：它们目前没有任何内容（分别属于任务 4.x 与 6.x），
 > 先建空模块只会留下一层没有内容的间接。边界规则已写入 `catalog/mod.rs` 模块文档，由 4.x/6.x 按同一
 > 规则新增兄弟模块。
-- [ ] 3.2 先为 SQLite v2 prompts、prompt_folders、prompt_tags、prompt_images 与 images note/favorite 表列建立增量/重建快照等价测试
-- [ ] 3.3 实现 SQLite v2 schema、批量 prompt upsert、分类删除状态、共享标签分库计数与关联反查
+- [x] 3.2 先为 SQLite v2 prompts、prompt_folders、prompt_tags、prompt_images 与 images note/favorite 表列建立增量/重建快照等价测试
+- [x] 3.3 实现 SQLite v2 schema、批量 prompt upsert、分类删除状态、共享标签分库计数与关联反查
 
-> 3.3 的前置部分已完成并全绿（2026-08-21），但 3.3 本身尚未勾选：索引要有 note/favorite 列就必须读 v2 侧车，
-> 这连带要求整条生产路径切到 v2。已落地的切换是：`sidecar.rs` 把 v1 结构改名为 `AssetSidecarV1`（冻结、只服务
-> 迁移），`AssetSidecar` 改为 `AssetSidecarV2` 的类型别名，于是索引、导入与编目共 50 处引用自动指向 v2，
-> 只有 `import.rs` 一处构造点需要补写 `note`/`favorite`；`Library` 改为持有 `LibraryMetaV2`，建库产出 v2
+> 3.2 先行建立 7 条等价/回归测试（TDD 红）：stub 返回显式 `Err` 时逐条失败，3.3 落地后同批转绿。
+> 索引要有 note/favorite 列就必须读 v2 侧车，这连带要求整条生产路径切到 v2。已落地的切换是：
+> `sidecar.rs` 把 v1 结构改名为 `AssetSidecarV1`（冻结、只服务迁移），`AssetSidecar` 改为
+> `AssetSidecarV2` 的类型别名，于是索引、导入与编目共 50 处引用自动指向 v2，只有 `import.rs`
+> 一处构造点需要补写 `note`/`favorite`；`Library` 改为持有 `LibraryMetaV2`，建库产出 v2
 > `library.json`（含 `library_id`）并一并建立提示词骨架，使新建库与迁移产出的库结构完全一致；新增
 > `prompt_path`/`prompt_trash_path`/`prompt_objects_dir`/`prompt_trash_dir`/`read_prompt_folders`/
 > `write_prompt_folders`；迁移的 `commit` 改用 `LibraryMeta::read` 读那份仍在磁盘上的 v1 文件，其测试夹具
 > 改为直接写 v1 JSON（生产侧已不存在 v1 写入器，这正是应有状态）。新增回归测试
 > `a_freshly_created_library_is_already_v2_and_needs_no_migration` 钉住"新建库不得被判成需要迁移"。
 >
-> 3.3 待做部分中有一处已知的接口问题：`Index::rebuild` 现在接受 `&Library`，而 `Library::open` 只认 v2；
-> 迁移必须在提交 v2 `library.json` **之前**重建索引（设计第四条要求版本最后提交，且有测试钉住），
-> 因此迁移那一刻拿不到 `Library`。索引重建实际只用到路径推导与 `folders.json`，不需要库级元数据，
-> 所以 3.3 应提供一个以库根路径为入口的重建接口。这同时是 2.5 的解锁条件。
+> 3.3 的接口问题按预告解决：`Index::rebuild` 改为委托 `Index::rebuild_at(&Path)`，以库根路径为入口，
+> 只依赖路径推导、两份文件夹清单与四棵目录树扫描，不需要库级元数据——迁移因此能在提交 v2
+> `library.json` 之前重建索引（设计第四条"版本最后提交"），2.5 的解锁条件就此就位。
 
-## 4. 提示词素材、组织与当前值保存
 - [ ] 3.4 删除并重建索引，验证两套空文件夹、图片 note/favorite、提示词全字段、两类回收站与普通关联/封面等价
 
 ## 4. 提示词素材、组织与当前值保存
