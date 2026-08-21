@@ -18,19 +18,23 @@ import {
 
 import { type SelectionState, initialSelection, selectionReducer } from "./selection";
 
-/** 选择语法需要的最小事件形状：键盘事件与指针事件的修饰键同形。 */
-export type Keyboardish = {
-  key: string;
+/** 单击分派需要的最小事件形状：只有修饰键，鼠标与键盘事件都满足。 */
+export type Clickish = {
   ctrlKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
+};
+
+/** 键盘语法需要的最小事件形状：在修饰键之外还要按键名与打字焦点目标。 */
+export type Keyboardish = Clickish & {
+  key: string;
   target: EventTarget | null;
 };
 
 type SelectionContextValue = {
   readonly state: SelectionState;
   /** 单击分派：Shift 范围、Ctrl/Cmd 并入、普通单击替换。 */
-  onItemClick: (id: string, event: Keyboardish) => void;
+  onItemClick: (id: string, event: Clickish) => void;
   /**
    * 键盘语法：Ctrl+A 全选、Esc 清选、方向键/Home/End 移动活动项（Shift 扩展范围）。
    * 返回是否已处理——true 时视图应 preventDefault 阻止滚动等默认行为。

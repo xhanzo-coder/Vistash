@@ -26,6 +26,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "3.14.10",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "react": "^19.2.8",

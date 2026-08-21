@@ -166,7 +166,7 @@ export function App() {
             </p>
           </section>
         ) : (
-          <AssetWorkspace refreshVersion={catalogVersion} />
+          <AssetWorkspace refreshVersion={catalogVersion} libraryId={status.library_id} />
         )}
       </main>
     </div>

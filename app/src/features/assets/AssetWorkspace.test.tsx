@@ -74,6 +74,31 @@ function setWindowWidth(width: number): void {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
 }
 
+/**
+ * 几何桩：瀑布流卡片按内联样式报告尺寸，其余元素（滚动视口）默认 1200×800。
+ * TanStack 的窗口化在 jsdom 里完全依赖这些读数，否则视口高度为 0、什么都不渲染。
+ */
+function stubGeometry(): void {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: Element,
+  ) {
+    const style = this instanceof HTMLElement ? this.style : null;
+    const width = Number.parseFloat(style?.width ?? "") || 1200;
+    const height = Number.parseFloat(style?.height ?? "") || 800;
+    return {
+      x: 0,
+      y: 0,
+      width,
+      height,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: height,
+      toJSON: () => ({}),
+    };
+  });
+}
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
     configurable: true,
@@ -81,6 +106,7 @@ beforeEach(() => {
   });
   // 既有测试面向宽屏三栏行为：左栏原位展开。
   setWindowWidth(1440);
+  stubGeometry();
   queries = [];
   purgeCalls = 0;
   ipcCalls = [];
@@ -168,7 +194,7 @@ test("工作区组合查询并在清空回收站前二次确认", async () => {
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<AssetWorkspace refreshVersion={0} />);
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
   });
   await flush();
 
@@ -231,13 +257,18 @@ test("在素材详情中编辑标签并确认删除", async () => {
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<AssetWorkspace refreshVersion={0} />);
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
   });
   await flush();
 
-  const assetButton = container.querySelector<HTMLButtonElement>(".asset-card > button");
+  // 瀑布流语义（任务 9.1）：单击只选中，双击才进入详情。
+  const assetButton = container.querySelector<HTMLButtonElement>("[data-waterfall-item]");
   if (assetButton === null) throw new Error("缺少素材卡片");
   await act(async () => assetButton.click());
+  expect(container.querySelector(".asset-details")).toBeNull();
+  await act(async () =>
+    assetButton.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
+  );
   await flush();
 
   const tagInput = container.querySelector<HTMLInputElement>("#new-tag");
@@ -268,7 +299,7 @@ test("从回收站还原并保留缺失文件夹警告", async () => {
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<AssetWorkspace refreshVersion={0} />);
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
   });
   await flush();
 
@@ -276,9 +307,11 @@ test("从回收站还原并保留缺失文件夹警告", async () => {
   if (trash === null) throw new Error("缺少回收站入口");
   await act(async () => trash.click());
   await flush();
-  const assetButton = container.querySelector<HTMLButtonElement>(".asset-card > button");
+  const assetButton = container.querySelector<HTMLButtonElement>("[data-waterfall-item]");
   if (assetButton === null) throw new Error("缺少回收站素材卡片");
-  await act(async () => assetButton.click());
+  await act(async () =>
+    assetButton.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
+  );
   await flush();
   await act(async () => buttonWithText(container, "还原素材").click());
   await flush();
@@ -300,7 +333,7 @@ test("中等窗口左栏收起为抽屉，边缘入口打开且 Esc 关闭", asy
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<AssetWorkspace refreshVersion={0} />);
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
   });
   await flush();
 

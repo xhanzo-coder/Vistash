@@ -30,9 +30,11 @@ import type {
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
+import { useLibraryLayout } from "../workspace/libraryLayout";
+import { SelectionProvider } from "../workspace/selectionContext";
 import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
-import { AssetGrid } from "./AssetGrid";
 import { AssetPreview } from "./AssetPreview";
+import { AssetWaterfall } from "./AssetWaterfall";
 
 type ConfirmState = {
   title: string;
@@ -42,7 +44,14 @@ type ConfirmState = {
   onConfirm: () => Promise<void>;
 };
 
-export function AssetWorkspace({ refreshVersion }: { refreshVersion: number }) {
+export function AssetWorkspace({
+  refreshVersion,
+  libraryId,
+}: {
+  refreshVersion: number;
+  libraryId: string | null;
+}) {
+  const { layout, update } = useLibraryLayout(libraryId);
   const [text, setText] = useState("");
   const deferredText = useDeferredValue(text);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -449,7 +458,32 @@ export function AssetWorkspace({ refreshVersion }: { refreshVersion: number }) {
             }
           />
         ) : (
-          <AssetGrid assets={snapshot?.assets ?? []} onSelect={(asset) => setSelectedHash(asset.hash)} />
+          /*
+            瀑布流（任务 9.1）。选择权威在统一 SelectionModel：单击选中、双击才进入
+            详情（检查器落地前暂接旧详情页，任务 9.3 替换为聚焦原图模式）。滚动偏移
+            记在分库布局偏好的 "assets-waterfall" 键下，换库或重启后回到原处。
+          */
+          (snapshot?.assets.length ?? 0) === 0 ? (
+            <div className="empty-state">
+              <p className="eyebrow">NO ASSETS</p>
+              <h3>这里还没有匹配的素材</h3>
+              <p>调整查询条件，或把图片文件与文件夹拖进窗口导入。</p>
+            </div>
+          ) : (
+            <SelectionProvider ids={(snapshot?.assets ?? []).map((asset) => asset.hash)}>
+              <AssetWaterfall
+                assets={snapshot?.assets ?? []}
+                scrollKey="assets-waterfall"
+                savedOffset={layout.scrollOffsets["assets-waterfall"] ?? 0}
+                onScrollOffset={(offset) =>
+                  update({
+                    scrollOffsets: { ...layout.scrollOffsets, "assets-waterfall": offset },
+                  })
+                }
+                onOpenFocused={(hash) => setSelectedHash(hash)}
+              />
+            </SelectionProvider>
+          )
         )}
       </div>
 
