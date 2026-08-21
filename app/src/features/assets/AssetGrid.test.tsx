@@ -25,6 +25,8 @@ const ASSET: AssetRow = {
   color_card_algo_version: 1,
   color_card_failure_reason: null,
   color_card_sampled_pixel_count: 100,
+  note: "",
+  favorite: false,
   tags: [],
   folders: [],
   colors: [],

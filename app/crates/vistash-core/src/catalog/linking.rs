@@ -25,7 +25,11 @@ pub struct ImportAndLinkItem {
 }
 
 /// 逐项结果。部分成功是常态：每一项都如实说明它到了哪一步。
+///
+/// 序列化带 `kind` 标签：前端按 `kind` 判别每一项走到了哪一步，标签字面量是
+/// IPC 合同的一部分，改名即破坏前端。
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ImportAndLinkOutcome {
     /// 内容已在库中（正常库或回收站），复用单份本体并关联成功。
     LinkedExisting { hash: String },

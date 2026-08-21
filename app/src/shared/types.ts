@@ -44,6 +44,10 @@ export type AssetRow = {
   color_card_algo_version: number;
   color_card_failure_reason: string | null;
   color_card_sampled_pixel_count: number;
+  /** 多行纯文本备注，逐字保留。详情列表的备注摘要列从这里回答。 */
+  note: string;
+  /** 二值收藏状态。收藏筛选从这里回答。 */
+  favorite: boolean;
   tags: string[];
   folders: string[];
   colors: ColorRow[];
@@ -92,6 +96,8 @@ export type AssetQuery = {
   text: string;
   tags: string[];
   folder: FolderFilter;
+  /** 收藏筛选；null 表示不限。 */
+  favorite: boolean | null;
   location: "active" | "trash";
 };
 
@@ -138,4 +144,150 @@ export type PurgeFailure = {
 export type PurgeReport = {
   purged: number;
   failures: PurgeFailure[];
+};
+
+/** `vistash_core::prompt::PromptAsset`：提示词的唯一权威文件内容。 */
+export type PromptAsset = {
+  format_version: number;
+  id: string;
+  /** 当前正文。去除首尾空白后必须非空。 */
+  body: string;
+  title: string | null;
+  model: string | null;
+  parameters: string | null;
+  /** 多行纯文本备注，逐字保留。 */
+  note: string;
+  favorite: boolean;
+  folders: string[];
+  tags: string[];
+  /** 有序关联图片哈希；默认封面取第一张。 */
+  linked_image_hashes: string[];
+  /** 显式封面；null 表示回落缺省（第一张关联）或纯文本卡片。 */
+  cover_image_hash: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  deleted_from_folders: string[] | null;
+};
+
+/** `vistash_core::catalog::NewPrompt`：创建提示词的草稿。正文是唯一必填项。 */
+export type NewPromptInput = {
+  body: string;
+  title: string | null;
+  model: string | null;
+  parameters: string | null;
+  folders: string[];
+  tags: string[];
+};
+
+/** `vistash_core::catalog::PromptEdit`：显式保存的主字段编辑。 */
+export type PromptEditInput = {
+  body: string;
+  title: string | null;
+  model: string | null;
+  parameters: string | null;
+};
+
+/** `vistash_core::index::PromptRow`：提示词轻量行，列表与搜索共用。 */
+export type PromptRow = {
+  id: string;
+  body: string;
+  title: string | null;
+  model: string | null;
+  parameters: string | null;
+  note: string;
+  favorite: boolean;
+  folders: string[];
+  tags: string[];
+  linked_image_hashes: string[];
+  cover_image_hash: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+export type PromptQuery = {
+  text: string;
+  tags: string[];
+  folder: FolderFilter;
+  /** 收藏筛选；null 表示不限。 */
+  favorite: boolean | null;
+  location: "active" | "trash";
+};
+
+/** `vistash_core::catalog::PromptSnapshot`：提示词工作区一次刷新所需的一致快照。 */
+export type PromptSnapshot = {
+  prompts: PromptRow[];
+  folders: string[];
+  tags: TagUsage[];
+  trash_count: number;
+};
+
+/** `vistash_core::catalog::PromptRestoreOutcome` */
+export type PromptRestoreOutcome = {
+  missing_folders: string[];
+};
+
+/** `vistash_core::catalog::PromptPurgeFailure` */
+export type PromptPurgeFailure = {
+  id: string;
+  title: string | null;
+  error: AppError;
+};
+
+/** `vistash_core::catalog::PromptPurgeReport` */
+export type PromptPurgeReport = {
+  purged: number;
+  failures: PromptPurgeFailure[];
+};
+
+/** `vistash_core::catalog::GlobalSearchResult`：按素材类型分组的全局搜索结果。 */
+export type GlobalSearchResult = {
+  assets: AssetRow[];
+  prompts: PromptRow[];
+};
+
+/** `vistash_core::catalog::ImageDetail`：图片检查器的按需详情。 */
+export type ImageDetail = {
+  asset: AssetRow;
+  /** 关联这张图的全部提示词（含回收站提示词）。 */
+  linked_prompts: PromptRow[];
+};
+
+/** `vistash_core::catalog::BatchFailure`：单个目标的批量失败。 */
+export type BatchFailure = {
+  id: string;
+  display_name: string;
+  error: AppError;
+};
+
+/** `vistash_core::catalog::BatchReport`：部分成功是常态，因此这不是 Result。 */
+export type BatchReport = {
+  succeeded: number;
+  failures: BatchFailure[];
+};
+
+/** 批量进度观察点：每处理完一项调用一次。 */
+export type BatchProgress = {
+  done: number;
+  total: number;
+};
+
+/** `vistash_core::catalog::ImportAndLinkOutcome`：逐项说明走到了哪一步。 */
+export type ImportAndLinkOutcome =
+  | { kind: "linked_existing"; hash: string }
+  | { kind: "linked_imported"; hash: string }
+  | { kind: "imported_but_not_linked"; hash: string; error: AppError }
+  | { kind: "import_failed"; error: AppError };
+
+/** `vistash_core::catalog::ImportAndLinkItem` */
+export type ImportAndLinkItem = {
+  source_path: string;
+  original_filename: string;
+  outcome: ImportAndLinkOutcome;
+};
+
+/** `vistash_core::catalog::ImportAndLinkReport` */
+export type ImportAndLinkReport = {
+  items: ImportAndLinkItem[];
 };

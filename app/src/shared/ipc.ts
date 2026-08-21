@@ -15,12 +15,24 @@ import { asAppError, IpcError } from "./errors";
 import type {
   AssetQuery,
   AssetRow,
+  BatchProgress,
+  BatchReport,
   CatalogSnapshot,
   FolderMutationProgress,
+  GlobalSearchResult,
+  ImageDetail,
+  ImportAndLinkReport,
   ImportOutcome,
   ImportProgress,
   LibraryStatus,
   MigrationProgress,
+  NewPromptInput,
+  PromptAsset,
+  PromptEditInput,
+  PromptPurgeReport,
+  PromptQuery,
+  PromptRestoreOutcome,
+  PromptSnapshot,
   PurgeReport,
   RestoreOutcome,
 } from "./types";
@@ -174,4 +186,235 @@ export async function onPathsDropped(
     }
   });
   return unlisten;
+}
+
+// ---------------------------------------------------------------------------
+// 提示词素材：CRUD、组织、回收站、普通关联与封面。
+// ---------------------------------------------------------------------------
+
+/** 创建提示词：正文是唯一必填项，身份由后端生成。 */
+export function createPrompt(prompt: NewPromptInput): Promise<PromptAsset> {
+  return call<PromptAsset>("create_prompt", { prompt });
+}
+
+/** 显式保存主字段（正文/标题/模型/参数），身份与组织保持不变。 */
+export function updatePrompt(id: string, edit: PromptEditInput): Promise<PromptAsset> {
+  return call<PromptAsset>("update_prompt", { id, edit });
+}
+
+/** 按需读取提示词完整详情：列表只携带轻量行，检查器打开时才调用。 */
+export function promptDetail(id: string): Promise<PromptAsset> {
+  return call<PromptAsset>("prompt_detail", { id });
+}
+
+export function promptSnapshot(query: PromptQuery): Promise<PromptSnapshot> {
+  return call<PromptSnapshot>("prompt_snapshot", { query });
+}
+
+/** 设置提示词备注（独立自动保存流，不推进更新时间）。 */
+export function setPromptNote(id: string, note: string): Promise<void> {
+  return call<void>("set_prompt_note", { id, note });
+}
+
+export function setPromptFavorite(id: string, favorite: boolean): Promise<void> {
+  return call<void>("set_prompt_favorite", { id, favorite });
+}
+
+export function setPromptFolders(id: string, folders: string[]): Promise<void> {
+  return call<void>("set_prompt_folders", { id, folders });
+}
+
+export function setPromptTags(id: string, tags: string[]): Promise<void> {
+  return call<void>("set_prompt_tags", { id, tags });
+}
+
+/** 把提示词移入库内回收站：只移动归属，不改写任何使用者数据。 */
+export function deletePrompt(id: string): Promise<void> {
+  return call<void>("delete_prompt", { id });
+}
+
+/** 还原一条回收站提示词；缺失的原文件夹经结果说明，不作为失败。 */
+export function restorePrompt(id: string): Promise<PromptRestoreOutcome> {
+  return call<PromptRestoreOutcome>("restore_prompt", { id });
+}
+
+/** 逐项清理提示词回收站；单项失败不阻止其余条目。 */
+export function purgePromptTrash(): Promise<PromptPurgeReport> {
+  return call<PromptPurgeReport>("purge_prompt_trash");
+}
+
+/** 把图片追加到提示词的有序关联列表末尾；重复关联是幂等空操作。 */
+export function linkImages(promptId: string, hashes: string[]): Promise<void> {
+  return call<void>("link_images", { promptId, hashes });
+}
+
+/** 解除一张图的关联；解除显式封面时封面回落缺省。未关联时是幂等空操作。 */
+export function unlinkImage(promptId: string, hash: string): Promise<void> {
+  return call<void>("unlink_image", { promptId, hash });
+}
+
+/** 设置显式封面；null 清除显式值回到缺省。封面必须在关联列表中。 */
+export function setPromptCover(promptId: string, cover: string | null): Promise<void> {
+  return call<void>("set_prompt_cover", { promptId, cover });
+}
+
+/** 本地导入后关联：逐源报告 LinkedExisting/LinkedImported/失败。 */
+export function importAndLink(
+  promptId: string,
+  sources: string[],
+): Promise<ImportAndLinkReport> {
+  return call<ImportAndLinkReport>("import_and_link", { promptId, sources });
+}
+
+/** 图片检查器的按需详情：轻量行加关联提示词反查。 */
+export function imageDetail(hash: string): Promise<ImageDetail> {
+  return call<ImageDetail>("image_detail", { hash });
+}
+
+/** 图片备注与收藏（与提示词侧同一语义）。 */
+export function setAssetNote(hash: string, note: string): Promise<void> {
+  return call<void>("set_asset_note", { hash, note });
+}
+
+export function setAssetFavorite(hash: string, favorite: boolean): Promise<void> {
+  return call<void>("set_asset_favorite", { hash, favorite });
+}
+
+// ---------------------------------------------------------------------------
+// 批量组织：统一 BatchReport，逐项失败隔离，进度按项转交。
+// ---------------------------------------------------------------------------
+
+function batchCall(
+  command: string,
+  args: Record<string, unknown>,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  const progress = new Channel<BatchProgress>(onProgress);
+  return call<BatchReport>(command, { ...args, onProgress: progress });
+}
+
+export function batchAddAssetFolder(
+  hashes: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_asset_folder", { hashes, folder }, onProgress);
+}
+
+export function batchRemoveAssetFolder(
+  hashes: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_asset_folder", { hashes, folder }, onProgress);
+}
+
+export function batchAddAssetTag(
+  hashes: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_asset_tag", { hashes, tag }, onProgress);
+}
+
+export function batchRemoveAssetTag(
+  hashes: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_asset_tag", { hashes, tag }, onProgress);
+}
+
+export function batchSetAssetFavorite(
+  hashes: string[],
+  favorite: boolean,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_set_asset_favorite", { hashes, favorite }, onProgress);
+}
+
+export function batchLinkToPrompt(
+  promptId: string,
+  hashes: string[],
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_link_to_prompt", { promptId, hashes }, onProgress);
+}
+
+export function batchDeleteAssets(
+  hashes: string[],
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_delete_assets", { hashes }, onProgress);
+}
+
+export function batchAddPromptFolder(
+  ids: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_prompt_folder", { ids, folder }, onProgress);
+}
+
+export function batchRemovePromptFolder(
+  ids: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_prompt_folder", { ids, folder }, onProgress);
+}
+
+export function batchAddPromptTag(
+  ids: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_prompt_tag", { ids, tag }, onProgress);
+}
+
+export function batchRemovePromptTag(
+  ids: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_prompt_tag", { ids, tag }, onProgress);
+}
+
+export function batchSetPromptFavorite(
+  ids: string[],
+  favorite: boolean,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_set_prompt_favorite", { ids, favorite }, onProgress);
+}
+
+export function batchDeletePrompts(
+  ids: string[],
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_delete_prompts", { ids }, onProgress);
+}
+
+// ---------------------------------------------------------------------------
+// 全局搜索与布局偏好。
+// ---------------------------------------------------------------------------
+
+/** 跨图片与提示词的全局搜索：结果按素材类型分组。 */
+export function globalSearch(text: string): Promise<GlobalSearchResult> {
+  return call<GlobalSearchResult>("global_search", { text });
+}
+
+/**
+ * 读取一个库的布局偏好。从未保存过时返回 null。
+ *
+ * 布局内容是前端领域的任意 JSON——后端只按键存储透传，不解释其结构，
+ * 因此布局模型的演进不需要改动 IPC 合同。
+ */
+export function readLayout(libraryId: string): Promise<unknown> {
+  return call<unknown>("read_layout", { libraryId });
+}
+
+/** 写入一个库的布局偏好（整体覆盖）。 */
+export function writeLayout(libraryId: string, layout: unknown): Promise<void> {
+  return call<void>("write_layout", { libraryId, layout });
 }

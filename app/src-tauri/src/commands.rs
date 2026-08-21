@@ -17,19 +17,22 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use vistash_core::catalog::{
-    AssetLocation, AssetQuery, Catalog, CatalogSnapshot, FolderFilter, FolderMutationProgress,
-    FolderName, FolderPath, PurgeReport, RestoreOutcome, Tag,
+    AssetLocation, AssetQuery, BatchProgress, BatchReport, Catalog, CatalogSnapshot, FolderFilter,
+    FolderMutationProgress, FolderName, FolderPath, GlobalSearchResult, ImageDetail,
+    ImportAndLinkReport, NewPrompt, PromptEdit, PromptLocation, PromptQuery, PromptPurgeReport,
+    PromptRestoreOutcome, PromptSnapshot, PurgeReport, RestoreOutcome, Tag,
 };
 use vistash_core::error::{AppError, Code, Result};
 use vistash_core::hashing::ContentHash;
 use vistash_core::import::{self, ImportFailure, ImportObserver, ImportOptions};
 use vistash_core::index::{AssetRow, Index};
-use vistash_core::library::Library;
+use vistash_core::library::{Library, LibraryId};
 use vistash_core::media::MediaType;
 use vistash_core::migration::{
     detect_library_format, LibraryFormatState, Migration, MigrationProgress as MigrationProgressCore,
 };
-use vistash_core::settings::AppSettings;
+use vistash_core::prompt::{PromptAsset, PromptId};
+use vistash_core::settings::{AppSettings, LayoutStore};
 
 /// 一个已打开的库及其索引。
 struct Opened {
@@ -41,6 +44,9 @@ struct Opened {
 /// 应用运行期状态。
 pub struct AppState {
     settings_path: PathBuf,
+    /// 分库布局偏好目录。与设置文件同理放在应用配置侧、以库 ID 为键（见
+    /// [`LayoutStore`]），库目录整体移动后布局仍然跟随库的身份而不是路径。
+    layouts_dir: PathBuf,
     opened: Option<Arc<Opened>>,
     /// 设置里记录的库路径，即使打不开也报告：待迁移的旧库需要前端直接给出迁移入口，
     /// 而不是让使用者重新在目录树里找一遍这个位置。首次运行时为 `None`。
@@ -55,9 +61,10 @@ impl AppState {
     /// 恢复走的是 [`Library::open`] 而不是 `open_or_create`：记录的路径若已被移走或改名，
     /// 必须报告并回到选择界面，**绝不能建出一个新的空库**——那会让使用者面对空库却以为
     /// 素材全丢了。规格把这条列为明令禁止。
-    pub fn restore(settings_path: PathBuf) -> Self {
+    pub fn restore(settings_path: PathBuf, layouts_dir: PathBuf) -> Self {
         let mut state = Self {
             settings_path,
+            layouts_dir,
             opened: None,
             recorded_path: None,
             restore_problem: None,
@@ -236,24 +243,60 @@ pub struct AssetQueryInput {
     pub location: AssetLocationInput,
 }
 
+/// 文件夹过滤的共享转换。图片与提示词是两棵独立的树，但过滤形状完全一致。
+fn folder_filter_of(folder: FolderFilterInput) -> Result<FolderFilter> {
+    Ok(match folder {
+        FolderFilterInput::All => FolderFilter::All,
+        FolderFilterInput::Root => FolderFilter::Root,
+        FolderFilterInput::Path { path } => FolderFilter::Path(FolderPath::parse(&path)?),
+    })
+}
+
+/// 共享标签词面的解析。图片与提示词共用同一套标签词法（设计第五条）。
+fn parse_tags(raw: &[String]) -> Result<Vec<Tag>> {
+    raw.iter().map(|tag| Tag::parse(tag)).collect()
+}
+
 impl AssetQueryInput {
     fn into_core(self) -> Result<AssetQuery> {
         Ok(AssetQuery {
             text: self.text,
-            tags: self
-                .tags
-                .iter()
-                .map(|tag| Tag::parse(tag))
-                .collect::<Result<Vec<_>>>()?,
-            folder: match self.folder {
-                FolderFilterInput::All => FolderFilter::All,
-                FolderFilterInput::Root => FolderFilter::Root,
-                FolderFilterInput::Path { path } => FolderFilter::Path(FolderPath::parse(&path)?),
-            },
+            tags: parse_tags(&self.tags)?,
+            folder: folder_filter_of(self.folder)?,
             favorite: self.favorite,
             location: match self.location {
                 AssetLocationInput::Active => AssetLocation::Active,
                 AssetLocationInput::Trash => AssetLocation::Trash,
+            },
+        })
+    }
+}
+
+/// 提示词工作区的组合查询入参。
+///
+/// 位置枚举与图片侧共用 [`AssetLocationInput`]：两类回收站的"正常/回收站"语义
+/// 完全一致，分叉只会让前端多记一套字面量。
+#[derive(Debug, Clone, Deserialize)]
+pub struct PromptQueryInput {
+    pub text: String,
+    pub tags: Vec<String>,
+    pub folder: FolderFilterInput,
+    /// 收藏筛选。缺省表示不限。
+    #[serde(default)]
+    pub favorite: Option<bool>,
+    pub location: AssetLocationInput,
+}
+
+impl PromptQueryInput {
+    fn into_core(self) -> Result<PromptQuery> {
+        Ok(PromptQuery {
+            text: self.text,
+            tags: parse_tags(&self.tags)?,
+            folder: folder_filter_of(self.folder)?,
+            favorite: self.favorite,
+            location: match self.location {
+                AssetLocationInput::Active => PromptLocation::Active,
+                AssetLocationInput::Trash => PromptLocation::Trash,
             },
         })
     }
@@ -630,6 +673,559 @@ pub fn all_error_codes() -> Vec<CodeInfo> {
             domain: c.domain().as_str().to_owned(),
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// 提示词素材：CRUD、组织、回收站。
+// ---------------------------------------------------------------------------
+
+/// 创建提示词的入参。正文是唯一必填项；文件夹与标签先以字符串过边界，
+/// 归属校验在核心 `create_prompt` 内部完成（先于任何文件写入）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewPromptInput {
+    pub body: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub parameters: Option<String>,
+    pub folders: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+impl NewPromptInput {
+    fn into_core(self) -> NewPrompt {
+        NewPrompt {
+            body: self.body,
+            title: self.title,
+            model: self.model,
+            parameters: self.parameters,
+            folders: self.folders,
+            tags: self.tags,
+        }
+    }
+}
+
+/// 显式保存的主字段编辑。刻意不含 note/favorite/folders/tags：它们各有自己的
+/// 入口与保存时机，混进同一次保存会让"自动保存备注"误推进更新时间。
+#[derive(Debug, Clone, Deserialize)]
+pub struct PromptEditInput {
+    pub body: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub parameters: Option<String>,
+}
+
+impl PromptEditInput {
+    fn into_core(self) -> PromptEdit {
+        PromptEdit {
+            body: self.body,
+            title: self.title,
+            model: self.model,
+            parameters: self.parameters,
+        }
+    }
+}
+
+fn parse_prompt_ids(raw: &[String]) -> Result<Vec<PromptId>> {
+    raw.iter().map(|id| PromptId::parse(id)).collect()
+}
+
+#[tauri::command]
+pub async fn create_prompt(
+    prompt: NewPromptInput,
+    state: tauri::State<'_, Shared>,
+) -> Result<PromptAsset> {
+    let draft = prompt.into_core();
+    with_catalog(state, move |catalog| catalog.create_prompt(&draft)).await
+}
+
+#[tauri::command]
+pub async fn update_prompt(
+    id: String,
+    edit: PromptEditInput,
+    state: tauri::State<'_, Shared>,
+) -> Result<PromptAsset> {
+    let id = PromptId::parse(&id)?;
+    let edit = edit.into_core();
+    with_catalog(state, move |catalog| catalog.update_prompt(&id, &edit)).await
+}
+
+#[tauri::command]
+pub async fn prompt_detail(id: String, state: tauri::State<'_, Shared>) -> Result<PromptAsset> {
+    let id = PromptId::parse(&id)?;
+    with_catalog(state, move |catalog| catalog.prompt_detail(&id)).await
+}
+
+#[tauri::command]
+pub async fn prompt_snapshot(
+    query: PromptQueryInput,
+    state: tauri::State<'_, Shared>,
+) -> Result<PromptSnapshot> {
+    let query = query.into_core()?;
+    with_catalog(state, move |catalog| catalog.prompt_snapshot(&query)).await
+}
+
+#[tauri::command]
+pub async fn set_prompt_note(
+    id: String,
+    note: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let id = PromptId::parse(&id)?;
+    with_catalog(state, move |catalog| catalog.set_prompt_note(&id, &note)).await
+}
+
+#[tauri::command]
+pub async fn set_prompt_favorite(
+    id: String,
+    favorite: bool,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let id = PromptId::parse(&id)?;
+    with_catalog(state, move |catalog| catalog.set_prompt_favorite(&id, favorite)).await
+}
+
+#[tauri::command]
+pub async fn set_prompt_folders(
+    id: String,
+    folders: Vec<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let id = PromptId::parse(&id)?;
+    let folders = folders
+        .iter()
+        .map(|folder| FolderPath::parse(folder))
+        .collect::<Result<Vec<_>>>()?;
+    with_catalog(state, move |catalog| {
+        catalog.set_prompt_folders(&id, &folders)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_prompt_tags(
+    id: String,
+    tags: Vec<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let id = PromptId::parse(&id)?;
+    let tags = parse_tags(&tags)?;
+    with_catalog(state, move |catalog| catalog.set_prompt_tags(&id, &tags)).await
+}
+
+#[tauri::command]
+pub async fn delete_prompt(id: String, state: tauri::State<'_, Shared>) -> Result<()> {
+    let id = PromptId::parse(&id)?;
+    with_catalog(state, move |catalog| catalog.delete_prompt(&id)).await
+}
+
+#[tauri::command]
+pub async fn restore_prompt(
+    id: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<PromptRestoreOutcome> {
+    let id = PromptId::parse(&id)?;
+    with_catalog(state, move |catalog| catalog.restore_prompt(&id)).await
+}
+
+#[tauri::command]
+pub async fn purge_prompt_trash(state: tauri::State<'_, Shared>) -> Result<PromptPurgeReport> {
+    with_catalog(state, Catalog::purge_prompt_trash).await
+}
+
+// ---------------------------------------------------------------------------
+// 普通关联、封面与图片 note/favorite。
+// ---------------------------------------------------------------------------
+
+fn parse_hashes(raw: &[String]) -> Result<Vec<ContentHash>> {
+    raw.iter().map(|hash| ContentHash::parse(hash)).collect()
+}
+
+#[tauri::command]
+pub async fn link_images(
+    prompt_id: String,
+    hashes: Vec<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let prompt_id = PromptId::parse(&prompt_id)?;
+    let hashes = parse_hashes(&hashes)?;
+    with_catalog(state, move |catalog| {
+        catalog.link_images(&prompt_id, &hashes)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn unlink_image(
+    prompt_id: String,
+    hash: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let prompt_id = PromptId::parse(&prompt_id)?;
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| {
+        catalog.unlink_image(&prompt_id, &hash)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_prompt_cover(
+    prompt_id: String,
+    cover: Option<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let prompt_id = PromptId::parse(&prompt_id)?;
+    let cover = cover.as_deref().map(ContentHash::parse).transpose()?;
+    with_catalog(state, move |catalog| {
+        catalog.set_prompt_cover(&prompt_id, cover.as_ref())
+    })
+    .await
+}
+
+/// 本地导入后关联。源路径的展开与校验在核心编排内逐项进行，坏文件逐项报告。
+#[tauri::command]
+pub async fn import_and_link(
+    prompt_id: String,
+    sources: Vec<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<ImportAndLinkReport> {
+    let prompt_id = PromptId::parse(&prompt_id)?;
+    let sources = sources.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    with_catalog(state, move |catalog| {
+        catalog.import_and_link(&prompt_id, &sources)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn image_detail(
+    hash: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<ImageDetail> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| catalog.image_detail(&hash)).await
+}
+
+#[tauri::command]
+pub async fn set_asset_note(
+    hash: String,
+    note: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| catalog.set_asset_note(&hash, &note)).await
+}
+
+#[tauri::command]
+pub async fn set_asset_favorite(
+    hash: String,
+    favorite: bool,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| catalog.set_asset_favorite(&hash, favorite)).await
+}
+
+// ---------------------------------------------------------------------------
+// 批量组织：统一 BatchReport，进度经 typed Channel 逐项转交。
+// ---------------------------------------------------------------------------
+
+/// 一次批量的进度。与导入进度不同：批量没有"当前文件"，只有已处理数与总数。
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchProgressDto {
+    pub done: usize,
+    pub total: usize,
+}
+
+/// 批量进度的 typed Channel 适配。
+///
+/// 批量报告本身已逐项隔离失败，进度只是观察：通道断开（窗口关闭等）不应把已部分
+/// 成功的批量变成错误，因此发送失败只记下断开标记，后续进度静默丢弃。
+struct ChannelProgress {
+    channel: Channel<BatchProgressDto>,
+    disconnected: bool,
+}
+
+impl BatchProgress for ChannelProgress {
+    fn on_progress(&mut self, done: usize, total: usize) {
+        if self.disconnected {
+            return;
+        }
+        if self.channel.send(BatchProgressDto { done, total }).is_err() {
+            self.disconnected = true;
+        }
+    }
+}
+
+/// 组装批量命令共用的进度适配器。类型标注只为可读性，行为与直接构造一致。
+fn channel_progress(channel: Channel<BatchProgressDto>) -> ChannelProgress {
+    ChannelProgress {
+        channel,
+        disconnected: false,
+    }
+}
+
+#[tauri::command]
+pub async fn batch_add_asset_folder(
+    hashes: Vec<String>,
+    folder: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let hashes = parse_hashes(&hashes)?;
+    let folder = FolderPath::parse(&folder)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_add_asset_folder(&hashes, &folder, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_remove_asset_folder(
+    hashes: Vec<String>,
+    folder: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let hashes = parse_hashes(&hashes)?;
+    let folder = FolderPath::parse(&folder)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_remove_asset_folder(&hashes, &folder, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_add_asset_tag(
+    hashes: Vec<String>,
+    tag: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let hashes = parse_hashes(&hashes)?;
+    let tag = Tag::parse(&tag)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_add_asset_tag(&hashes, &tag, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_remove_asset_tag(
+    hashes: Vec<String>,
+    tag: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let hashes = parse_hashes(&hashes)?;
+    let tag = Tag::parse(&tag)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_remove_asset_tag(&hashes, &tag, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_set_asset_favorite(
+    hashes: Vec<String>,
+    favorite: bool,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let hashes = parse_hashes(&hashes)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_set_asset_favorite(&hashes, favorite, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_link_to_prompt(
+    prompt_id: String,
+    hashes: Vec<String>,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let prompt_id = PromptId::parse(&prompt_id)?;
+    let hashes = parse_hashes(&hashes)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_link_to_prompt(&prompt_id, &hashes, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_delete_assets(
+    hashes: Vec<String>,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let hashes = parse_hashes(&hashes)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_delete_assets(&hashes, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_add_prompt_folder(
+    ids: Vec<String>,
+    folder: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let ids = parse_prompt_ids(&ids)?;
+    let folder = FolderPath::parse(&folder)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_add_prompt_folder(&ids, &folder, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_remove_prompt_folder(
+    ids: Vec<String>,
+    folder: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let ids = parse_prompt_ids(&ids)?;
+    let folder = FolderPath::parse(&folder)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_remove_prompt_folder(&ids, &folder, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_add_prompt_tag(
+    ids: Vec<String>,
+    tag: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let ids = parse_prompt_ids(&ids)?;
+    let tag = Tag::parse(&tag)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_add_prompt_tag(&ids, &tag, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_remove_prompt_tag(
+    ids: Vec<String>,
+    tag: String,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let ids = parse_prompt_ids(&ids)?;
+    let tag = Tag::parse(&tag)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_remove_prompt_tag(&ids, &tag, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_set_prompt_favorite(
+    ids: Vec<String>,
+    favorite: bool,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let ids = parse_prompt_ids(&ids)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_set_prompt_favorite(&ids, favorite, &mut progress))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn batch_delete_prompts(
+    ids: Vec<String>,
+    on_progress: Channel<BatchProgressDto>,
+    state: tauri::State<'_, Shared>,
+) -> Result<BatchReport> {
+    let ids = parse_prompt_ids(&ids)?;
+    with_catalog(state, move |catalog| {
+        let mut progress = channel_progress(on_progress);
+        Ok(catalog.batch_delete_prompts(&ids, &mut progress))
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// 全局搜索与布局偏好。
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn global_search(
+    text: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<GlobalSearchResult> {
+    with_catalog(state, move |catalog| catalog.global_search(&text)).await
+}
+
+/// 读取一个库的布局偏好。从未保存过时返回 `None`。
+///
+/// 布局内容是前端领域的任意 JSON：后端只按键存储透传，不解释其结构，因此布局
+/// 模型的演进不需要改动 IPC 合同。库 ID 在这里先经 [`LibraryId::parse`] 校验，
+/// 未校验的字符串不能参与文件名拼接——与素材哈希同一纪律。
+#[tauri::command]
+pub async fn read_layout(
+    library_id: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<Option<serde_json::Value>> {
+    let library_id = LibraryId::parse(&library_id)?;
+    let layouts_dir = {
+        let guard = lock(&state)?;
+        guard.layouts_dir.clone()
+    };
+    tauri::async_runtime::spawn_blocking(move || LayoutStore::new(layouts_dir).read(&library_id))
+        .await
+        .map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("后台读取布局任务异常终止：{error}"),
+            )
+        })?
+}
+
+/// 写入一个库的布局偏好（整体覆盖）。
+#[tauri::command]
+pub async fn write_layout(
+    library_id: String,
+    layout: serde_json::Value,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let library_id = LibraryId::parse(&library_id)?;
+    let layouts_dir = {
+        let guard = lock(&state)?;
+        guard.layouts_dir.clone()
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        LayoutStore::new(layouts_dir).write(&library_id, &layout)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台写入布局任务异常终止：{error}"),
+        )
+    })?
 }
 
 #[cfg(test)]

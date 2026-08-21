@@ -59,7 +59,8 @@ export function AssetWorkspace({ refreshVersion }: { refreshVersion: number }) {
   const [folderProgress, setFolderProgress] = useState<FolderMutationProgress | null>(null);
 
   const query = useMemo<AssetQuery>(
-    () => ({ text: deferredText, tags: selectedTags, folder, location }),
+    // 收藏筛选属于第 9 章的检查器与筛选条；在它落地前恒为"不限"。
+    () => ({ text: deferredText, tags: selectedTags, folder, favorite: null, location }),
     [deferredText, folder, location, selectedTags],
   );
   const snapshotRequest = useMemo(

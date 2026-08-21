@@ -280,8 +280,25 @@
 > 反查含回收站提示词以如实体现已删除状态；未知哈希报 `library.not_found`），原图字节
 > 继续走既有 `read_asset_body` 单独请求；提示词侧 `prompt_detail` 与两个 snapshot 均
 > 为既有入口，本次未改语义。
-- [ ] 7.5 先用 Tauri 官方 mock 锁定提示词 CRUD/回收站、note/favorite、普通关联/封面、批量报告、全局搜索与布局偏好 IPC 名称/参数/错误传播
-- [ ] 7.6 实现 async Tauri commands，文件扫描/批量处理/迁移继续在 blocking worker，并在独立 Catalog 锁边界内串行权威变更
+- [x] 7.5 先用 Tauri 官方 mock 锁定提示词 CRUD/回收站、note/favorite、普通关联/封面、批量报告、全局搜索与布局偏好 IPC 名称/参数/错误传播
+- [x] 7.6 实现 async Tauri commands，文件扫描/批量处理/迁移继续在 blocking worker，并在独立 Catalog 锁边界内串行权威变更
+
+> 7.5/7.6 落在 `src-tauri/src/commands.rs` 与 `src/shared/ipc.ts|test.ts`（2026-08-21）：
+> 前端先用 Tauri 官方 `mockIPC` 建立 7 条契约测试，钉死全部新命令名与参数形状——
+> 提示词 CRUD/回收站/组织（create_prompt…purge_prompt_trash）、普通关联/封面/
+> 导入后关联（link_images/unlink_image/set_prompt_cover/import_and_link/image_detail）、
+> 图片 note/favorite、批量报告（Channel 进度逐项转交 + BatchReport 形状）、global_search
+> 与布局偏好（read_layout/write_layout 以 libraryId 为键）；错误传播沿用既有 IpcError
+> 收敛测试。顺带补齐两处 DTO 镜像缺口：AssetRow 的 note/favorite 与两类查询的
+> favorite 字段此前未同步进 TS 类型。Rust 侧新增约 35 个 async command：参数先经
+> ContentHash/PromptId/FolderPath/Tag/LibraryId 校验再进 `with_catalog`（spawn_blocking +
+> 独立 Catalog 锁内串行权威变更）；13 个批量命令经新的 `ChannelProgress` 适配器实现
+> 核心 `BatchProgress` trait，通道断开只记标记不把已部分成功的批量变成错误；文件扫描/
+> 批量处理/迁移继续留在 blocking worker。布局偏好落在核心新增的 `LayoutStore`
+> （settings.rs）：以库 ID 而不是库路径为键存放在应用配置目录，内容是前端领域的任意
+> JSON 透传，4 条单元测试覆盖从未保存返回 None、任意 JSON 往返覆盖、分库不互串与
+> 损坏报告不静默重置。全部 51 个命令已注册进 `generate_handler!`；四道门禁通过
+> （前端 17 测试、Rust 281 测试、clippy -D warnings 干净）。
 
 ## 8. 生产工作台外壳与共享交互模型
 
