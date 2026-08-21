@@ -61,22 +61,25 @@ Vistash 是一个 Windows 优先、本地优先的桌面应用，只覆盖两项
 | 仓库根 `05. Vistash/` | 全部 `openspec` 命令 |
 | `app/` | 全部 `pnpm` 与 `cargo` 命令 |
 
-### 三条门禁命令
+### 四条门禁命令
 
 修改生产代码后必须全部通过，全部在 `app/` 下运行：
 
 ```powershell
 pnpm lint                                              # oxlint --type-aware
 pnpm typecheck                                         # tsc --noEmit
+pnpm test                                              # vitest run
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`cargo clippy` 与 `cargo test` 合起来算一条门禁（Rust 侧）。三条的完整含义是：前端 lint、TypeScript 类型检查、Rust 检查。
+`cargo clippy` 与 `cargo test` 合起来算一条门禁（Rust 侧）。四条的完整含义是：前端 lint、TypeScript 类型检查、前端测试、Rust 检查。
 
 关于 `pnpm lint` 为何是 `oxlint` 而不是 `eslint`：见 `implement-vistash-import-and-browse` 设计的第十一条。简述是 `typescript-eslint` 稳定版不支持本项目使用的 TypeScript 7，而 `oxlint-tsgolint` 恰恰要求 TypeScript 7 以上。
 
-`pnpm test`（`vitest run`）目前**没有前端测试文件因而会失败**，这是如实状态而不是待修缺陷：前端测试随任务 5.x 的视图实现一并加入。在那之前它不属于门禁命令。
+`pnpm test`（`vitest run`）是第四条门禁。前端测试自首个纵向切片（`3704ff6`）起就已存在，当前覆盖 IPC 封装与素材视图；本文件此前记载的"没有前端测试文件因而会失败"从那次提交起即已过期。
+
+**不要把前端门禁与 Rust 门禁并行运行。** `vitest` 的 forks worker 有 60 秒响应超时，而 `cargo test --workspace` 与 `cargo clippy --all-targets` 的全量编译会占满 CPU。两者同时跑时 `pnpm test` 会以 `Failed to start forks worker` 和 `Timeout waiting for worker to respond` 失败，看上去像 pool 配置缺陷。它是 CPU 饥饿：串行运行时同一批用例数秒内全部通过。因此不要为这个现象去改 `vitest` 配置或改用 `--pool=threads`——那会把一次调度问题固化成一处无谓的配置分叉。
 
 ### 构建前置条件
 
