@@ -3,6 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AssetWorkspace } from "./features/assets/AssetWorkspace";
 import { ErrorLine } from "./features/library/ErrorLine";
 import { LibraryPicker } from "./features/library/LibraryPicker";
+import {
+  WorkspaceTopBar,
+  type WorkspaceSection,
+} from "./features/workspace/WorkspaceTopBar";
 import { asAppError } from "./shared/errors";
 import { importPaths, libraryStatus, onPathsDropped } from "./shared/ipc";
 import type {
@@ -11,9 +15,6 @@ import type {
   ImportProgress,
   LibraryStatus,
 } from "./shared/types";
-
-/** 一级导航入口。 */
-type Section = "assets" | "prompts";
 
 /**
  * 应用根组件。
@@ -24,7 +25,7 @@ type Section = "assets" | "prompts";
 export function App() {
   const [status, setStatus] = useState<LibraryStatus | null>(null);
   const [statusError, setStatusError] = useState<AppError | null>(null);
-  const [section, setSection] = useState<Section>("assets");
+  const [section, setSection] = useState<WorkspaceSection>("assets");
   const [assetsError, setAssetsError] = useState<AppError | null>(null);
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null);
   const [importing, setImporting] = useState(false);
@@ -128,35 +129,13 @@ export function App() {
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到主内容</a>
-      <header className="app-header">
-        <div className="brand-block">
-          <p className="eyebrow">VISUAL ARCHIVE / WINDOWS</p>
-          <h1>Vistash</h1>
-        </div>
-        <p className="library-path" title={status.path}>当前库：{status.path}</p>
-      </header>
 
       {/*
-        导航骨架。素材与提示词库并列为一级入口，且提示词库必须是一级入口而不是素材详情的
-        侧栏——规格的理由是结构性的：提示词是一等资产，存在不关联任何素材的手写记录，
-        侧栏在结构上容纳不了这类记录。
+        紧凑顶栏（任务 8.1）。素材与提示词库并列为一级入口，且提示词库必须是一级入口而
+        不是素材详情的侧栏——规格的理由是结构性的：提示词是一等资产，存在不关联任何
+        素材的手写记录，侧栏在结构上容纳不了这类记录。
       */}
-      <nav aria-label="主导航" className="primary-nav">
-        <button
-          type="button"
-          aria-current={section === "assets" ? "page" : undefined}
-          onClick={() => setSection("assets")}
-        >
-          素材
-        </button>
-        <button
-          type="button"
-          aria-current={section === "prompts" ? "page" : undefined}
-          onClick={() => setSection("prompts")}
-        >
-          提示词库
-        </button>
-      </nav>
+      <WorkspaceTopBar section={section} onSectionChange={setSection} libraryPath={status.path} />
 
       {importing && (
         <p role="status">
