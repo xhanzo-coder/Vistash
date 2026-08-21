@@ -98,6 +98,8 @@ pub enum Code {
     PromptTrashDeleteFailed,
     /// 从库内提示词回收站还原提示词失败。分开的理由同上。
     PromptTrashRestoreFailed,
+    /// 彻底删除一条回收站提示词失败。逐项隔离：一条失败不阻止其余条目继续清理。
+    PromptTrashPurgeFailed,
     // migration 域：库格式 v1 到 v2 的一次性迁移
     MigrationJournalCorrupt,
     MigrationJournalFormatTooNew,
@@ -156,6 +158,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::PromptFolderExists,
     Code::PromptTrashDeleteFailed,
     Code::PromptTrashRestoreFailed,
+    Code::PromptTrashPurgeFailed,
     Code::MigrationJournalCorrupt,
     Code::MigrationJournalFormatTooNew,
     Code::MigrationJournalWriteFailed,
@@ -214,7 +217,8 @@ impl Code {
             | PromptFolderNotFound
             | PromptFolderExists
             | PromptTrashDeleteFailed
-            | PromptTrashRestoreFailed => Domain::Prompt,
+            | PromptTrashRestoreFailed
+            | PromptTrashPurgeFailed => Domain::Prompt,
             MigrationJournalCorrupt
             | MigrationJournalFormatTooNew
             | MigrationJournalWriteFailed
@@ -275,6 +279,7 @@ impl Code {
             PromptFolderExists => "prompt.folder_exists",
             PromptTrashDeleteFailed => "prompt.trash_delete_failed",
             PromptTrashRestoreFailed => "prompt.trash_restore_failed",
+            PromptTrashPurgeFailed => "prompt.trash_purge_failed",
             MigrationJournalCorrupt => "migration.journal_corrupt",
             MigrationJournalFormatTooNew => "migration.journal_format_too_new",
             MigrationJournalWriteFailed => "migration.journal_write_failed",

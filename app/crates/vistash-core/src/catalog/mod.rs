@@ -29,7 +29,7 @@ mod testing;
 
 pub use image_metadata::{FolderMutationProgress, FolderName, FolderPath, Tag};
 pub use lifecycle::{PurgeFailure, PurgeReport, RestoreOutcome};
-pub use prompt_lifecycle::PromptRestoreOutcome;
+pub use prompt_lifecycle::{PromptPurgeFailure, PromptPurgeReport, PromptRestoreOutcome};
 pub use prompt_metadata::{NewPrompt, PromptEdit};
 pub use query::{
     AssetLocation, AssetQuery, CatalogSnapshot, FolderFilter, PromptLocation, PromptQuery,
@@ -62,6 +62,8 @@ pub struct Catalog {
     fail_purge_hash: Option<ContentHash>,
     #[cfg(test)]
     fail_prompt_lifecycle_stage: Option<PromptLifecycleStage>,
+    #[cfg(test)]
+    fail_prompt_purge_id: Option<String>,
 }
 
 impl Catalog {
@@ -80,6 +82,8 @@ impl Catalog {
             fail_purge_hash: None,
             #[cfg(test)]
             fail_prompt_lifecycle_stage: None,
+            #[cfg(test)]
+            fail_prompt_purge_id: None,
         })
     }
 

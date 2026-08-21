@@ -15,6 +15,7 @@
 
 use super::write_raw_atomic;
 use crate::error::{AppError, Code, Result};
+use crate::index::{FolderSelection, PromptRow};
 use crate::prompt::{PromptAsset, PromptId};
 use serde::Serialize;
 use std::path::Path;
@@ -39,6 +40,21 @@ pub(super) enum PromptLifecycleStage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PromptRestoreOutcome {
     pub missing_folders: Vec<String>,
+}
+
+/// 逐项清理提示词回收站时的单项失败。与图片侧的 `PurgeFailure` 分开：
+/// 提示词以 ID 与可选标题标识，没有哈希与原始文件名可报。
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptPurgeFailure {
+    pub id: String,
+    pub title: Option<String>,
+    pub error: AppError,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptPurgeReport {
+    pub purged: usize,
+    pub failures: Vec<PromptPurgeFailure>,
 }
 
 impl Catalog {
@@ -238,6 +254,85 @@ impl Catalog {
     fn inject_prompt_lifecycle_failure(&mut self, stage: PromptLifecycleStage) {
         self.fail_prompt_lifecycle_stage = Some(stage);
     }
+
+    /// 逐项清空提示词回收站：永久删除每一条回收站提示词的权威文件，
+    /// 派生关联随索引重建一并清除。
+    ///
+    /// 逐项失败隔离与图片侧一致：一条失败不阻止其余条目，失败项连同 ID、标题
+    /// 与稳定错误码进入报告。只修改提示词文件——图片本体、侧车与缩略图不在
+    /// 这条路径上，普通关联是派生行，由末尾的索引重建从"文件已不存在"推导清除。
+    pub fn purge_prompt_trash(&mut self) -> Result<PromptPurgeReport> {
+        let trashed: Vec<PromptRow> = self
+            .index()?
+            .query_prompts(true, FolderSelection::All, &[], None, "")?;
+        let mut report = PromptPurgeReport {
+            purged: 0,
+            failures: Vec::new(),
+        };
+        for row in &trashed {
+            match self.purge_one_prompt(row) {
+                Ok(()) => report.purged += 1,
+                Err(error) => report.failures.push(PromptPurgeFailure {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    error,
+                }),
+            }
+        }
+        self.rebuild_index()?;
+        Ok(report)
+    }
+
+    fn purge_one_prompt(&self, row: &PromptRow) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_prompt_purge_id.as_deref() == Some(row.id.as_str()) {
+            return Err(AppError::detailed(
+                Code::PromptTrashPurgeFailed,
+                format!("注入提示词 purge 失败：{}", row.id),
+            ));
+        }
+        let id = PromptId::parse(&row.id)?;
+        let trash_path = self.library.prompt_trash_path(&id);
+        let staged = trash_path.with_extension("json.purge");
+        if staged.exists() {
+            return Err(AppError::detailed(
+                Code::PromptTrashPurgeFailed,
+                format!("存在上次未处理的 purge 临时文件：{id}"),
+            ));
+        }
+        // 两阶段删除与图片侧同构：先改名成 .purge 标记意图，再真正删除。进程在
+        // 两步之间中断时，残留的 .purge 文件让下次运行拒绝而不是静默半删。
+        std::fs::rename(&trash_path, &staged).map_err(|error| {
+            prompt_lifecycle_io(
+                Code::PromptTrashPurgeFailed,
+                "暂存 purge 提示词失败",
+                &trash_path,
+                error,
+            )
+        })?;
+        if let Err(error) = std::fs::remove_file(&staged) {
+            std::fs::rename(&staged, &trash_path).map_err(|rollback_error| {
+                prompt_lifecycle_io(
+                    Code::PromptTrashPurgeFailed,
+                    "purge 删除失败后恢复提示词失败",
+                    &staged,
+                    rollback_error,
+                )
+            })?;
+            return Err(prompt_lifecycle_io(
+                Code::PromptTrashPurgeFailed,
+                "删除 purge 提示词失败",
+                &staged,
+                error,
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn inject_prompt_purge_failure(&mut self, id: &str) {
+        self.fail_prompt_purge_id = Some(id.to_owned());
+    }
 }
 
 struct DeletePromptRollback<'a> {
@@ -309,6 +404,8 @@ mod tests {
     use crate::catalog::query::{FolderFilter, PromptLocation, PromptQuery};
     use crate::catalog::testing::{fixture, import_with, write_png};
     use crate::catalog::NewPrompt;
+    use crate::hashing::ContentHash;
+    use crate::prompt::PROMPT_FORMAT_VERSION;
 
     fn name(raw: &str) -> FolderName {
         FolderName::parse(raw).expect("合法文件夹名")
@@ -561,5 +658,137 @@ mod tests {
             sidecar_before,
             "删除提示词不得改动图片侧车"
         );
+    }
+
+    /// 直接构造一条带关联图片的回收站提示词。普通关联的 link/unlink 入口属于
+    /// 任务 6.x；purge 的"清理派生关联"语义现在就能用权威文件里的有序哈希钉住。
+    fn placed_deleted_prompt(
+        catalog: &mut Catalog,
+        id: &str,
+        body: &str,
+        linked: &[ContentHash],
+    ) -> PromptAsset {
+        let prompt = PromptAsset {
+            format_version: PROMPT_FORMAT_VERSION,
+            id: PromptId::parse(id).expect("合法 ID"),
+            body: body.to_owned(),
+            title: Some("待清空标题".to_owned()),
+            model: None,
+            parameters: None,
+            note: String::new(),
+            favorite: false,
+            folders: Vec::new(),
+            tags: Vec::new(),
+            linked_image_hashes: linked.to_vec(),
+            cover_image_hash: None,
+            created_at: chrono::DateTime::from_timestamp(0, 0).expect("固定时间戳"),
+            updated_at: chrono::DateTime::from_timestamp(0, 0).expect("固定时间戳"),
+            deleted_at: Some(chrono::DateTime::from_timestamp(60, 0).expect("固定时间戳")),
+            deleted_from_folders: None,
+        };
+        let path = catalog.library().prompt_trash_path(&prompt.id);
+        prompt.write_atomic(&path).expect("写入回收站提示词");
+        catalog
+            .index_mut()
+            .expect("索引")
+            .upsert_prompt(&prompt)
+            .expect("写入索引");
+        prompt
+    }
+
+    #[test]
+    fn purging_prompt_trash_removes_files_and_derived_links() {
+        let mut fixture = fixture();
+        let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
+        let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+        let linked = placed_deleted_prompt(
+            &mut fixture.catalog,
+            "018f3c9e-6c00-7000-8000-0000000000d1",
+            "带关联的正文",
+            std::slice::from_ref(&sidecar.hash),
+        );
+        let plain = crafted(&mut fixture.catalog, "普通正文", &[], &[]);
+        fixture.catalog.delete_prompt(&plain.id).expect("删除");
+        let sidecar_path = fixture.catalog.library().sidecar_path(&sidecar.hash);
+        let sidecar_before = std::fs::read(&sidecar_path).expect("读取图片侧车");
+
+        let report = fixture.catalog.purge_prompt_trash().expect("清空提示词回收站");
+
+        assert_eq!(report.purged, 2);
+        assert!(report.failures.is_empty());
+        for id in [&linked.id, &plain.id] {
+            assert!(!fixture.catalog.library().prompt_trash_path(id).exists());
+            assert!(!fixture.catalog.library().prompt_path(id).exists());
+        }
+        // 派生关联随文件消失：重建后的索引只从文件推导，提示词行与其 prompt_images
+        // 子表一并清除，而图片侧一个字节都不动。
+        fixture.catalog.rebuild_index().expect("重建索引");
+        let trash = fixture
+            .catalog
+            .prompt_snapshot(&query(PromptLocation::Trash))
+            .expect("查询回收站");
+        assert_eq!(trash.trash_count, 0);
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("读回图片侧车"),
+            sidecar_before,
+            "purge 提示词不得改动图片侧车"
+        );
+    }
+
+    #[test]
+    fn purging_prompt_trash_isolates_failures_and_keeps_the_failed_file() {
+        let mut fixture = fixture();
+        let failed = placed_deleted_prompt(
+            &mut fixture.catalog,
+            "018f3c9e-6c00-7000-8000-0000000000d2",
+            "失败样例",
+            &[],
+        );
+        let successful = placed_deleted_prompt(
+            &mut fixture.catalog,
+            "018f3c9e-6c00-7000-8000-0000000000d3",
+            "成功样例",
+            &[],
+        );
+        fixture
+            .catalog
+            .inject_prompt_purge_failure(failed.id.as_str());
+
+        let report = fixture.catalog.purge_prompt_trash().expect("清空回收站");
+
+        assert_eq!(report.purged, 1);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].id, failed.id.as_str());
+        assert_eq!(
+            report.failures[0].title.as_deref(),
+            Some("待清空标题")
+        );
+        assert_eq!(report.failures[0].error.code, Code::PromptTrashPurgeFailed);
+        assert!(fixture
+            .catalog
+            .library()
+            .prompt_trash_path(&failed.id)
+            .is_file());
+        assert!(!fixture
+            .catalog
+            .library()
+            .prompt_trash_path(&successful.id)
+            .exists());
+    }
+
+    #[test]
+    fn purging_an_empty_trash_changes_nothing() {
+        // 核心层的"取消无写入"等价物：回收站为空时逐项循环零次，除例行的索引
+        // 重建外不触碰任何权威文件——确认与取消在结果上不可区分。
+        let mut fixture = fixture();
+        let active = crafted(&mut fixture.catalog, "正常库中的提示词", &[], &[]);
+        let path = fixture.catalog.library().prompt_path(&active.id);
+        let before = std::fs::read(&path).expect("读取原文件字节");
+
+        let report = fixture.catalog.purge_prompt_trash().expect("清空空回收站");
+
+        assert_eq!(report.purged, 0);
+        assert!(report.failures.is_empty());
+        assert_eq!(std::fs::read(&path).expect("读回原文件字节"), before);
     }
 }
