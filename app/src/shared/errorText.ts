@@ -47,4 +47,24 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "library.folder_not_found": "指定的文件夹不存在。",
   "library.tag_invalid": "标签不能为空且不能包含控制字符。",
   "library.asset_metadata_write_failed": "写入素材组织元数据失败。",
+
+  // prompt 域
+  "prompt.metadata_corrupt": "提示词文件损坏，已拒绝载入。程序不会自行猜测缺失字段——猜出来的正文会永久顶替使用者真正写过的内容。",
+  "prompt.format_too_new": "这条提示词的文件格式版本高于当前程序支持的版本，已拒绝载入以免写坏数据。请升级 Vistash。",
+  "prompt.write_failed": "写入提示词失败。当前编辑内容仍保留在编辑器中，未被丢弃。",
+  "prompt.body_empty": "提示词正文不能为空。请至少填写一行正文，标题、模型与参数说明可以留空。",
+  "prompt.id_invalid": "提示词标识非法。这通常意味着库内文件被外部程序改写过。",
+  "prompt.cover_not_linked": "封面必须是这条提示词已关联的图片。请先建立关联，再把它设为封面。",
+  "prompt.linked_image_duplicated": "同一张图片不能与同一条提示词重复关联。",
+
+  // migration 域
+  "migration.journal_corrupt": "库迁移记录损坏，已停止迁移。程序不会据此继续或回滚——两者都可能写坏权威数据。请保留库目录并联系支持。",
+  "migration.journal_format_too_new": "库迁移记录来自更高版本的 Vistash，当前版本无法继续这次迁移。请升级 Vistash。",
+  "migration.journal_write_failed": "写入库迁移记录失败，迁移未开始或已停在上一个已记录的步骤。库内数据保持可恢复状态。",
+  "migration.lock_held": "另一次库迁移正在进行，已拒绝重复开始。若上一次迁移被强制结束，请重新打开这个库以继续或回滚它。",
+  "migration.interrupted": "库迁移被中断。库仍处于可恢复状态：下次打开这个库会继续未完成的迁移或回滚它，不会把半迁移的库当成正常库。",
+  "migration.backup_failed": "备份原始元数据失败，迁移未改动任何权威文件。",
+  "migration.sidecar_rewrite_failed": "重写素材元数据失败，已按备份把此前处理过的文件全部恢复原状。",
+  "migration.commit_failed": "提交新库版本失败。库仍是旧版本，已处理的文件已恢复原状。",
+  "migration.rollback_failed": "迁移回滚失败，库可能同时存在新旧两种元数据。请不要继续使用这个库，保留目录并联系支持。",
 };

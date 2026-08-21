@@ -13,18 +13,50 @@
 
 ## 2. v2 库格式与可恢复迁移
 
-- [ ] 2.1 先为 `LibraryV2`、`AssetSidecarV1/V2`、`PromptAsset`、`PromptFolderList` 与迁移 journal 建立序列化/拒绝非法值测试
-- [ ] 2.2 实现稳定 Prompt ID、唯一非空正文、可选字段、纯文本备注、收藏、提示词文件夹/标签、有序图片哈希与封面不变量
-- [ ] 2.3 先建立 v1→v2 迁移成功、第 n 个侧车失败回滚、进程中断恢复、索引重建失败和版本最后提交测试
-- [ ] 2.4 实现独占迁移锁、持久 journal/备份树、图片侧车 v2 重写、Prompt 骨架建立与 `library.json` 最后原子提交
+- [x] 2.1 先为 `LibraryV2`、`AssetSidecarV1/V2`、`PromptAsset`、`PromptFolderList` 与迁移 journal 建立序列化/拒绝非法值测试
+- [x] 2.2 实现稳定 Prompt ID、唯一非空正文、可选字段、纯文本备注、收藏、提示词文件夹/标签、有序图片哈希与封面不变量
+- [x] 2.3 先建立 v1→v2 迁移成功、第 n 个侧车失败回滚、进程中断恢复、索引重建失败和版本最后提交测试
+- [x] 2.4 实现独占迁移锁、持久 journal/备份树、图片侧车 v2 重写、Prompt 骨架建立与 `library.json` 最后原子提交
 - [ ] 2.5 实现迁移 typed `Channel` 进度与前端阻塞页，展示已处理数、总数、当前文件和稳定错误码
 - [ ] 2.6 在 1,000 和 10,000 侧车 release fixture 记录迁移耗时、磁盘峰值、中断恢复耗时与回滚结果
 
+> 顺序调整（2026-08-21，经产品所有者确认）：2.5 与 2.6 移到第 3 章之后执行。理由是已验证的依赖，
+> 而不是工作量偏好——迁移的最后一步要重建 v2 索引（设计第四条步骤 4），唯一实现 `Index::rebuild`
+> 与 `Catalog` 的生产读取都仍用 v1 读取器 `AssetSidecar::read`，而迁移完成后侧车已是 v2；既有测试
+> `a_v2_sidecar_is_refused_by_the_v1_reader_as_too_new` 证明它会以 `library.format_too_new` 拒绝。
+> 因此在 3.1–3.3 把侧车读取器切到 v2 之前，`migrate_library` 端到端必然在重建那步失败并回滚，
+> 2.6 也没有能走完的迁移可测。第 2 章其余任务已完成，这两条保持未勾选直到第 3 章落地。
+
 ## 3. Catalog 内部拆分与 SQLite v2 派生索引
 
-- [ ] 3.1 把现有单文件 `Catalog` 内部拆为图片元数据、提示词元数据、普通关联/封面、生命周期与派生查询模块，公开入口仍只暴露 `Catalog`
+- [x] 3.1 把现有单文件 `Catalog` 内部拆为图片元数据、提示词元数据、普通关联/封面、生命周期与派生查询模块，公开入口仍只暴露 `Catalog`
+
+> 3.1 的落地范围：`catalog.rs`（2,188 行）拆为 `catalog/` 目录，`mod.rs` 只保留 `Catalog` 类型、构造、
+> 索引访问与跨领域共用的原子写入，实现分入 `image_metadata.rs`、`lifecycle.rs`、`query.rs`，测试夹具进
+> `testing.rs`。公开面零变化：公开类型仍由 `mod.rs` 重新导出，`src-tauri` 未改一行即通过编译；34 个测试
+> 全部随各自代码就近迁移，拆分前后同为 202 通过 0 失败，clippy 干净。
+> 提示词元数据与普通关联/封面两个模块本次未建立：它们目前没有任何内容（分别属于任务 4.x 与 6.x），
+> 先建空模块只会留下一层没有内容的间接。边界规则已写入 `catalog/mod.rs` 模块文档，由 4.x/6.x 按同一
+> 规则新增兄弟模块。
 - [ ] 3.2 先为 SQLite v2 prompts、prompt_folders、prompt_tags、prompt_images 与 images note/favorite 表列建立增量/重建快照等价测试
 - [ ] 3.3 实现 SQLite v2 schema、批量 prompt upsert、分类删除状态、共享标签分库计数与关联反查
+
+> 3.3 的前置部分已完成并全绿（2026-08-21），但 3.3 本身尚未勾选：索引要有 note/favorite 列就必须读 v2 侧车，
+> 这连带要求整条生产路径切到 v2。已落地的切换是：`sidecar.rs` 把 v1 结构改名为 `AssetSidecarV1`（冻结、只服务
+> 迁移），`AssetSidecar` 改为 `AssetSidecarV2` 的类型别名，于是索引、导入与编目共 50 处引用自动指向 v2，
+> 只有 `import.rs` 一处构造点需要补写 `note`/`favorite`；`Library` 改为持有 `LibraryMetaV2`，建库产出 v2
+> `library.json`（含 `library_id`）并一并建立提示词骨架，使新建库与迁移产出的库结构完全一致；新增
+> `prompt_path`/`prompt_trash_path`/`prompt_objects_dir`/`prompt_trash_dir`/`read_prompt_folders`/
+> `write_prompt_folders`；迁移的 `commit` 改用 `LibraryMeta::read` 读那份仍在磁盘上的 v1 文件，其测试夹具
+> 改为直接写 v1 JSON（生产侧已不存在 v1 写入器，这正是应有状态）。新增回归测试
+> `a_freshly_created_library_is_already_v2_and_needs_no_migration` 钉住"新建库不得被判成需要迁移"。
+>
+> 3.3 待做部分中有一处已知的接口问题：`Index::rebuild` 现在接受 `&Library`，而 `Library::open` 只认 v2；
+> 迁移必须在提交 v2 `library.json` **之前**重建索引（设计第四条要求版本最后提交，且有测试钉住），
+> 因此迁移那一刻拿不到 `Library`。索引重建实际只用到路径推导与 `folders.json`，不需要库级元数据，
+> 所以 3.3 应提供一个以库根路径为入口的重建接口。这同时是 2.5 的解锁条件。
+
+## 4. 提示词素材、组织与当前值保存
 - [ ] 3.4 删除并重建索引，验证两套空文件夹、图片 note/favorite、提示词全字段、两类回收站与普通关联/封面等价
 
 ## 4. 提示词素材、组织与当前值保存

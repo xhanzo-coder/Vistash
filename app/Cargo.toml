@@ -12,6 +12,9 @@ rust-version = "1.82"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# 提示词与库的稳定标识使用 UUIDv7（设计第二条）。自行拼装时间戳与随机位需要另引
+# 随机数依赖，且要重复实现版本位与变体位规则，因此直接用官方实现。
+uuid = { version = "1", features = ["v7"] }
 chrono = { version = "0.4", default-features = false, features = [
   "std",
   "clock",

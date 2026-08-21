@@ -6,12 +6,21 @@
 
 use crate::error::{AppError, Code, Result};
 use crate::hashing::{ContentHash, HASH_ALGO_ID};
+use crate::prompt::{PromptFolderList, PromptId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 库格式版本。寻址方式（fanout 层数与切片位置）属于库格式，改动必须提升此值。
 pub const LIBRARY_FORMAT_VERSION: u32 = 1;
+
+/// 库格式 v2 的版本号。
+///
+/// v2 相对 v1 只有两处差别（设计第四条）：`library.json` 增加稳定 `library_id`，
+/// 图片侧车升级到 v2 并强制写入纯文本备注与收藏。它与 `LIBRARY_FORMAT_VERSION` 并存
+/// 而不是直接把后者改成 2，因为迁移实现之前生产读写路径必须继续按 v1 处理既有库，
+/// 否则一次普通启动就会把正常的 v1 库判成缺字段的损坏库。
+pub const LIBRARY_FORMAT_VERSION_V2: u32 = 2;
 
 pub const META_FILE: &str = "library.json";
 pub const FOLDERS_FILE: &str = "folders.json";
@@ -20,11 +29,23 @@ pub const OBJECTS_DIR: &str = "objects";
 pub const TRASH_DIR: &str = "trash";
 pub const THUMBNAILS_DIR: &str = "thumbnails";
 pub const PROMPTS_DIR: &str = "prompts";
+/// 提示词权威文件子目录，位于 `prompts/` 之下（设计第二条）。
+pub const PROMPT_OBJECTS_DIR: &str = "objects";
+/// 提示词回收站子目录。它与图片回收站分开，使两类素材各自呈现自己的可恢复删除区。
+pub const PROMPT_TRASH_DIR: &str = "trash";
+/// 提示词文件夹清单文件名。
+///
+/// 与图片的 `folders.json` 是两份彼此独立的文件：两棵文件夹树允许同路径字面值各自
+/// 存在，合并成一份清单就无法表达这件事。
+pub const PROMPT_FOLDERS_FILE: &str = "prompt-folders.json";
 
 /// 库创建时会建立的全部子目录。
 const SUBDIRS: &[&str] = &[OBJECTS_DIR, TRASH_DIR, THUMBNAILS_DIR, PROMPTS_DIR];
 
-/// 库级元数据。
+/// v1 库级元数据。
+///
+/// 生产路径已切到 [`LibraryMetaV2`]（任务 3.3），这个结构此后只服务迁移：迁移在提交
+/// 新版本之前必须读出旧文件里的建库时间与建库版本，而那些字段只存在于 v1 文件里。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LibraryMeta {
     pub format_version: u32,
@@ -34,6 +55,130 @@ pub struct LibraryMeta {
     pub created_at: DateTime<Utc>,
     /// 建库时的程序版本。仅用于诊断，不参与任何判断。
     pub created_by_app_version: String,
+}
+
+impl LibraryMeta {
+    /// 按 v1 结构读出库级元数据。
+    ///
+    /// 只有迁移会调用它。刻意不做版本上限检查：调用方（迁移）已经通过
+    /// `detect_library_format` 确认过这是一个待迁移的旧库，这里再判一次只会把
+    /// "版本过新"这条判断分散到两处。
+    pub fn read(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryPathUnreadable,
+                format!("读取 {META_FILE} 失败 {}: {e}", path.display()),
+            )
+        })?;
+        serde_json::from_slice(&bytes).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!("{META_FILE} 无法按 v1 解析 {}: {e}", path.display()),
+            )
+        })
+    }
+}
+
+/// 库的稳定标识。
+///
+/// 前端按库分别记住布局、视图、筛选与滚动上下文（设计第一条），这些偏好的键必须是
+/// 这个 ID 而不是库路径：使用者把库目录改名或搬到另一个盘之后，路径键会静默丢掉全部
+/// 偏好，而使用者看到的现象是"设置自己复位了"。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LibraryId(String);
+
+impl LibraryId {
+    /// 校验并接管一个库 ID 字面值。
+    ///
+    /// 只要求规范形式的 UUID，不限制版本：库 ID 从不参与排序，因此没有理由把它绑定在
+    /// UUIDv7 上；生成端仍用 v7，使两类标识出自同一个生成器。
+    pub fn parse(s: &str) -> Result<Self> {
+        crate::ids::parse_canonical_uuid(s, Code::LibraryMetadataCorrupt)?;
+        Ok(Self(s.to_owned()))
+    }
+
+    /// 生成一个新的库标识。
+    pub fn generate() -> Self {
+        Self(crate::ids::generate_canonical_uuid_v7())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for LibraryId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Serialize for LibraryId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for LibraryId {
+    /// 反序列化经过 [`LibraryId::parse`]，使"文件里的非法 ID"与"调用方传入的非法 ID"
+    /// 走同一条拒绝路径，而不是只在其中一处把关。
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Self::parse(&s).map_err(|e| serde::de::Error::custom(e.to_string()))
+    }
+}
+
+/// 库格式 v2 的库级元数据。
+///
+/// 与 [`LibraryMeta`] 并存而不是给它加一个可选字段：可选的 `library_id` 会让"这个库
+/// 迁移过没有"变成一次运行时判断，而迁移恰恰要求这件事在打开库之前就确定。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryMetaV2 {
+    pub format_version: u32,
+    pub library_id: LibraryId,
+    pub hash_algo: String,
+    pub created_at: DateTime<Utc>,
+    pub created_by_app_version: String,
+}
+
+impl LibraryMetaV2 {
+    pub fn read(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryPathUnreadable,
+                format!("读取 {META_FILE} 失败 {}: {e}", path.display()),
+            )
+        })?;
+        let meta: Self = serde_json::from_slice(&bytes).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!("{META_FILE} 无法按 v2 解析 {}: {e}", path.display()),
+            )
+        })?;
+        if meta.format_version > LIBRARY_FORMAT_VERSION_V2 {
+            return Err(AppError::detailed(
+                Code::LibraryFormatTooNew,
+                format!(
+                    "库格式版本 {} 高于程序支持的 {}",
+                    meta.format_version, LIBRARY_FORMAT_VERSION_V2
+                ),
+            ));
+        }
+        if meta.hash_algo != HASH_ALGO_ID {
+            return Err(AppError::detailed(
+                Code::LibraryFormatTooNew,
+                format!(
+                    "库使用的哈希算法 {} 不被本次构建支持（本构建为 {HASH_ALGO_ID}）",
+                    meta.hash_algo
+                ),
+            ));
+        }
+        Ok(meta)
+    }
+
+    pub fn write_atomic(&self, path: &Path) -> Result<()> {
+        write_json_atomic(path, self, Code::LibraryIoFailed)
+    }
 }
 
 /// 文件夹清单。
@@ -63,7 +208,7 @@ impl Default for FolderList {
 #[derive(Debug, Clone)]
 pub struct Library {
     root: PathBuf,
-    meta: LibraryMeta,
+    meta: LibraryMetaV2,
 }
 
 fn io_failed(what: &str, path: &Path, e: std::io::Error) -> AppError {
@@ -122,8 +267,22 @@ impl Library {
             })?;
         }
 
-        let meta = LibraryMeta {
-            format_version: LIBRARY_FORMAT_VERSION,
+        // 提示词两个子目录与图片子目录一起建立：新建的库必须与迁移产出的库结构一致，
+        // 否则"库里有没有 prompts/objects"就成了区分新建库与迁移库的隐性差异，而两者
+        // 之后要走完全相同的读写路径。
+        let prompts = root.join(PROMPTS_DIR);
+        for d in [prompts.join(PROMPT_OBJECTS_DIR), prompts.join(PROMPT_TRASH_DIR)] {
+            std::fs::create_dir_all(&d).map_err(|e| {
+                AppError::detailed(
+                    Code::LibraryCreateFailed,
+                    format!("建立提示词子目录失败 {}: {e}", d.display()),
+                )
+            })?;
+        }
+
+        let meta = LibraryMetaV2 {
+            format_version: LIBRARY_FORMAT_VERSION_V2,
+            library_id: LibraryId::generate(),
             hash_algo: HASH_ALGO_ID.to_owned(),
             created_at: Utc::now(),
             created_by_app_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -132,6 +291,11 @@ impl Library {
         write_json_atomic(
             &root.join(FOLDERS_FILE),
             &FolderList::default(),
+            Code::LibraryCreateFailed,
+        )?;
+        write_json_atomic(
+            &root.join(PROMPT_FOLDERS_FILE),
+            &PromptFolderList::default(),
             Code::LibraryCreateFailed,
         )?;
 
@@ -150,43 +314,20 @@ impl Library {
                 format!("目录中没有 {META_FILE}：{}", root.display()),
             ));
         }
-        let bytes = std::fs::read(&meta_path).map_err(|e| {
-            AppError::detailed(
-                Code::LibraryPathUnreadable,
-                format!("读取 {META_FILE} 失败 {}: {e}", meta_path.display()),
-            )
-        })?;
-        let meta: LibraryMeta = serde_json::from_slice(&bytes).map_err(|e| {
-            AppError::detailed(
-                Code::LibraryMetadataCorrupt,
-                format!("{META_FILE} 无法解析 {}: {e}", meta_path.display()),
-            )
-        })?;
-        if meta.format_version > LIBRARY_FORMAT_VERSION {
-            return Err(AppError::detailed(
-                Code::LibraryFormatTooNew,
-                format!(
-                    "库格式版本 {} 高于程序支持的 {}",
-                    meta.format_version, LIBRARY_FORMAT_VERSION
-                ),
-            ));
-        }
-        if meta.hash_algo != HASH_ALGO_ID {
-            // 无法识别的哈希算法意味着本次构建不知道库内路径是怎么算出来的，
-            // 与"格式过新"属于同一类失败：能读到文件，但不能安全地解释它。
-            return Err(AppError::detailed(
-                Code::LibraryFormatTooNew,
-                format!(
-                    "库使用的哈希算法 {} 不被本次构建支持（本构建为 {HASH_ALGO_ID}）",
-                    meta.hash_algo
-                ),
-            ));
-        }
+        // 版本上限与哈希算法的校验都在 `LibraryMetaV2::read` 里，两处各写一遍迟早
+        // 出现一处接受、另一处拒绝的组合。遇到 v1 库时它报"元数据损坏"，而调用方要
+        // 区分"待迁移"与"真损坏"就必须先问 `detect_library_format`——那是开库入口的
+        // 职责，不是本函数的。
+        let meta = LibraryMetaV2::read(&meta_path)?;
 
         // 补齐缺失的子目录。空目录不携带任何信息，因此重建它不会掩盖数据丢失——
         // 真正的数据丢失会在索引重建时表现为素材数量下降。
-        for d in SUBDIRS {
-            let p = root.join(d);
+        let prompts = root.join(PROMPTS_DIR);
+        for p in SUBDIRS
+            .iter()
+            .map(|d| root.join(d))
+            .chain([prompts.join(PROMPT_OBJECTS_DIR), prompts.join(PROMPT_TRASH_DIR)])
+        {
             if !p.is_dir() {
                 std::fs::create_dir_all(&p).map_err(|e| io_failed("补齐子目录失败", &p, e))?;
             }
@@ -218,7 +359,7 @@ impl Library {
         &self.root
     }
 
-    pub fn meta(&self) -> &LibraryMeta {
+    pub fn meta(&self) -> &LibraryMetaV2 {
         &self.meta
     }
 
@@ -295,6 +436,40 @@ impl Library {
     pub fn write_folders(&self, list: &FolderList) -> Result<()> {
         write_json_atomic(&self.folders_path(), list, Code::LibraryIoFailed)
     }
+
+    pub fn prompt_objects_dir(&self) -> PathBuf {
+        self.root.join(PROMPTS_DIR).join(PROMPT_OBJECTS_DIR)
+    }
+
+    pub fn prompt_trash_dir(&self) -> PathBuf {
+        self.root.join(PROMPTS_DIR).join(PROMPT_TRASH_DIR)
+    }
+
+    pub fn prompt_folders_path(&self) -> PathBuf {
+        self.root.join(PROMPT_FOLDERS_FILE)
+    }
+
+    /// 一条正常提示词的权威文件路径。
+    ///
+    /// 提示词 ID 直接就是文件名，不做图片那样的两级 fanout：fanout 是为内容哈希的
+    /// 均匀分布服务的，而提示词数量与图片不是一个量级，多两层目录只会让"按 ID 找文件"
+    /// 多两步推导。
+    pub fn prompt_path(&self, id: &PromptId) -> PathBuf {
+        self.prompt_objects_dir().join(format!("{id}.json"))
+    }
+
+    /// 一条回收站提示词的权威文件路径。
+    pub fn prompt_trash_path(&self, id: &PromptId) -> PathBuf {
+        self.prompt_trash_dir().join(format!("{id}.json"))
+    }
+
+    pub fn read_prompt_folders(&self) -> Result<PromptFolderList> {
+        PromptFolderList::read(&self.prompt_folders_path())
+    }
+
+    pub fn write_prompt_folders(&self, list: &PromptFolderList) -> Result<()> {
+        list.write_atomic(&self.prompt_folders_path())
+    }
 }
 
 #[cfg(test)]
@@ -305,6 +480,123 @@ mod tests {
         let dir = tempfile::tempdir().expect("建立临时目录");
         let root = dir.path().join("我的素材库");
         (dir, root)
+    }
+
+    /// 固定的库 ID 字面值。测试不生成 ID：生成值会让失败信息随机变化，
+    /// 而这些测试断言的是格式契约而不是生成器。
+    const SAMPLE_LIBRARY_ID: &str = "018f3c9e-6c00-7000-8000-0000000f0001";
+
+    fn v2_meta() -> LibraryMetaV2 {
+        LibraryMetaV2 {
+            format_version: LIBRARY_FORMAT_VERSION_V2,
+            library_id: LibraryId::parse(SAMPLE_LIBRARY_ID).expect("合法库 ID"),
+            hash_algo: HASH_ALGO_ID.to_owned(),
+            created_at: DateTime::from_timestamp(0, 0).expect("固定时间戳"),
+            created_by_app_version: "0.1.0".to_owned(),
+        }
+    }
+
+    #[test]
+    fn v2_metadata_round_trips_with_a_stable_library_id() {
+        let (_d, root) = fresh();
+        std::fs::create_dir_all(&root).expect("建立目录");
+        let p = root.join(META_FILE);
+        let meta = v2_meta();
+        meta.write_atomic(&p).expect("写入 v2 库级元数据");
+        assert_eq!(LibraryMetaV2::read(&p).expect("读回 v2 库级元数据"), meta);
+    }
+
+    #[test]
+    fn a_v1_metadata_file_is_refused_by_the_v2_reader_instead_of_defaulted() {
+        // 设计第四条：发现 v1 时必须启动显式迁移，而不是用 serde 默认值补出 library_id。
+        // 补出来的 ID 每次启动都可能不同，而它正是分库布局偏好的键。
+        let (_d, root) = fresh();
+        std::fs::create_dir_all(&root).expect("建立目录");
+        let meta_path = root.join(META_FILE);
+        // 建库已经只产出 v2，因此这里必须自己写一份 v1 文件：这条测试断言的正是
+        // "v2 读取器面对真实的 v1 文件会拒绝"，用 v2 文件测不出它。
+        write_json_atomic(
+            &meta_path,
+            &LibraryMeta {
+                format_version: LIBRARY_FORMAT_VERSION,
+                hash_algo: HASH_ALGO_ID.to_owned(),
+                created_at: DateTime::from_timestamp(0, 0).expect("固定时间戳"),
+                created_by_app_version: "0.1.0".to_owned(),
+            },
+            Code::LibraryIoFailed,
+        )
+        .expect("写入 v1 库级元数据");
+        let err = LibraryMetaV2::read(&meta_path).expect_err("本应拒绝 v1 库级元数据");
+        assert_eq!(err.code, Code::LibraryMetadataCorrupt);
+    }
+
+    #[test]
+    fn a_newer_v2_library_format_is_refused_by_the_v2_reader() {
+        let (_d, root) = fresh();
+        std::fs::create_dir_all(&root).expect("建立目录");
+        let p = root.join(META_FILE);
+        let mut meta = v2_meta();
+        meta.format_version = LIBRARY_FORMAT_VERSION_V2 + 1;
+        meta.write_atomic(&p).expect("写入更高版本元数据");
+        let err = LibraryMetaV2::read(&p).expect_err("本应拒绝更高的库格式版本");
+        assert_eq!(err.code, Code::LibraryFormatTooNew);
+    }
+
+    #[test]
+    fn an_unknown_hash_algorithm_is_refused_by_the_v2_reader() {
+        let (_d, root) = fresh();
+        std::fs::create_dir_all(&root).expect("建立目录");
+        let p = root.join(META_FILE);
+        let mut meta = v2_meta();
+        meta.hash_algo = "blake3".to_owned();
+        meta.write_atomic(&p).expect("写入未知算法元数据");
+        let err = LibraryMetaV2::read(&p).expect_err("本应拒绝未知哈希算法");
+        assert_eq!(err.code, Code::LibraryFormatTooNew);
+    }
+
+    #[test]
+    fn an_invalid_library_id_is_refused() {
+        // 库 ID 是分库偏好的键，非法值必须在写入权威元数据之前被拒绝。
+        for bad in ["", "   ", "not-a-uuid"] {
+            let err = LibraryId::parse(bad).expect_err("本应拒绝非法库 ID");
+            assert_eq!(
+                err.code,
+                Code::LibraryMetadataCorrupt,
+                "被接受的非法库 ID：{bad:?}"
+            );
+        }
+        LibraryId::parse(SAMPLE_LIBRARY_ID).expect("合法库 ID 应被接受");
+    }
+
+    #[test]
+    fn a_freshly_created_library_is_already_v2_and_needs_no_migration() {
+        // 这条断言守的是任务 3.3 的切换本身：生产路径改成写 v2 侧车之后，建库若仍产出
+        // v1 `library.json`，一个刚建好的空库就会被开库入口判成"需要迁移"，而迁移的
+        // 输入本该是 v1 侧车——新库里一张都没有，于是迁移无事可做却又必须发生。
+        let (_d, root) = fresh();
+        let lib = Library::create(&root).expect("建库");
+        assert!(matches!(
+            crate::migration::detect_library_format(&root).expect("判定库格式"),
+            crate::migration::LibraryFormatState::Current(_)
+        ));
+        // 新建库与迁移产出的库必须结构一致，否则两者之后的读写路径就有了隐性分叉。
+        assert!(lib.prompt_objects_dir().is_dir(), "缺少提示词权威目录");
+        assert!(lib.prompt_trash_dir().is_dir(), "缺少提示词回收站目录");
+        assert!(
+            lib.read_prompt_folders().expect("读提示词文件夹清单").folders.is_empty(),
+            "新库不得预置提示词文件夹"
+        );
+    }
+
+    #[test]
+    fn the_prompt_layout_never_collides_with_the_image_layout() {
+        // 两套文件夹树与两个回收站必须落在不同路径，否则"同名文件夹各自存在"这条
+        // 规格要求会在磁盘上被合并成一处。
+        let (_d, root) = fresh();
+        assert_ne!(PROMPT_FOLDERS_FILE, FOLDERS_FILE);
+        let prompts = root.join(PROMPTS_DIR);
+        assert_ne!(prompts.join(PROMPT_OBJECTS_DIR), root.join(OBJECTS_DIR));
+        assert_ne!(prompts.join(PROMPT_TRASH_DIR), root.join(TRASH_DIR));
     }
 
     #[test]
@@ -395,7 +687,7 @@ mod tests {
         let opened = Library::open(&root).expect("打开库");
         assert_eq!(created.meta(), opened.meta());
         assert_eq!(opened.meta().hash_algo, HASH_ALGO_ID);
-        assert_eq!(opened.meta().format_version, LIBRARY_FORMAT_VERSION);
+        assert_eq!(opened.meta().format_version, LIBRARY_FORMAT_VERSION_V2);
     }
 
     #[test]
@@ -437,7 +729,7 @@ mod tests {
         let (_d, root) = fresh();
         let lib = Library::create(&root).expect("建库");
         let mut meta = lib.meta().clone();
-        meta.format_version = LIBRARY_FORMAT_VERSION + 1;
+        meta.format_version = LIBRARY_FORMAT_VERSION_V2 + 1;
         write_json_atomic(&root.join(META_FILE), &meta, Code::LibraryIoFailed).expect("改写元数据");
         let err = Library::open(&root).expect_err("本应拒绝更高版本");
         assert_eq!(err.code, Code::LibraryFormatTooNew);

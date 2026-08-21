@@ -13,6 +13,8 @@ pub enum Domain {
     Trash,
     ColorCard,
     Library,
+    Prompt,
+    Migration,
     Observe,
     Compile,
 }
@@ -24,6 +26,8 @@ impl Domain {
             Domain::Trash => "trash",
             Domain::ColorCard => "color_card",
             Domain::Library => "library",
+            Domain::Prompt => "prompt",
+            Domain::Migration => "migration",
             Domain::Observe => "observe",
             Domain::Compile => "compile",
         }
@@ -69,6 +73,24 @@ pub enum Code {
     LibraryFolderNotFound,
     LibraryTagInvalid,
     LibraryAssetMetadataWriteFailed,
+    // prompt 域：提示词素材及其权威文件
+    PromptMetadataCorrupt,
+    PromptFormatTooNew,
+    PromptWriteFailed,
+    PromptBodyEmpty,
+    PromptIdInvalid,
+    PromptCoverNotLinked,
+    PromptLinkedImageDuplicated,
+    // migration 域：库格式 v1 到 v2 的一次性迁移
+    MigrationJournalCorrupt,
+    MigrationJournalFormatTooNew,
+    MigrationJournalWriteFailed,
+    MigrationLockHeld,
+    MigrationInterrupted,
+    MigrationBackupFailed,
+    MigrationSidecarRewriteFailed,
+    MigrationCommitFailed,
+    MigrationRollbackFailed,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -104,6 +126,22 @@ pub const ALL_CODES: &[Code] = &[
     Code::LibraryFolderNotFound,
     Code::LibraryTagInvalid,
     Code::LibraryAssetMetadataWriteFailed,
+    Code::PromptMetadataCorrupt,
+    Code::PromptFormatTooNew,
+    Code::PromptWriteFailed,
+    Code::PromptBodyEmpty,
+    Code::PromptIdInvalid,
+    Code::PromptCoverNotLinked,
+    Code::PromptLinkedImageDuplicated,
+    Code::MigrationJournalCorrupt,
+    Code::MigrationJournalFormatTooNew,
+    Code::MigrationJournalWriteFailed,
+    Code::MigrationLockHeld,
+    Code::MigrationInterrupted,
+    Code::MigrationBackupFailed,
+    Code::MigrationSidecarRewriteFailed,
+    Code::MigrationCommitFailed,
+    Code::MigrationRollbackFailed,
 ];
 
 impl Code {
@@ -141,6 +179,23 @@ impl Code {
             | LibraryFolderNotFound
             | LibraryTagInvalid
             | LibraryAssetMetadataWriteFailed => Domain::Library,
+            PromptMetadataCorrupt
+            | PromptFormatTooNew
+            | PromptWriteFailed
+            | PromptBodyEmpty
+            | PromptIdInvalid
+            | PromptCoverNotLinked
+            | PromptLinkedImageDuplicated => Domain::Prompt,
+            MigrationJournalCorrupt
+            | MigrationJournalFormatTooNew
+            | MigrationJournalWriteFailed
+            | MigrationLockHeld
+            | MigrationInterrupted
+            | MigrationBackupFailed
+            | MigrationSidecarRewriteFailed
+            | MigrationCommitFailed
+            | MigrationRollbackFailed
+            => Domain::Migration,
         }
     }
 
@@ -178,6 +233,22 @@ impl Code {
             LibraryFolderNotFound => "library.folder_not_found",
             LibraryTagInvalid => "library.tag_invalid",
             LibraryAssetMetadataWriteFailed => "library.asset_metadata_write_failed",
+            PromptMetadataCorrupt => "prompt.metadata_corrupt",
+            PromptFormatTooNew => "prompt.format_too_new",
+            PromptWriteFailed => "prompt.write_failed",
+            PromptBodyEmpty => "prompt.body_empty",
+            PromptIdInvalid => "prompt.id_invalid",
+            PromptCoverNotLinked => "prompt.cover_not_linked",
+            PromptLinkedImageDuplicated => "prompt.linked_image_duplicated",
+            MigrationJournalCorrupt => "migration.journal_corrupt",
+            MigrationJournalFormatTooNew => "migration.journal_format_too_new",
+            MigrationJournalWriteFailed => "migration.journal_write_failed",
+            MigrationLockHeld => "migration.lock_held",
+            MigrationInterrupted => "migration.interrupted",
+            MigrationBackupFailed => "migration.backup_failed",
+            MigrationSidecarRewriteFailed => "migration.sidecar_rewrite_failed",
+            MigrationCommitFailed => "migration.commit_failed",
+            MigrationRollbackFailed => "migration.rollback_failed",
         }
     }
 
