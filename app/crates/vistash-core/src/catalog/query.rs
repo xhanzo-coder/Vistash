@@ -99,13 +99,7 @@ mod tests {
     #[cfg(not(debug_assertions))]
     use crate::catalog::testing::synthetic_sidecar;
     #[cfg(not(debug_assertions))]
-    use crate::colorcard::ColorCard;
-    #[cfg(not(debug_assertions))]
-    use crate::hashing::HASH_ALGO_ID;
-    #[cfg(not(debug_assertions))]
-    use crate::media::MediaType;
-    #[cfg(not(debug_assertions))]
-    use crate::sidecar::SIDECAR_FORMAT_VERSION;
+    use crate::sidecar::AssetSidecar;
     #[cfg(not(debug_assertions))]
     use std::time::{Duration, Instant};
 

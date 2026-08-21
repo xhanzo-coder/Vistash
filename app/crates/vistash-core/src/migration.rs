@@ -1445,4 +1445,97 @@ mod tests {
         let err = detect_library_format(&f.root).expect_err("更高版本本应被拒绝");
         assert_eq!(err.code, Code::LibraryFormatTooNew);
     }
+
+    /// 任务 2.6 的 release 基线：1,000 与 10,000 侧车下的迁移耗时、磁盘峰值、
+    /// 中断恢复耗时与回滚结果。
+    ///
+    /// 数字只在 release 构建下有意义，因此与查询基线一样 cfg 掉 debug 构建、
+    /// 以 `--ignored` 显式运行：
+    /// `cargo test -p vistash-core --release --ignored migration_release_baseline -- --nocapture`。
+    /// 产出的数字记录在 tasks.md 的 2.6 备注里；本测试只负责让它们可复现。
+    #[test]
+    #[cfg(not(debug_assertions))]
+    #[ignore = "release 性能基线：显式运行 --release --ignored"]
+    fn migration_release_baseline_on_thousand_and_ten_thousand_sidecars() {
+        for count in [1_000usize, 10_000] {
+            // —— 完整迁移：耗时与磁盘峰值 ——
+            let f = v1_library(count);
+            let peak = std::cell::Cell::new(0u64);
+            let sampled_root = f.root.clone();
+            let mut progress = |p: MigrationProgress| {
+                // 每 256 个侧车采样一次库目录占用：逐个采样是 O(N²)，粗采样足够给出峰值量级。
+                if p.done % 256 == 0 {
+                    let size = directory_size(&sampled_root);
+                    if size > peak.get() {
+                        peak.set(size);
+                    }
+                }
+            };
+            let started = std::time::Instant::now();
+            let outcome = Migration::new(&f.root)
+                .run(&mut ok_rebuild(), &mut progress)
+                .expect("完整迁移应成功");
+            let elapsed = started.elapsed();
+            let peak = peak.get().max(directory_size(&f.root));
+            eprintln!(
+                "[{count} 侧车] 完整迁移 {elapsed:?}，重写 {} 个侧车，磁盘峰值约 {} MiB",
+                outcome.sidecars_rewritten,
+                peak / (1024 * 1024),
+            );
+
+            // —— 中断恢复：在侧车重写完成后模拟崩溃，下次开库续跑 ——
+            let f2 = v1_library(count);
+            let mut interrupted = Migration::new(&f2.root);
+            interrupted.simulate_interruption_after(MigrationStage::SidecarsRewritten);
+            interrupted
+                .run(&mut ok_rebuild(), &mut |_| {})
+                .expect_err("注入的中断本应返回失败");
+            let resumed_started = std::time::Instant::now();
+            let resumed = Migration::new(&f2.root)
+                .run(&mut ok_rebuild(), &mut |_| {})
+                .expect("续跑应成功");
+            eprintln!(
+                "[{count} 侧车] 中断后续跑 {:?}（resumed={}）",
+                resumed_started.elapsed(),
+                resumed.resumed,
+            );
+            assert!(resumed.resumed, "续跑必须被报告为恢复");
+
+            // —— 回滚：注入第 N 个侧车重写失败，验证回滚结果 ——
+            let f3 = v1_library(count);
+            let mut failing = Migration::new(&f3.root);
+            failing.inject_sidecar_write_failure_at(count / 2);
+            failing
+                .run(&mut ok_rebuild(), &mut |_| {})
+                .expect_err("注入的失败本应返回错误");
+            assert_eq!(
+                v1_format_version(&f3.root),
+                1,
+                "回滚后 library.json 必须仍是 v1"
+            );
+            assert_sidecars_are_byte_identical(&f3, "回滚后");
+            eprintln!("[{count} 侧车] 注入失败后回滚成功：library.json 保持 v1，全部侧车字节复原");
+        }
+    }
+
+    /// 递归统计目录字节数。只服务基线采样，不追求精确到分配粒度。
+    #[cfg(not(debug_assertions))]
+    fn directory_size(root: &Path) -> u64 {
+        let mut total = 0u64;
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let Ok(meta) = entry.metadata() {
+                    total += meta.len();
+                }
+            }
+        }
+        total
+    }
 }

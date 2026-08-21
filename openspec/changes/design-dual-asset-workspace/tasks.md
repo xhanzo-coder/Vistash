@@ -27,7 +27,21 @@
 > 成功后接管为当前库并持久化设置。前端 `LibraryMigration` 阻塞页迁移期间禁用重入、呈现
 > 进度与稳定错误码并允许失败后重试；`LibraryPicker` 遇到该错误码直接进入迁移页。进度
 > 发送失败不中止迁移：完整性由独占锁、journal 与备份树保证，不依赖观察者存在。
-- [ ] 2.6 在 1,000 和 10,000 侧车 release fixture 记录迁移耗时、磁盘峰值、中断恢复耗时与回滚结果
+- [x] 2.6 在 1,000 和 10,000 侧车 release fixture 记录迁移耗时、磁盘峰值、中断恢复耗时与回滚结果
+
+> 2.6 落地（2026-08-21）：`migration.rs` 新增 release 专用基线测试
+> `migration_release_baseline_on_thousand_and_ten_thousand_sidecars`
+>（`#[cfg(not(debug_assertions))]` + `--ignored`），在 1,000 与 10,000 侧车真实 v1 fixture 上
+> 各测三件事并经 eprintln 输出：完整迁移耗时与磁盘峰值（每 256 个进度事件采样一次库目录
+> 字节数取峰值）；在 `SidecarsRewritten` 阶段模拟中断后用全新 `Migration` 续跑并断言
+> `resumed=true`；在第 count/2 个侧车注入写入失败后断言 `library.json` 仍为 v1 且全部侧车
+> 字节复原。实测（Windows，release）：1,000 侧车完整迁移 3.10 s、磁盘峰值约 1 MiB、
+> 中断续跑 368 ms；10,000 侧车完整迁移 107.7 s（约 10.8 ms/侧车，符合设计"Windows 下可能
+> 耗时数分钟"的预期）、磁盘峰值约 14 MiB、中断续跑 3.52 s；两档注入失败均回滚成功。
+> 续跑远快于完整迁移，证明 journal 跳过已重写侧车生效。顺带修复：3.2/3.3 侧车改名后，
+> 既有的 release 门控性能测试（`catalog/testing.rs` 的 `synthetic_sidecar`、`query.rs` 与
+> `image_metadata.rs` 的基线测试）在 release 下已无法编译而 debug 四道门从不编译它们——
+> 本次补齐 import 并删除改名遗留的未用引用，release lib test 目标重新可编译。
 
 > 顺序调整（2026-08-21，经产品所有者确认）：2.5 与 2.6 移到第 3 章之后执行。理由是已验证的依赖，
 > 而不是工作量偏好——迁移的最后一步要重建 v2 索引（设计第四条步骤 4），唯一实现 `Index::rebuild`

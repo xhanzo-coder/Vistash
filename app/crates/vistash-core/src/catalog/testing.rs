@@ -12,6 +12,19 @@ use crate::sidecar::AssetSidecar;
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
 
+// `synthetic_sidecar` 只服务 release 性能基线，debug 构建不编译它，import 也一并门控，
+// 否则 debug 下会报 unused import。
+#[cfg(not(debug_assertions))]
+use crate::colorcard::ColorCard;
+#[cfg(not(debug_assertions))]
+use crate::error::Code;
+#[cfg(not(debug_assertions))]
+use crate::hashing::{ContentHash, HASH_ALGO_ID};
+#[cfg(not(debug_assertions))]
+use crate::media::MediaType;
+#[cfg(not(debug_assertions))]
+use crate::sidecar::SIDECAR_FORMAT_VERSION_V2;
+
 pub(super) struct Fixture {
     pub(super) catalog: Catalog,
     pub(super) source: PathBuf,
