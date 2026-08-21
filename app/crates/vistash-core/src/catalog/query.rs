@@ -94,6 +94,8 @@ mod tests {
     use crate::catalog::testing::{fixture, import_with, write_png};
     use crate::error::Code;
     use crate::import::{import_one, ImportOptions, NoopObserver};
+    use crate::library::{FolderList, LIBRARY_FORMAT_VERSION};
+    use crate::prompt::{PromptAsset, PromptId, PromptFolderList, PROMPT_FORMAT_VERSION};
     #[cfg(not(debug_assertions))]
     use crate::catalog::testing::synthetic_sidecar;
     #[cfg(not(debug_assertions))]
@@ -322,6 +324,188 @@ mod tests {
 
         assert_eq!(after, before);
         assert_eq!(duplicate.code, Code::ImportDuplicateInTrash);
+    }
+
+    #[test]
+    fn deleting_and_rebuilding_the_index_reproduces_the_full_v2_snapshot() {
+        // 任务 3.4：删除并重建索引后，完整快照与增量索引逐字段相等。比较范围刻意取
+        // 整个 IndexSnapshot 而不是单侧查询：两套空文件夹、图片 note/favorite、提示词
+        // 全字段、两类回收站与普通关联/封面都必须在重建后原样出现。
+        let mut fixture = fixture();
+
+        // 图片：一张带多行备注与收藏，一张经生产删除路径移入回收站（侧车进 trash 树）。
+        let noted_src = write_png(&fixture.source, "带备注.png", [255, 0, 0, 255]);
+        let trashed_src = write_png(&fixture.source, "已删除.png", [0, 0, 255, 255]);
+        let mut noted = import_with(&mut fixture.catalog, &noted_src, &["人物/室内"], &["人物"]);
+        noted.note = "第一行\n\n第三行".to_owned();
+        noted.favorite = true;
+        noted
+            .write_atomic(&fixture.catalog.library().sidecar_path(&noted.hash))
+            .expect("重写带备注侧车");
+        fixture
+            .catalog
+            .index_imported(std::slice::from_ref(&noted))
+            .expect("写入备注素材");
+        let trashed = import_with(&mut fixture.catalog, &trashed_src, &["参考/构图"], &["参考"]);
+        fixture
+            .catalog
+            .delete_asset(&trashed.hash)
+            .expect("移入图片回收站");
+
+        // 提示词：一条全字段，关联两张图片并显式指定封面；一条在回收站且保留关联。
+        let full = PromptAsset {
+            format_version: PROMPT_FORMAT_VERSION,
+            id: PromptId::parse("018f3c9e-6c00-7000-8000-0000000000b1").expect("合法 ID"),
+            body: "逆光人像，胶片颗粒".to_owned(),
+            title: Some("逆光人像".to_owned()),
+            model: Some("某生图模型 v3".to_owned()),
+            parameters: Some("steps=30, cfg=6".to_owned()),
+            note: "提示词备注".to_owned(),
+            favorite: true,
+            folders: vec!["人物/室内".to_owned()],
+            tags: vec!["人物".to_owned(), "逆光".to_owned()],
+            linked_image_hashes: vec![trashed.hash.clone(), noted.hash.clone()],
+            cover_image_hash: Some(noted.hash.clone()),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            deleted_from_folders: None,
+        };
+        let trashed_prompt = PromptAsset {
+            format_version: PROMPT_FORMAT_VERSION,
+            id: PromptId::parse("018f3c9e-6c00-7000-8000-0000000000b2").expect("合法 ID"),
+            body: "已删除的正文".to_owned(),
+            title: None,
+            model: None,
+            parameters: None,
+            note: String::new(),
+            favorite: false,
+            folders: vec!["人物/室内".to_owned()],
+            tags: vec!["人物".to_owned()],
+            linked_image_hashes: vec![noted.hash.clone()],
+            cover_image_hash: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: Some(chrono::Utc::now()),
+            deleted_from_folders: Some(vec!["人物/室内".to_owned()]),
+        };
+        full
+            .write_atomic(&fixture.catalog.library().prompt_path(&full.id))
+            .expect("写入提示词权威文件");
+        trashed_prompt
+            .write_atomic(&fixture.catalog.library().prompt_trash_path(&trashed_prompt.id))
+            .expect("写入回收站提示词文件");
+        fixture
+            .catalog
+            .index_mut()
+            .expect("索引")
+            .upsert_prompts(&[full.clone(), trashed_prompt.clone()])
+            .expect("写入提示词索引");
+
+        // 两套清单独立持久化：同名路径各自存在，各自带一个不含素材的空文件夹。
+        let folders = FolderList {
+            format_version: LIBRARY_FORMAT_VERSION,
+            folders: vec![
+                "人物/室内".to_owned(),
+                "参考/构图".to_owned(),
+                "空文件夹".to_owned(),
+            ],
+        };
+        fixture
+            .catalog
+            .library()
+            .write_folders(&folders)
+            .expect("写图片文件夹清单");
+        fixture
+            .catalog
+            .index_mut()
+            .expect("索引")
+            .set_folders(&folders)
+            .expect("写图片文件夹清单索引");
+        let prompt_folders = PromptFolderList {
+            format_version: PROMPT_FORMAT_VERSION,
+            folders: vec![
+                "人物/室内".to_owned(),
+                "空提示词文件夹".to_owned(),
+            ],
+        };
+        fixture
+            .catalog
+            .library()
+            .write_prompt_folders(&prompt_folders)
+            .expect("写提示词文件夹清单");
+        fixture
+            .catalog
+            .index_mut()
+            .expect("索引")
+            .set_prompt_folders(&prompt_folders)
+            .expect("写提示词文件夹清单索引");
+
+        let before = fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .snapshot()
+            .expect("重建前快照");
+
+        // rebuild_index 先删除旧索引文件再从权威文件全量重建（Index::rebuild_at），
+        // 正是"删除并重建"的生产入口。
+        fixture.catalog.rebuild_index().expect("删除并重建索引");
+        let after = fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .snapshot()
+            .expect("重建后快照");
+
+        assert_eq!(after, before);
+
+        // 针对性断言记录等价必须覆盖的意图：即使整体比较被意外放宽，这些点也不得悄悄丢失。
+        let trashed_row = after
+            .assets
+            .iter()
+            .find(|a| a.original_filename == "已删除.png")
+            .expect("回收站图片应在快照中");
+        assert!(
+            trashed_row.deleted_at.is_some(),
+            "图片回收站状态在重建后丢失"
+        );
+        let full_row = after
+            .prompts
+            .iter()
+            .find(|p| p.title.as_deref() == Some("逆光人像"))
+            .expect("提示词行应在快照中");
+        assert_eq!(
+            full_row.linked_image_hashes,
+            vec![trashed.hash.as_str().to_owned(), noted.hash.as_str().to_owned()],
+            "关联顺序在重建后改变"
+        );
+        assert_eq!(
+            full_row.cover_image_hash.as_deref(),
+            Some(noted.hash.as_str()),
+            "显式封面在重建后丢失"
+        );
+        let trashed_prompt_row = after
+            .prompts
+            .iter()
+            .find(|p| p.body == "已删除的正文")
+            .expect("回收站提示词应在快照中");
+        assert!(
+            trashed_prompt_row.deleted_at.is_some(),
+            "提示词回收站状态在重建后丢失"
+        );
+        assert_eq!(
+            trashed_prompt_row.linked_image_hashes,
+            vec![noted.hash.as_str().to_owned()],
+            "回收站提示词的关联在重建后丢失"
+        );
+        assert!(
+            after.folders.contains(&"空文件夹".to_owned())
+                && after.prompt_folders.contains(&"空提示词文件夹".to_owned()),
+            "两套空文件夹都应在重建后存活：{:?} / {:?}",
+            after.folders,
+            after.prompt_folders
+        );
     }
 
     #[test]
