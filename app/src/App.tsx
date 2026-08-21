@@ -115,6 +115,7 @@ export function App() {
     return (
       <LibraryPicker
         problem={status.problem}
+        recordedPath={status.recorded_path}
         onOpened={(next) => {
           setStatus(next);
           setOutcome(null);

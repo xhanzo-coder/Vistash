@@ -61,6 +61,9 @@ pub enum Code {
     LibraryNotFound,
     LibraryPathUnreadable,
     LibraryFormatTooNew,
+    /// 库格式比当前数据模型旧。它不是损坏：开库入口应把它转成一次明确的迁移，
+    /// 而不是让使用者面对"元数据损坏"误以为素材丢了。
+    LibraryFormatTooOld,
     LibraryMetadataCorrupt,
     LibraryDirectoryNotEmpty,
     LibraryCreateFailed,
@@ -114,6 +117,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::LibraryNotFound,
     Code::LibraryPathUnreadable,
     Code::LibraryFormatTooNew,
+    Code::LibraryFormatTooOld,
     Code::LibraryMetadataCorrupt,
     Code::LibraryDirectoryNotEmpty,
     Code::LibraryCreateFailed,
@@ -167,6 +171,7 @@ impl Code {
             LibraryNotFound
             | LibraryPathUnreadable
             | LibraryFormatTooNew
+            | LibraryFormatTooOld
             | LibraryMetadataCorrupt
             | LibraryDirectoryNotEmpty
             | LibraryCreateFailed
@@ -221,6 +226,7 @@ impl Code {
             LibraryNotFound => "library.not_found",
             LibraryPathUnreadable => "library.path_unreadable",
             LibraryFormatTooNew => "library.format_too_new",
+            LibraryFormatTooOld => "library.format_too_old",
             LibraryMetadataCorrupt => "library.metadata_corrupt",
             LibraryDirectoryNotEmpty => "library.directory_not_empty",
             LibraryCreateFailed => "library.create_failed",

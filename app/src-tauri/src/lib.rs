@@ -25,6 +25,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::library_status,
             commands::open_library,
+            commands::migrate_library,
             commands::list_assets,
             commands::catalog_snapshot,
             commands::create_folder,

@@ -20,6 +20,7 @@ import type {
   ImportOutcome,
   ImportProgress,
   LibraryStatus,
+  MigrationProgress,
   PurgeReport,
   RestoreOutcome,
 } from "./types";
@@ -55,6 +56,15 @@ export async function pickLibraryDirectory(): Promise<string | null> {
 /** 打开选中的目录；该目录还不是库时创建一个。 */
 export function openLibrary(path: string): Promise<LibraryStatus> {
   return call<LibraryStatus>("open_library", { path });
+}
+
+/** 对旧版本格式的库执行一次性迁移，成功后该库成为当前库。 */
+export function migrateLibrary(
+  path: string,
+  onProgress: (progress: MigrationProgress) => void,
+): Promise<LibraryStatus> {
+  const progress = new Channel<MigrationProgress>(onProgress);
+  return call<LibraryStatus>("migrate_library", { path, onProgress: progress });
 }
 
 /** 网格用的素材列表，不含回收站中的素材。 */

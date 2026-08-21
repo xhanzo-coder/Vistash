@@ -53,6 +53,8 @@ export type AssetRow = {
 export type LibraryStatus = {
   /** 已打开的库根路径。null 表示需要使用者选择。 */
   path: string | null;
+  /** 设置里记录的库路径。path 为 null 而它有值时，可以直接对它发起迁移。 */
+  recorded_path: string | null;
   /** 恢复上次的库失败时的原因。 */
   problem: AppError | null;
 };
@@ -108,6 +110,18 @@ export type CatalogSnapshot = {
 export type FolderMutationProgress = {
   done: number;
   total: number;
+  current_filename: string;
+};
+
+/** `commands::MigrationProgress`：v1→v2 一次性迁移的进度。 */
+export type MigrationProgress = {
+  /** 正在进行的阶段，取后端 `MigrationStage::as_str` 的稳定字面量。 */
+  stage: string;
+  /** 已处理的侧车数。 */
+  done: number;
+  /** 待处理的侧车总数。 */
+  total: number;
+  /** 当前处理的侧车文件名，不含路径。 */
   current_filename: string;
 };
 

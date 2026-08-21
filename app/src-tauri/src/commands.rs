@@ -23,9 +23,12 @@ use vistash_core::catalog::{
 use vistash_core::error::{AppError, Code, Result};
 use vistash_core::hashing::ContentHash;
 use vistash_core::import::{self, ImportFailure, ImportObserver, ImportOptions};
-use vistash_core::index::AssetRow;
+use vistash_core::index::{AssetRow, Index};
 use vistash_core::library::Library;
 use vistash_core::media::MediaType;
+use vistash_core::migration::{
+    detect_library_format, LibraryFormatState, Migration, MigrationProgress as MigrationProgressCore,
+};
 use vistash_core::settings::AppSettings;
 
 /// 一个已打开的库及其索引。
@@ -39,6 +42,9 @@ struct Opened {
 pub struct AppState {
     settings_path: PathBuf,
     opened: Option<Arc<Opened>>,
+    /// 设置里记录的库路径，即使打不开也报告：待迁移的旧库需要前端直接给出迁移入口，
+    /// 而不是让使用者重新在目录树里找一遍这个位置。首次运行时为 `None`。
+    recorded_path: Option<String>,
     /// 启动时恢复上次的库失败的原因。首次运行时为 `None`。
     restore_problem: Option<AppError>,
 }
@@ -53,6 +59,7 @@ impl AppState {
         let mut state = Self {
             settings_path,
             opened: None,
+            recorded_path: None,
             restore_problem: None,
         };
         let recorded = match AppSettings::read(&state.settings_path) {
@@ -66,7 +73,8 @@ impl AppState {
             // 首次运行：没有记录不是失败，界面直接进选择流程。
             return state;
         };
-        match open_at(&PathBuf::from(&path)) {
+        state.recorded_path = Some(path.clone());
+        match with_migration_signal(&PathBuf::from(&path), open_at) {
             Ok(opened) => state.opened = Some(opened),
             Err(e) => state.restore_problem = Some(e),
         }
@@ -100,6 +108,9 @@ pub type Shared = Mutex<AppState>;
 pub struct LibraryStatus {
     /// 已打开的库根路径。`None` 表示需要使用者选择。
     pub path: Option<String>,
+    /// 设置里记录的库路径。`path` 为 `None` 而它有值时，前端可以直接对它发起迁移，
+    /// 不需要使用者重新寻找目录。
+    pub recorded_path: Option<String>,
     /// 恢复上次的库失败时的原因。界面必须连同错误码一起呈现，而不是只说"请选择库"。
     pub problem: Option<AppError>,
 }
@@ -129,6 +140,32 @@ fn not_selected() -> AppError {
     AppError::detailed(Code::LibraryNotFound, "尚未选择库")
 }
 
+/// 执行一次开库尝试，把"待迁移的旧库"与"真损坏"区分开。
+///
+/// `Library::open` 按 v2 必填字段解析，遇到 v1 只能报"元数据损坏"；但对使用者而言
+/// 两者完全不同：前者是正常旧库，应当给出迁移入口，后者才需要担心数据。因此开库
+/// 失败后再问一次 `detect_library_format`，把前者换成一个稳定的"需要迁移"错误码，
+/// 让界面能据此启动明确的一次性迁移（设计第四条），而不是让使用者对着损坏文案发懵。
+fn with_migration_signal<T>(root: &Path, attempt: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
+    attempt(root).map_err(|open_error| {
+        let needs_migration = matches!(
+            detect_library_format(root),
+            Ok(
+                LibraryFormatState::NeedsMigration { .. }
+                    | LibraryFormatState::MigrationIncomplete(_)
+            )
+        );
+        if needs_migration {
+            AppError::detailed(
+                Code::LibraryFormatTooOld,
+                format!("库是旧版本格式，需要一次性迁移后才能打开：{}", root.display()),
+            )
+        } else {
+            open_error
+        }
+    })
+}
+
 fn status_of(state: &AppState) -> Result<LibraryStatus> {
     let path = match state.opened.as_ref() {
         Some(opened) => Some(
@@ -142,6 +179,7 @@ fn status_of(state: &AppState) -> Result<LibraryStatus> {
     };
     Ok(LibraryStatus {
         path,
+        recorded_path: state.recorded_path.clone(),
         problem: state.restore_problem.clone(),
     })
 }
@@ -227,24 +265,83 @@ pub fn library_status(state: tauri::State<'_, Shared>) -> Result<LibraryStatus> 
 #[tauri::command]
 pub fn open_library(path: String, state: tauri::State<'_, Shared>) -> Result<LibraryStatus> {
     let root = PathBuf::from(&path);
-    let opened = open_derived(Library::open_or_create(&root)?)?;
+    let opened = with_migration_signal(&root, |r| open_derived(Library::open_or_create(r)?))?;
+    adopt_library(opened, &state)
+}
 
+/// 把已打开的库接管为当前库：持久化记录并更新应用状态。
+///
+/// 只在成功打开之后才落盘记住。若在选择时就写入，一个打不开的目录会被记住，
+/// 于是下次启动仍然撞在同一个错误上。
+fn adopt_library(opened: Arc<Opened>, state: &Shared) -> Result<LibraryStatus> {
     let opened_path = lock(&opened.catalog)?
         .library()
         .root()
         .to_string_lossy()
         .into_owned();
-    let mut guard = lock(&state)?;
-    // 只在成功打开之后才落盘记住。若在选择时就写入，一个打不开的目录会被记住，
-    // 于是下次启动仍然撞在同一个错误上。
+    let mut guard = lock(state)?;
     let settings = AppSettings {
         format_version: vistash_core::settings::SETTINGS_FORMAT_VERSION,
-        last_library_path: Some(opened_path),
+        last_library_path: Some(opened_path.clone()),
     };
     settings.write_atomic(&guard.settings_path)?;
     guard.opened = Some(opened);
+    guard.recorded_path = Some(opened_path);
     guard.restore_problem = None;
     status_of(&guard)
+}
+
+/// 一次迁移的进度。字段与导入、文件夹批量重命名的进度保持同一形状，
+/// 使前端只需要一种进度呈现。
+#[derive(Debug, Clone, Serialize)]
+pub struct MigrationProgress {
+    /// 正在进行的阶段，取核心 `MigrationStage::as_str` 的稳定字面量。
+    pub stage: String,
+    pub done: usize,
+    pub total: usize,
+    /// 当前处理的侧车文件名，不含路径。
+    pub current_filename: String,
+}
+
+/// 执行 v1→v2 一次性迁移，成功后把该库接管为当前库。
+///
+/// 迁移可能面对上万个侧车（任务 2.6 的量级），因此放 blocking worker。进度经
+/// typed `Channel` 呈现，与文件夹批量重命名同一模式。进度发送失败不中止迁移：
+/// 迁移的完整性由独占锁、journal 与备份树保证，不依赖有没有人在观察；中止语义
+/// 属于将来显式的取消入口，而不是通道断开的副作用。
+#[tauri::command]
+pub async fn migrate_library(
+    path: String,
+    on_progress: Channel<MigrationProgress>,
+    state: tauri::State<'_, Shared>,
+) -> Result<LibraryStatus> {
+    let root = PathBuf::from(&path);
+    let opened = tauri::async_runtime::spawn_blocking(move || -> Result<Arc<Opened>> {
+        let mut migration = Migration::new(&root);
+        // 索引重建由迁移以回调注入（设计第四条步骤 4）：迁移只负责权威文件，
+        // 派生索引属于 Catalog 一侧。`rebuild_at` 以库根路径为入口，正是迁移
+        // "版本最后提交"顺序所需要的——此刻 v2 library.json 还不在磁盘上。
+        let mut rebuild = |root: &Path| Index::rebuild_at(root).map(|_| ());
+        let mut forward = |progress: MigrationProgressCore| {
+            let _ = on_progress.send(MigrationProgress {
+                stage: progress.stage.as_str().to_owned(),
+                done: progress.done,
+                total: progress.total,
+                current_filename: progress.current_filename,
+            });
+        };
+        migration.run(&mut rebuild, &mut forward)?;
+        // 迁移完成后该库必然是 v2，按普通开库路径接管。
+        open_at(&root)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台迁移任务异常终止：{error}"),
+        )
+    })??;
+    adopt_library(opened, state.inner())
 }
 
 /// 网格用的素材列表，不含回收站中的素材。
@@ -644,6 +741,46 @@ mod tests {
         assert!(
             missing.is_empty(),
             "errorText.ts 缺少这些错误码的中文文案：{missing:?}"
+        );
+    }
+
+    /// 待迁移的旧库必须得到稳定的"需要迁移"信号，而不是"元数据损坏"。
+    ///
+    /// 设计第四条要求开库发现 v1 时启动明确的一次性迁移。若这个状态被压进损坏文案，
+    /// 使用者会对一个完全正常的旧库以为素材已经丢失。
+    #[test]
+    fn a_v1_library_is_signaled_as_needing_migration_not_corruption() {
+        let dir = tempfile::tempdir().expect("建立临时目录");
+        std::fs::write(
+            dir.path().join("library.json"),
+            r#"{"format_version":1}"#,
+        )
+        .expect("写 v1 库元数据");
+
+        let err = super::with_migration_signal(dir.path(), |root| {
+            vistash_core::library::Library::open(root).map(|_| ())
+        })
+        .expect_err("v1 库应被要求先迁移");
+        assert_eq!(
+            err.code,
+            vistash_core::error::Code::LibraryFormatTooOld,
+            "v1 库被误报为其他错误：{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_truly_corrupt_library_keeps_the_corruption_error() {
+        let dir = tempfile::tempdir().expect("建立临时目录");
+        std::fs::write(dir.path().join("library.json"), "{ 这不是 JSON").expect("写损坏元数据");
+
+        let err = super::with_migration_signal(dir.path(), |root| {
+            vistash_core::library::Library::open(root).map(|_| ())
+        })
+        .expect_err("损坏的库不应被误报为待迁移");
+        assert_eq!(
+            err.code,
+            vistash_core::error::Code::LibraryMetadataCorrupt,
+            "真损坏被误判成别的错误：{err:?}"
         );
     }
 }

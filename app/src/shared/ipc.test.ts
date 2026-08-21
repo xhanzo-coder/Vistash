@@ -11,6 +11,7 @@ import {
   deleteAsset,
   deleteFolder,
   importPaths,
+  migrateLibrary,
   purgeTrash,
   renameFolder,
   restoreAsset,
@@ -23,6 +24,8 @@ import type {
   FolderMutationProgress,
   ImportOutcome,
   ImportProgress,
+  LibraryStatus,
+  MigrationProgress,
   PurgeReport,
   RestoreOutcome,
 } from "./types";
@@ -35,6 +38,39 @@ afterEach(() => {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+test("migrateLibrary 转交迁移进度并使用固定 command 名", async () => {
+  const expected: MigrationProgress = {
+    stage: "sidecars_rewritten",
+    done: 7,
+    total: 20,
+    current_filename: "pinterest_008.jpg",
+  };
+  const status: LibraryStatus = {
+    path: "E:\\旧库",
+    recorded_path: "E:\\旧库",
+    problem: null,
+  };
+
+  mockIPC((command, payload) => {
+    expect(command).toBe("migrate_library");
+    if (!isRecord(payload)) {
+      throw new TypeError("migrate_library 的 IPC 参数不是对象");
+    }
+    if (payload.path !== "E:\\旧库") {
+      throw new TypeError("migrate_library 缺少库路径");
+    }
+    const channel = payload.onProgress;
+    if (channel instanceof Channel) {
+      channel.onmessage(expected);
+    }
+    return status;
+  });
+
+  const received = vi.fn<(progress: MigrationProgress) => void>();
+  await expect(migrateLibrary("E:\\旧库", received)).resolves.toEqual(status);
+  expect(received).toHaveBeenCalledExactlyOnceWith(expected);
+});
 
 test("importPaths 把当前文件与数量进度转交给调用方", async () => {
   const expected: ImportProgress = {

@@ -35,6 +35,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "library.not_found": "这个位置不是 Vistash 库。",
   "library.path_unreadable": "读不到库目录。它可能已被移动、删除，或当前账户没有读取权限。",
   "library.format_too_new": "这个库的格式版本高于当前程序支持的版本，已拒绝打开以免损坏数据。请升级 Vistash。",
+  "library.format_too_old": "这个库还是旧版本格式。它没有损坏——启动一次性迁移后即可打开，迁移会先备份原始文件。",
   "library.metadata_corrupt": "库的元数据文件损坏，已拒绝打开。程序不会自行重建它——哈希算法标识无法从素材反推，猜错会让全库去重判定失效。",
   "library.directory_not_empty": "这个目录里已有其他文件，不能在其中建库。请选择一个空目录，或选择一个已有的 Vistash 库。",
   "library.create_failed": "建立库目录失败。",
