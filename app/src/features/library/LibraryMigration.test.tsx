@@ -12,6 +12,7 @@ import { LibraryMigration } from "./LibraryMigration";
 
 const STATUS: LibraryStatus = {
   path: "E:\\旧库",
+  library_id: null,
   recorded_path: "E:\\旧库",
   problem: null,
 };

@@ -323,7 +323,24 @@
 > 已弃用。旧 `.eyebrow` 标签仍被素材空状态使用，补回语义化规则（小字号按 4.5:1 取
 > 强调深色）。固定 960px 最小宽按任务边界保留，8.6 折叠抽屉落地时删除。四道门禁通过
 > （前端 lint/typecheck/27 测试、Rust 全部目标零失败、clippy -D warnings 干净）。
-- [ ] 8.3 建立分库布局/视图/文件夹/筛选/滚动偏好模型，以 `library_id` 持久化并验证库路径移动后仍能恢复
+- [x] 8.3 建立分库布局/视图/文件夹/筛选/滚动偏好模型，以 `library_id` 持久化并验证库路径移动后仍能恢复
+
+> 8.3 落在 `commands.rs`、`src/shared/types.ts` 与新建的
+> `src/features/workspace/libraryLayout.ts|test.tsx`（2026-08-21）。`LibraryStatus`
+> 新增 `library_id`（取自打开库 v2 元数据的稳定 ID），使前端拿得到持久化键——预期值
+> 在 Rust 测试里从磁盘权威 `library.json` 独立读回而非同一内存对象自证，未开库时
+> 断言无 ID 可报。前端模型：`normalizeLayout` 把后端透传的任意 JSON 逐字段安全合并
+> 到默认值上（视图/文件夹/标签/收藏/滚动偏移，坏字段各自回退不拖垮整份），形状校验
+> 因此完全属于前端领域；`useLibraryLayout(libraryId)` 完成按库读取、更新与防抖写回。
+> 关键语义各有测试钉住：切库时旧库待写先落盘且新库读不到他库偏好；**库目录移动后同
+> 一 library_id 仍恢复布局**（mock 仓库只认 ID，"路径不参与键"即恢复语义的结构本身）；
+> 读失败呈现 problem 且停在默认值、写失败呈现 problem 而界面状态照常生效——损坏绝不
+> 静默重置，也绝不阻塞工作台；读取期间已有本地调整时不被磁盘旧值覆盖；未选库时零
+> IPC。React 实现遵守项目 lint 的两条硬规则：effect 内不同步 setState（快照记录自己
+> 的库 ID，渲染期派生回默认值）、渲染期不读写 ref（合并基底只在 effect 与事件里维护）。
+> 消费方接入随第 9 章 AssetWorkspace 重建进行，本任务交付的是带完整合同测试的接缝。
+> 四道门禁通过（前端 lint/typecheck/35 测试、Rust 282 测试零失败、clippy -D warnings
+> 干净）。
 - [ ] 8.4 先为统一 `SelectionModel` reducer 建立单击、Ctrl/Shift、框选、Ctrl+A、活动项、范围锚点、Esc 与跨视图保留测试
 - [ ] 8.5 实现可被图片与提示词视图复用的选择 Context、批量工具条、共同/混合检查器摘要与键盘焦点语法
 - [ ] 8.6 实现中等/窄窗口左栏折叠与右检查器抽屉，删除固定 960px 最小宽并保证焦点不被粘性层遮挡

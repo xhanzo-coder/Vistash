@@ -115,6 +115,9 @@ pub type Shared = Mutex<AppState>;
 pub struct LibraryStatus {
     /// 已打开的库根路径。`None` 表示需要使用者选择。
     pub path: Option<String>,
+    /// 打开库的稳定标识。分库布局偏好以它为键（设计第一条）：键是库身份而不是
+    /// 路径，目录改名或搬到另一个盘后偏好仍然跟随，不会表现为"设置自己复位"。
+    pub library_id: Option<LibraryId>,
     /// 设置里记录的库路径。`path` 为 `None` 而它有值时，前端可以直接对它发起迁移，
     /// 不需要使用者重新寻找目录。
     pub recorded_path: Option<String>,
@@ -174,18 +177,20 @@ fn with_migration_signal<T>(root: &Path, attempt: impl FnOnce(&Path) -> Result<T
 }
 
 fn status_of(state: &AppState) -> Result<LibraryStatus> {
-    let path = match state.opened.as_ref() {
-        Some(opened) => Some(
-            lock(&opened.catalog)?
-                .library()
-                .root()
-                .to_string_lossy()
-                .into_owned(),
-        ),
-        None => None,
+    let (path, library_id) = match state.opened.as_ref() {
+        Some(opened) => {
+            let catalog = lock(&opened.catalog)?;
+            let library = catalog.library();
+            (
+                Some(library.root().to_string_lossy().into_owned()),
+                Some(library.meta().library_id.clone()),
+            )
+        }
+        None => (None, None),
     };
     Ok(LibraryStatus {
         path,
+        library_id,
         recorded_path: state.recorded_path.clone(),
         problem: state.restore_problem.clone(),
     })
@@ -1382,6 +1387,56 @@ mod tests {
             err.code,
             vistash_core::error::Code::LibraryMetadataCorrupt,
             "真损坏被误判成别的错误：{err:?}"
+        );
+    }
+
+    /// 库状态必须携带稳定的库 ID。
+    ///
+    /// 分库布局偏好以它为键（设计第一条）：前端拿不到 ID 就只能退回路径键，而路径键
+    /// 会在库目录改名或搬家时静默丢掉全部偏好——使用者看到的现象是"设置自己复位了"。
+    /// 预期值从磁盘上的权威 `library.json` 独立读回，而不是经由同一份内存对象自证。
+    #[test]
+    fn status_reports_the_stable_id_of_the_opened_library() {
+        let workspace = tempfile::tempdir().expect("建立临时目录");
+        let lib_dir = workspace.path().join("素材库");
+        let settings_path = workspace.path().join("settings.json");
+
+        {
+            let _lib = vistash_core::library::Library::open_or_create(&lib_dir)
+                .expect("建立临时 v2 库");
+        } // 先释放句柄：恢复流程要重新打开库与派生数据。
+
+        let settings = vistash_core::settings::AppSettings {
+            format_version: vistash_core::settings::SETTINGS_FORMAT_VERSION,
+            last_library_path: Some(lib_dir.to_string_lossy().into_owned()),
+        };
+        settings.write_atomic(&settings_path).expect("写入设置");
+
+        let state = super::AppState::restore(settings_path, workspace.path().join("layouts"));
+        let status = super::status_of(&state).expect("状态应可读");
+
+        let meta_text =
+            std::fs::read_to_string(lib_dir.join("library.json")).expect("读库元数据");
+        let meta: serde_json::Value = serde_json::from_str(&meta_text).expect("解析库元数据");
+        let expected = meta["library_id"]
+            .as_str()
+            .expect("v2 元数据含字符串 library_id")
+            .to_owned();
+        assert_eq!(
+            status.library_id.as_ref().map(ToString::to_string),
+            Some(expected),
+            "状态未报告打开库的稳定 ID"
+        );
+
+        // 没有任何库被打开时自然没有 ID 可言：选择界面拿到的状态不得假装有键可存。
+        let blank = super::AppState::restore(
+            workspace.path().join("不存在的设置.json"),
+            workspace.path().join("layouts"),
+        );
+        let none_status = super::status_of(&blank).expect("空状态应可读");
+        assert!(
+            none_status.library_id.is_none(),
+            "未开库的状态不该带出库 ID"
         );
     }
 }

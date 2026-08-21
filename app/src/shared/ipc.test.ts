@@ -81,6 +81,7 @@ test("migrateLibrary 转交迁移进度并使用固定 command 名", async () =>
   };
   const status: LibraryStatus = {
     path: "E:\\旧库",
+    library_id: null,
     recorded_path: "E:\\旧库",
     problem: null,
   };

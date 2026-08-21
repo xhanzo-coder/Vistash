@@ -57,6 +57,11 @@ export type AssetRow = {
 export type LibraryStatus = {
   /** 已打开的库根路径。null 表示需要使用者选择。 */
   path: string | null;
+  /**
+   * 打开库的稳定标识。分库布局偏好以它为键：键是库身份而不是路径，目录改名或
+   * 搬家后偏好仍然跟随。
+   */
+  library_id: string | null;
   /** 设置里记录的库路径。path 为 null 而它有值时，可以直接对它发起迁移。 */
   recorded_path: string | null;
   /** 恢复上次的库失败时的原因。 */
