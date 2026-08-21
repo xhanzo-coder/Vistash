@@ -5,7 +5,7 @@
 //! 查询都会让这条等价性无法被测试证明。
 
 use crate::error::Result;
-use crate::index::{AssetRow, FolderSelection, Index};
+use crate::index::{AssetRow, FolderSelection, Index, PromptRow};
 use serde::Serialize;
 
 use super::image_metadata::{FolderPath, Tag};
@@ -33,6 +33,42 @@ pub struct AssetQuery {
     pub tags: Vec<Tag>,
     pub folder: FolderFilter,
     pub location: AssetLocation,
+}
+
+/// 提示词查询正常库或回收站。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptLocation {
+    Active,
+    Trash,
+}
+
+/// 提示词库的一次组合查询。
+///
+/// 与 [`AssetQuery`] 平行但多了收藏筛选：提示词没有"文件名"可匹配，文本命中的是
+/// 标题与正文；收藏是规格明确要求的独立筛选维度。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptQuery {
+    /// 标题或正文的 Unicode 子串（大小写折叠）。空串表示不过滤。
+    pub text: String,
+    /// 全部必须命中的共享标签（AND 语义）。
+    pub tags: Vec<Tag>,
+    /// 提示词文件夹范围。与图片文件夹是两棵独立的树。
+    pub folder: FolderFilter,
+    /// 收藏筛选。`None` 表示不限。
+    pub favorite: Option<bool>,
+    pub location: PromptLocation,
+}
+
+/// 提示词工作区一次刷新所需的一致快照。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PromptSnapshot {
+    /// 只含命中查询的轻量行；完整正文等详情经 `Catalog::prompt_detail` 按需读取。
+    pub prompts: Vec<PromptRow>,
+    /// 完整提示词文件夹树，与查询无关（左栏始终呈现整棵树）。
+    pub folders: Vec<String>,
+    /// 正常提示词的共享标签计数。分库计算，不含图片标签用量。
+    pub tags: Vec<TagUsage>,
+    pub trash_count: usize,
 }
 
 /// 一个标签及其正常素材使用数量。
@@ -83,6 +119,36 @@ impl Catalog {
                 .map(|(tag, count)| TagUsage { tag, count })
                 .collect(),
             trash_count: index.deleted_count()?,
+        })
+    }
+
+    pub fn prompt_snapshot(&self, query: &PromptQuery) -> Result<PromptSnapshot> {
+        let deleted = query.location == PromptLocation::Trash;
+        // 回收站视图忽略文件夹范围：素材已脱离组织树，按文件夹过滤回收站只会
+        // 让"它去哪了"更难回答。
+        let folder = match (&query.location, &query.folder) {
+            (PromptLocation::Trash, _) | (_, FolderFilter::All) => FolderSelection::All,
+            (_, FolderFilter::Root) => FolderSelection::Root,
+            (_, FolderFilter::Path(path)) => FolderSelection::Exact(path.as_str()),
+        };
+        let tags: Vec<String> = query
+            .tags
+            .iter()
+            .map(|tag| tag.as_str().to_owned())
+            .collect();
+        let index = self.index()?;
+        let prompts =
+            index.query_prompts(deleted, folder, &tags, query.favorite, &query.text)?;
+
+        Ok(PromptSnapshot {
+            prompts,
+            folders: self.library.read_prompt_folders()?.folders,
+            tags: index
+                .active_prompt_tag_counts()?
+                .into_iter()
+                .map(|(tag, count)| TagUsage { tag, count })
+                .collect(),
+            trash_count: index.deleted_prompt_count()?,
         })
     }
 }
@@ -540,4 +606,366 @@ mod tests {
         );
     }
 
+    /// 用固定时间戳与显式 ID 构造提示词，使排序断言完全确定。
+    fn crafted_prompt(
+        id: &str,
+        body: &str,
+        title: Option<&str>,
+        folders: &[&str],
+        tags: &[&str],
+        favorite: bool,
+        created_secs: i64,
+    ) -> PromptAsset {
+        let created = chrono::DateTime::from_timestamp(created_secs, 0).expect("固定时间戳");
+        PromptAsset {
+            format_version: PROMPT_FORMAT_VERSION,
+            id: PromptId::parse(id).expect("合法 ID"),
+            body: body.to_owned(),
+            title: title.map(|value| value.to_owned()),
+            model: None,
+            parameters: None,
+            note: String::new(),
+            favorite,
+            folders: folders.iter().map(|value| (*value).to_owned()).collect(),
+            tags: tags.iter().map(|value| (*value).to_owned()).collect(),
+            linked_image_hashes: vec![],
+            cover_image_hash: None,
+            created_at: created,
+            updated_at: created,
+            deleted_at: None,
+            deleted_from_folders: None,
+        }
+    }
+
+    /// 经生产路径落盘并写入派生索引；回收站状态自动落到回收站目录。
+    fn place_prompt(catalog: &mut crate::catalog::Catalog, prompt: &PromptAsset) {
+        let path = if prompt.is_deleted() {
+            catalog.library().prompt_trash_path(&prompt.id)
+        } else {
+            catalog.library().prompt_path(&prompt.id)
+        };
+        prompt.write_atomic(&path).expect("写入提示词权威文件");
+        catalog
+            .index_mut()
+            .expect("索引")
+            .upsert_prompt(prompt)
+            .expect("写入提示词索引");
+    }
+
+    fn ids_of(snapshot: &PromptSnapshot) -> Vec<String> {
+        snapshot.prompts.iter().map(|row| row.id.clone()).collect()
+    }
+
+    #[test]
+    fn prompt_query_matches_unicode_substrings_in_title_and_body() {
+        let mut fixture = fixture();
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000c1",
+                "cinematic lighting, warm tones",
+                Some("逆光人像"),
+                &[],
+                &[],
+                false,
+                100,
+            ),
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000c2",
+                "夜色中的霓虹灯街道",
+                None,
+                &[],
+                &[],
+                false,
+                200,
+            ),
+        );
+        let query_with = |text: &str| PromptQuery {
+            text: text.to_owned(),
+            tags: vec![],
+            folder: FolderFilter::All,
+            favorite: None,
+            location: PromptLocation::Active,
+        };
+
+        // 大小写折叠命中英文正文。
+        assert_eq!(
+            ids_of(&fixture.catalog.prompt_snapshot(&query_with("CINEMATIC")).expect("查询")),
+            vec!["018f3c9e-6c00-7000-8000-0000000000c1"]
+        );
+        // 中文子串命中无标题素材的正文：标题缺省不是特殊情形。
+        assert_eq!(
+            ids_of(&fixture.catalog.prompt_snapshot(&query_with("霓虹")).expect("查询")),
+            vec!["018f3c9e-6c00-7000-8000-0000000000c2"]
+        );
+        // 命中标题。
+        assert_eq!(
+            ids_of(&fixture.catalog.prompt_snapshot(&query_with("逆光")).expect("查询")),
+            vec!["018f3c9e-6c00-7000-8000-0000000000c1"]
+        );
+        // 无命中就是空结果，而不是全部素材。
+        assert!(fixture
+            .catalog
+            .prompt_snapshot(&query_with("不存在的词"))
+            .expect("查询")
+            .prompts
+            .is_empty());
+    }
+
+    #[test]
+    fn prompt_query_combines_folder_scope_root_and_tag_conjunction() {
+        let mut fixture = fixture();
+        let people = fixture
+            .catalog
+            .create_prompt_folder(None, &FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建根文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(Some(&people), &FolderName::parse("室内").expect("文件夹名"))
+            .expect("创建子文件夹");
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000d1",
+                "双标签",
+                None,
+                &["人物/室内"],
+                &["人物", "逆光"],
+                false,
+                300,
+            ),
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000d2",
+                "单标签",
+                None,
+                &["人物/室内"],
+                &["人物"],
+                false,
+                200,
+            ),
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000d3",
+                "根位置",
+                None,
+                &[],
+                &["人物"],
+                false,
+                100,
+            ),
+        );
+        let query_with = |folder: FolderFilter, tags: &[&str]| PromptQuery {
+            text: String::new(),
+            tags: tags
+                .iter()
+                .map(|raw| Tag::parse(raw).expect("标签"))
+                .collect(),
+            folder,
+            favorite: None,
+            location: PromptLocation::Active,
+        };
+
+        // 精确文件夹 + 双标签 AND：只有同时具备两个标签的成员命中。
+        assert_eq!(
+            ids_of(
+                &fixture
+                    .catalog
+                    .prompt_snapshot(&query_with(
+                        FolderFilter::Path(FolderPath::parse("人物/室内").expect("路径")),
+                        &["人物", "逆光"]
+                    ))
+                    .expect("查询")
+            ),
+            vec!["018f3c9e-6c00-7000-8000-0000000000d1"]
+        );
+        // 根位置 = 没有任何文件夹归属。
+        assert_eq!(
+            ids_of(
+                &fixture
+                    .catalog
+                    .prompt_snapshot(&query_with(FolderFilter::Root, &["人物"]))
+                    .expect("查询")
+            ),
+            vec!["018f3c9e-6c00-7000-8000-0000000000d3"]
+        );
+        // 全范围单标签按创建时间倒序稳定排列。
+        assert_eq!(
+            ids_of(
+                &fixture
+                    .catalog
+                    .prompt_snapshot(&query_with(FolderFilter::All, &["人物"]))
+                    .expect("查询")
+            ),
+            vec![
+                "018f3c9e-6c00-7000-8000-0000000000d1",
+                "018f3c9e-6c00-7000-8000-0000000000d2",
+                "018f3c9e-6c00-7000-8000-0000000000d3",
+            ]
+        );
+    }
+
+    #[test]
+    fn prompt_query_filters_favorite_and_location() {
+        let mut fixture = fixture();
+        let people = fixture
+            .catalog
+            .create_prompt_folder(None, &FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建根文件夹");
+        let _ = people;
+        let mut trashed = crafted_prompt(
+            "018f3c9e-6c00-7000-8000-0000000000e3",
+            "已删除",
+            None,
+            &["人物/室内"],
+            &[],
+            false,
+            200,
+        );
+        trashed.deleted_at = Some(chrono::DateTime::from_timestamp(900, 0).expect("固定时刻"));
+        trashed.deleted_from_folders = Some(vec!["人物/室内".to_owned()]);
+        place_prompt(&mut fixture.catalog, &trashed);
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000e1",
+                "收藏的",
+                None,
+                &[],
+                &[],
+                true,
+                400,
+            ),
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000e2",
+                "未收藏的",
+                None,
+                &[],
+                &[],
+                false,
+                300,
+            ),
+        );
+        let query_with = |favorite: Option<bool>, location: PromptLocation| PromptQuery {
+            text: String::new(),
+            tags: vec![],
+            folder: FolderFilter::All,
+            favorite,
+            location,
+        };
+
+        assert_eq!(
+            ids_of(
+                &fixture
+                    .catalog
+                    .prompt_snapshot(&query_with(Some(true), PromptLocation::Active))
+                    .expect("查询")
+            ),
+            vec!["018f3c9e-6c00-7000-8000-0000000000e1"]
+        );
+        assert_eq!(
+            ids_of(
+                &fixture
+                    .catalog
+                    .prompt_snapshot(&query_with(Some(false), PromptLocation::Active))
+                    .expect("查询")
+            ),
+            vec!["018f3c9e-6c00-7000-8000-0000000000e2"]
+        );
+        // 正常库不含回收站素材，且回收站计数独立呈现。
+        let active = fixture
+            .catalog
+            .prompt_snapshot(&query_with(None, PromptLocation::Active))
+            .expect("查询");
+        assert_eq!(active.trash_count, 1);
+        assert_eq!(
+            ids_of(&active),
+            vec![
+                "018f3c9e-6c00-7000-8000-0000000000e1",
+                "018f3c9e-6c00-7000-8000-0000000000e2"
+            ]
+        );
+        // 回收站视图返回被删素材，且忽略文件夹范围——它已脱离组织树。
+        let trash_view = fixture
+            .catalog
+            .prompt_snapshot(&PromptQuery {
+                text: String::new(),
+                tags: vec![],
+                folder: FolderFilter::Path(FolderPath::parse("人物/室内").expect("路径")),
+                favorite: None,
+                location: PromptLocation::Trash,
+            })
+            .expect("查询");
+        assert_eq!(
+            ids_of(&trash_view),
+            vec!["018f3c9e-6c00-7000-8000-0000000000e3"]
+        );
+    }
+
+    #[test]
+    fn prompt_query_orders_by_creation_descending_with_id_tiebreak() {
+        let mut fixture = fixture();
+        // 同一创建时刻的两条素材按 ID 倒序打破平局，保证排序全序且稳定。
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000f1",
+                "平局甲",
+                None,
+                &[],
+                &[],
+                false,
+                500,
+            ),
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000f2",
+                "平局乙",
+                None,
+                &[],
+                &[],
+                false,
+                500,
+            ),
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000f3",
+                "更早的",
+                None,
+                &[],
+                &[],
+                false,
+                100,
+            ),
+        );
+        let query = PromptQuery {
+            text: String::new(),
+            tags: vec![],
+            folder: FolderFilter::All,
+            favorite: None,
+            location: PromptLocation::Active,
+        };
+        assert_eq!(
+            ids_of(&fixture.catalog.prompt_snapshot(&query).expect("查询")),
+            vec![
+                "018f3c9e-6c00-7000-8000-0000000000f2",
+                "018f3c9e-6c00-7000-8000-0000000000f1",
+                "018f3c9e-6c00-7000-8000-0000000000f3",
+            ]
+        );
+    }
 }

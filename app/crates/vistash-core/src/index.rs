@@ -637,7 +637,7 @@ impl Index {
         Ok(IndexSnapshot {
             assets: self.load_assets("ORDER BY hash")?,
             folders: self.string_column("SELECT path FROM folders ORDER BY path")?,
-            prompts: self.load_prompts("ORDER BY id")?,
+            prompts: self.load_prompts("ORDER BY id", &[])?,
             prompt_folders: self
                 .string_column("SELECT path FROM prompt_folder_list ORDER BY path")?,
         })
@@ -661,7 +661,7 @@ impl Index {
     /// 文件夹重命名/删除需要遍历受影响的提示词权威文件；与图片侧一致，只遍历
     /// 正常库——回收站素材的原文件夹由还原语义处理，不随组织操作改写。
     pub fn list_prompts(&self) -> Result<Vec<PromptRow>> {
-        self.load_prompts("WHERE deleted_at IS NULL ORDER BY id")
+        self.load_prompts("WHERE deleted_at IS NULL ORDER BY id", &[])
     }
 
     /// 按位置、文件夹、全部标签和 Unicode 文件名组合查询。
@@ -703,6 +703,67 @@ impl Index {
             clauses.join(" AND ")
         );
         self.load_assets_with_params(&tail, &values, Some(filename_text))
+    }
+
+    /// 按位置、提示词文件夹、全部标签、收藏与标题/正文子串组合查询提示词。
+    ///
+    /// 文本匹配在 Rust 侧做大小写折叠子串比较：SQL 的 LIKE 只对 ASCII 折叠大小写，
+    /// 对中文与带变音符号的文本语义不对，而提示词的正文天然是多语言文本。
+    pub fn query_prompts(
+        &self,
+        deleted: bool,
+        folder: FolderSelection<'_>,
+        tags: &[String],
+        favorite: Option<bool>,
+        text: &str,
+    ) -> Result<Vec<PromptRow>> {
+        let mut clauses = vec![if deleted {
+            "p.deleted_at IS NOT NULL".to_owned()
+        } else {
+            "p.deleted_at IS NULL".to_owned()
+        }];
+        let mut values = Vec::<String>::new();
+        match folder {
+            FolderSelection::All => {}
+            FolderSelection::Root => clauses.push(
+                "NOT EXISTS (SELECT 1 FROM prompt_folders pf WHERE pf.id = p.id)".to_owned(),
+            ),
+            FolderSelection::Exact(path) => {
+                values.push(path.to_owned());
+                clauses.push(format!(
+                    "EXISTS (SELECT 1 FROM prompt_folders pf WHERE pf.id = p.id AND pf.folder = ?{})",
+                    values.len()
+                ));
+            }
+        }
+        for tag in tags {
+            values.push(tag.clone());
+            clauses.push(format!(
+                "EXISTS (SELECT 1 FROM prompt_tags pt WHERE pt.id = p.id AND pt.tag = ?{})",
+                values.len()
+            ));
+        }
+        if let Some(favorite) = favorite {
+            clauses.push(format!("p.favorite = {}", if favorite { "1" } else { "0" }));
+        }
+        let tail = format!(
+            "p WHERE {} ORDER BY p.created_at DESC, p.id DESC",
+            clauses.join(" AND ")
+        );
+        let mut prompts = self.load_prompts(&tail, &values)?;
+        let needle = text.to_lowercase();
+        if !needle.is_empty() {
+            // 标题缺省不是特殊情形：匹配只看标题与正文两份文本，缺省标题自然落到正文。
+            prompts.retain(|prompt| {
+                let title_hit = prompt
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| title.to_lowercase().contains(&needle));
+                let body_hit = prompt.body.to_lowercase().contains(&needle);
+                title_hit || body_hit
+            });
+        }
+        Ok(prompts)
     }
 
     /// 正常素材使用的不同标签及其素材数量。
@@ -752,6 +813,24 @@ impl Index {
             AppError::detailed(
                 Code::LibraryIndexRebuildFailed,
                 format!("回收站计数不是有效非负整数：{count}"),
+            )
+        })
+    }
+
+    /// 提示词回收站中的素材数量。与图片回收站计数是两个独立的数字。
+    pub fn deleted_prompt_count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM prompts WHERE deleted_at IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| sql_err("统计提示词回收站失败", error))?;
+        usize::try_from(count).map_err(|_| {
+            AppError::detailed(
+                Code::LibraryIndexRebuildFailed,
+                format!("提示词回收站计数不是有效非负整数：{count}"),
             )
         })
     }
@@ -862,8 +941,8 @@ impl Index {
         Ok(assets)
     }
 
-    /// 按给定的 ORDER 尾句加载提示词，并填充文件夹、标签与关联。
-    fn load_prompts(&self, tail: &str) -> Result<Vec<PromptRow>> {
+    /// 按给定的 ORDER 尾句与绑定参数加载提示词，并填充文件夹、标签与关联。
+    fn load_prompts(&self, tail: &str, values: &[String]) -> Result<Vec<PromptRow>> {
         let sql = format!(
             "SELECT id, body, title, model, parameters, note, favorite,
                     created_at, updated_at, deleted_at, cover_image_hash
@@ -874,7 +953,7 @@ impl Index {
             .prepare(&sql)
             .map_err(|e| sql_err("准备提示词查询失败", e))?;
         let rows = stmt
-            .query_map([], |r| {
+            .query_map(params_from_iter(values.iter()), |r| {
                 Ok(PromptRow {
                     id: r.get(0)?,
                     body: r.get(1)?,

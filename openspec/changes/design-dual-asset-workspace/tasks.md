@@ -124,8 +124,20 @@
 > `set_prompt_favorite` 是纯二值。三个 setter 与 `set_prompt_folders` 共用新的
 > `load_editable_prompt` 助手，统一"正常库中不存在报 `prompt.not_found`、回收站状态拒绝
 > 组织写入报 `prompt.write_failed`"的语义，全部先写权威文件再同步派生索引。
-- [ ] 4.7 建立 `PromptQuery` 公开测试，覆盖标题/正文 Unicode 子串、精确/根文件夹、多标签 AND、收藏、正常/回收站与稳定排序
-- [ ] 4.8 实现只加载命中轻量行的提示词查询与按需完整详情接口
+- [x] 4.7 建立 `PromptQuery` 公开测试，覆盖标题/正文 Unicode 子串、精确/根文件夹、多标签 AND、收藏、正常/回收站与稳定排序
+- [x] 4.8 实现只加载命中轻量行的提示词查询与按需完整详情接口
+
+> 4.7/4.8 落在 `index.rs` 与 `catalog/query.rs`（2026-08-21）：`Index::query_prompts` 在 SQL 侧
+> 构建子句（位置、精确/根文件夹 `EXISTS`、多标签 AND `EXISTS`、收藏字面量），排序固定
+> `created_at DESC, id DESC`（UUIDv7 身份兼作创建时间平局打破）；文本匹配不在 SQL 里做——
+> `LIKE` 对中文无大小写语义且无法折叠，改为 Rust 侧 `to_lowercase().contains()` 对标题或
+> 正文做子串命中。`Catalog::prompt_snapshot` 组装 `PromptSnapshot`（轻量行、提示词文件夹
+> 清单、分库标签计数、回收站计数），回收站视图忽略文件夹范围（与图片侧同语义）；分库
+> 计数复用 3.3 的 `active_prompt_tag_counts`。4 条测试与实现同批落地并全绿：Unicode 子串
+> （CINEMATIC 大小写折叠、霓虹仅正文、逆光仅标题）、根+文件夹+多标签 AND、收藏与
+> 正常/回收站位置（含回收站计数与回收站内精确文件夹）、稳定排序（created_at 相同按 id
+> 降序）。按需完整详情即 4.2 已落地的 `prompt_detail`：列表只携带轻量行，正文/模型/参数
+> 仅在检查器打开时读取单份权威文件。
 
 ## 5. 提示词回收站与生命周期
 
