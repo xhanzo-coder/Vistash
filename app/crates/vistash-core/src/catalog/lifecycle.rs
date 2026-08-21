@@ -276,7 +276,7 @@ impl Catalog {
         Ok(report)
     }
 
-    fn purge_one(&self, asset: &AssetRow) -> Result<()> {
+    fn purge_one(&mut self, asset: &AssetRow) -> Result<()> {
         let hash = ContentHash::parse(&asset.hash)?;
         #[cfg(test)]
         if self.fail_purge_hash.as_ref() == Some(&hash) {
@@ -296,6 +296,10 @@ impl Catalog {
                 format!("存在上次未处理的 purge 临时文件：{hash}"),
             ));
         }
+        // 设计第三条：永久删除前先从所有正常/回收站提示词中移除该哈希并重选封面。
+        // 清理放在任何文件暂存之前——任一提示词写入失败都让这次 purge 整体失败，
+        // 此时图片对一个字节都没动。
+        self.remove_linked_image_everywhere(&hash)?;
         let sidecar_bytes = std::fs::read(&sidecar).map_err(|error| {
             lifecycle_io(
                 Code::TrashPurgeFailed,

@@ -8,6 +8,7 @@
 //! 封面是关联的引用而不是独立数据：`cover_image_hash` 必须指向已关联的一张，
 //! 缺省表示"用第一张正常关联图片"。解除关联或图片被 purge 时按顺序回落。
 
+use super::write_raw_atomic;
 use super::Catalog;
 use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
@@ -66,6 +67,84 @@ impl Catalog {
         }
         Ok(())
     }
+
+    /// 图片永久删除前，从所有关联它的提示词（含回收站）移除该哈希并重选封面。
+    ///
+    /// 设计第三条：这是唯一被允许批量改写提示词权威文件的跨文件事务——图片一旦
+    /// 物理消失，指向它的关联就成了永远无法解析的悬空引用。任一提示词写入失败都
+    /// 让整个清理失败，已写回的文件逆序恢复原字节；调用方（图片生命周期）据此让
+    /// 这张图的 purge 整体失败，图片对保持完整。
+    pub(super) fn remove_linked_image_everywhere(&mut self, hash: &ContentHash) -> Result<()> {
+        let linked = self.index()?.prompts_for_image(hash.as_str())?;
+        // 先把每个受影响文件读入内存并算出修改后的内容：任何读取或解析失败都发生
+        // 在第一个字节落盘之前。文件已不存在的过期行直接跳过——purge 结束时的索引
+        // 重建按磁盘实况清掉这些行，不能让一行陈旧数据永久卡死这张图的 purge。
+        let mut pending: Vec<PendingLinkRemoval> = Vec::new();
+        for row in linked {
+            let id = PromptId::parse(&row.id)?;
+            let normal = self.library.prompt_path(&id);
+            let trash = self.library.prompt_trash_path(&id);
+            let path = if normal.exists() {
+                normal
+            } else if trash.exists() {
+                trash
+            } else {
+                continue;
+            };
+            let original = std::fs::read(&path).map_err(|error| {
+                AppError::detailed(
+                    Code::LibraryIoFailed,
+                    format!("读取待清理关联的提示词失败 {}: {error}", path.display()),
+                )
+            })?;
+            let mut prompt = crate::prompt::PromptAsset::read(&path)?;
+            let Some(position) = prompt.linked_image_hashes.iter().position(|h| h == hash)
+            else {
+                continue;
+            };
+            prompt.linked_image_hashes.remove(position);
+            if prompt.cover_image_hash.as_ref() == Some(hash) {
+                // 重选封面与解除关联同语义：清空显式值，缺省回落到第一张剩余关联。
+                prompt.cover_image_hash = None;
+            }
+            pending.push(PendingLinkRemoval {
+                path,
+                original,
+                prompt,
+            });
+        }
+        if pending.is_empty() {
+            return Ok(());
+        }
+        // 逐个写盘；中途失败则把已写回的文件逆序恢复原字节。注入观察点与真实
+        // 写入合并成同一个可失败步骤——否则观察点自己的失败会绕过回滚路径。
+        let mut written: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+        for item in &pending {
+            let write_result = self
+                .before_metadata_write()
+                .and_then(|()| item.prompt.write_atomic(&item.path));
+            if let Err(error) = write_result {
+                for (path, bytes) in written.iter().rev() {
+                    write_raw_atomic(path, bytes, Code::PromptWriteFailed)?;
+                }
+                return Err(error);
+            }
+            written.push((item.path.clone(), item.original.clone()));
+        }
+        for item in &pending {
+            if let Err(error) = self.index_mut()?.upsert_prompt(&item.prompt) {
+                return self.rebuild_after_index_failure(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 一次图片 purge 关联清理中单个提示词的待写状态。
+struct PendingLinkRemoval {
+    path: std::path::PathBuf,
+    original: Vec<u8>,
+    prompt: crate::prompt::PromptAsset,
 }
 
 #[cfg(test)]
@@ -240,5 +319,215 @@ mod tests {
             .link_images(&owner.id, std::slice::from_ref(&image_a.hash))
             .expect_err("本应拒绝回收站提示词");
         assert_eq!(error.code, Code::PromptWriteFailed);
+    }
+
+    #[test]
+    fn associations_stay_visible_in_both_trashes_and_survive_restore() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
+        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let owner = prompt(&mut fixture.catalog, "可见性");
+        let other = prompt(&mut fixture.catalog, "另一位");
+        fixture
+            .catalog
+            .link_images(&owner.id, &[image_a.hash.clone(), image_b.hash.clone()])
+            .expect("关联");
+        fixture
+            .catalog
+            .link_images(&other.id, std::slice::from_ref(&image_a.hash))
+            .expect("关联");
+
+        // 图片进回收站不改提示词文件：列表原样保留，界面据此呈现"关联图片已删除"。
+        fixture.catalog.delete_asset(&image_a.hash).expect("删除图片");
+        let detail = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
+        assert_eq!(
+            detail.linked_image_hashes,
+            vec![image_a.hash.clone(), image_b.hash.clone()]
+        );
+        let seen = fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .prompts_for_image(image_a.hash.as_str())
+            .expect("反查");
+        assert_eq!(seen.len(), 2);
+
+        // 提示词进回收站后反查同样可见："关联提示词已删除"需要这个状态。
+        fixture.catalog.delete_prompt(&other.id).expect("删除提示词");
+        let seen = fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .prompts_for_image(image_a.hash.as_str())
+            .expect("反查");
+        assert_eq!(seen.len(), 2);
+
+        // 双向还原后一切照旧，不需要任何修复步骤。
+        fixture.catalog.restore_asset(&image_a.hash).expect("还原图片");
+        fixture.catalog.restore_prompt(&other.id).expect("还原提示词");
+        let restored = fixture.catalog.prompt_detail(&other.id).expect("读取详情");
+        assert_eq!(restored.linked_image_hashes, vec![image_a.hash.clone()]);
+        let seen = fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .prompts_for_image(image_a.hash.as_str())
+            .expect("反查");
+        assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn purging_a_prompt_leaves_every_image_byte_and_other_links_alone() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
+        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let owner = prompt(&mut fixture.catalog, "留下的一方");
+        let other = prompt(&mut fixture.catalog, "被清理的一方");
+        fixture
+            .catalog
+            .link_images(&owner.id, std::slice::from_ref(&image_a.hash))
+            .expect("关联");
+        fixture
+            .catalog
+            .link_images(&other.id, &[image_a.hash.clone(), image_b.hash.clone()])
+            .expect("关联");
+        let library = fixture.catalog.library();
+        let sidecar_a = library.sidecar_path(&image_a.hash);
+        let sidecar_b = library.sidecar_path(&image_b.hash);
+        let body_a = library.body_path(&image_a.hash, &image_a.ext);
+        let owner_path = library.prompt_path(&owner.id);
+        let sidecar_before = std::fs::read(&sidecar_a).expect("读侧车一");
+        let other_sidecar_before = std::fs::read(&sidecar_b).expect("读侧车二");
+        let body_before = std::fs::read(&body_a).expect("读本体");
+        let owner_before = std::fs::read(&owner_path).expect("读提示词");
+
+        fixture.catalog.delete_prompt(&other.id).expect("删除提示词");
+        let report = fixture.catalog.purge_prompt_trash().expect("清空提示词回收站");
+        assert_eq!(report.purged, 1);
+
+        // purge 只删提示词自己的文件与派生关联：图片本体、侧车与其他提示词逐字节不变。
+        assert_eq!(
+            std::fs::read(&sidecar_a).expect("读回侧车一"),
+            sidecar_before,
+            "purge 提示词不得改动图片侧车"
+        );
+        assert_eq!(
+            std::fs::read(&sidecar_b).expect("读回侧车二"),
+            other_sidecar_before
+        );
+        assert_eq!(std::fs::read(&body_a).expect("读回本体"), body_before);
+        assert_eq!(
+            std::fs::read(&owner_path).expect("读回提示词"),
+            owner_before,
+            "其他提示词不受牵连"
+        );
+        let index = fixture.catalog.index().expect("索引");
+        let seen_a = index
+            .prompts_for_image(image_a.hash.as_str())
+            .expect("反查一");
+        assert_eq!(seen_a.len(), 1);
+        assert_eq!(seen_a[0].id, owner.id.as_str());
+        let seen_b = index
+            .prompts_for_image(image_b.hash.as_str())
+            .expect("反查二");
+        assert!(seen_b.is_empty(), "被 purge 提示词的关联随重建清除");
+    }
+
+    #[test]
+    fn purging_an_image_cleans_every_prompt_and_failure_keeps_the_pair_intact() {
+        // 注入第 0 与第 1 个提示词写入失败：前者一个文件都没碰，后者要求逆序回滚。
+        for inject_at in [0usize, 1] {
+            let mut fixture = fixture();
+            let first = write_png(&fixture.source, "甲.png", [255, 0, 0, 255]);
+            let second = write_png(&fixture.source, "乙.png", [0, 255, 0, 255]);
+            let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+            let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+            let owner = prompt(&mut fixture.catalog, "封面回落");
+            fixture
+                .catalog
+                .link_images(&owner.id, &[image_a.hash.clone(), image_b.hash.clone()])
+                .expect("关联");
+            // 显式封面指向甲图：设为封面的公开接口在 6.7 落地，这里直接改写权威文件。
+            let owner_path = fixture.catalog.library().prompt_path(&owner.id);
+            let mut crafted = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
+            crafted.cover_image_hash = Some(image_a.hash.clone());
+            crafted.write_atomic(&owner_path).expect("设置显式封面");
+            let linked = prompt(&mut fixture.catalog, "回收站关联者");
+            fixture
+                .catalog
+                .link_images(&linked.id, std::slice::from_ref(&image_a.hash))
+                .expect("关联");
+            fixture.catalog.delete_prompt(&linked.id).expect("删除提示词");
+            fixture.catalog.delete_asset(&image_a.hash).expect("删除图片");
+
+            let trash_body = fixture
+                .catalog
+                .library()
+                .trash_body_path(&image_a.hash, &image_a.ext);
+            let trash_sidecar = fixture.catalog.library().trash_sidecar_path(&image_a.hash);
+            let linked_trash = fixture.catalog.library().prompt_trash_path(&linked.id);
+            let owner_before = std::fs::read(&owner_path).expect("读提示词字节");
+            let linked_before = std::fs::read(&linked_trash).expect("读回收站提示词字节");
+            let body_before = std::fs::read(&trash_body).expect("读回收站本体字节");
+            let sidecar_before = std::fs::read(&trash_sidecar).expect("读回收站侧车字节");
+
+            fixture.catalog.inject_metadata_failure_at(inject_at);
+            let report = fixture.catalog.purge_trash().expect("清空图片回收站");
+            assert_eq!(
+                report.failures.len(),
+                1,
+                "注入第 {inject_at} 个写入失败应让这张图的 purge 整体失败"
+            );
+            assert_eq!(report.failures[0].hash, image_a.hash.as_str());
+            assert_eq!(
+                report.failures[0].error.code,
+                Code::LibraryAssetMetadataWriteFailed
+            );
+            // 图片对保持完整，已写回的提示词文件被逆序恢复原字节。
+            assert_eq!(
+                std::fs::read(&trash_body).expect("读回本体"),
+                body_before,
+                "清理失败时图片对必须保持完整"
+            );
+            assert_eq!(std::fs::read(&trash_sidecar).expect("读回侧车"), sidecar_before);
+            assert_eq!(
+                std::fs::read(&owner_path).expect("读回提示词"),
+                owner_before,
+                "失败的清理必须恢复已写回的提示词"
+            );
+            assert_eq!(
+                std::fs::read(&linked_trash).expect("读回收站提示词"),
+                linked_before
+            );
+
+            // 注入只生效一次：再次 purge 成功，所有关联与显式封面被清理。
+            let report = fixture.catalog.purge_trash().expect("再次清空图片回收站");
+            assert_eq!(report.purged, 1);
+            assert!(report.failures.is_empty());
+            assert!(!trash_body.exists());
+            assert!(!trash_sidecar.exists());
+            let detail = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
+            assert_eq!(detail.linked_image_hashes, vec![image_b.hash.clone()]);
+            assert_eq!(
+                detail.cover_image_hash, None,
+                "显式封面指向被 purge 的图时清空，缺省回落到第一张剩余关联"
+            );
+            let remaining = PromptAsset::read(&linked_trash).expect("读回收站提示词");
+            assert!(
+                remaining.linked_image_hashes.is_empty(),
+                "回收站提示词里的悬空引用同样要清理"
+            );
+            let seen = fixture
+                .catalog
+                .index()
+                .expect("索引")
+                .prompts_for_image(image_a.hash.as_str())
+                .expect("反查");
+            assert!(seen.is_empty());
+        }
     }
 }
