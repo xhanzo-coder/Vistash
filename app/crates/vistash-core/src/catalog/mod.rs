@@ -21,12 +21,14 @@
 
 mod image_metadata;
 mod lifecycle;
+mod prompt_metadata;
 mod query;
 #[cfg(test)]
 mod testing;
 
 pub use image_metadata::{FolderMutationProgress, FolderName, FolderPath, Tag};
 pub use lifecycle::{PurgeFailure, PurgeReport, RestoreOutcome};
+pub use prompt_metadata::{NewPrompt, PromptEdit};
 pub use query::{AssetLocation, AssetQuery, CatalogSnapshot, FolderFilter, TagUsage};
 
 #[cfg(test)]

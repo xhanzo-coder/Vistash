@@ -84,6 +84,12 @@ pub enum Code {
     PromptIdInvalid,
     PromptCoverNotLinked,
     PromptLinkedImageDuplicated,
+    /// 正常库中不存在该提示词。它与瞬时 IO 失败不同：多半意味着素材已被删除或
+    /// ID 有误，界面应引导重新查看列表而不是提示重试。
+    PromptNotFound,
+    /// 提示词文件夹清单中不存在该文件夹。提示词文件夹与图片文件夹是两棵树，
+    /// 归属必须指向自己那棵树里真实存在的路径。
+    PromptFolderNotFound,
     // migration 域：库格式 v1 到 v2 的一次性迁移
     MigrationJournalCorrupt,
     MigrationJournalFormatTooNew,
@@ -137,6 +143,8 @@ pub const ALL_CODES: &[Code] = &[
     Code::PromptIdInvalid,
     Code::PromptCoverNotLinked,
     Code::PromptLinkedImageDuplicated,
+    Code::PromptNotFound,
+    Code::PromptFolderNotFound,
     Code::MigrationJournalCorrupt,
     Code::MigrationJournalFormatTooNew,
     Code::MigrationJournalWriteFailed,
@@ -190,7 +198,9 @@ impl Code {
             | PromptBodyEmpty
             | PromptIdInvalid
             | PromptCoverNotLinked
-            | PromptLinkedImageDuplicated => Domain::Prompt,
+            | PromptLinkedImageDuplicated
+            | PromptNotFound
+            | PromptFolderNotFound => Domain::Prompt,
             MigrationJournalCorrupt
             | MigrationJournalFormatTooNew
             | MigrationJournalWriteFailed
@@ -246,6 +256,8 @@ impl Code {
             PromptIdInvalid => "prompt.id_invalid",
             PromptCoverNotLinked => "prompt.cover_not_linked",
             PromptLinkedImageDuplicated => "prompt.linked_image_duplicated",
+            PromptNotFound => "prompt.not_found",
+            PromptFolderNotFound => "prompt.folder_not_found",
             MigrationJournalCorrupt => "migration.journal_corrupt",
             MigrationJournalFormatTooNew => "migration.journal_format_too_new",
             MigrationJournalWriteFailed => "migration.journal_write_failed",

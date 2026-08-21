@@ -57,6 +57,8 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "prompt.id_invalid": "提示词标识非法。这通常意味着库内文件被外部程序改写过。",
   "prompt.cover_not_linked": "封面必须是这条提示词已关联的图片。请先建立关联，再把它设为封面。",
   "prompt.linked_image_duplicated": "同一张图片不能与同一条提示词重复关联。",
+  "prompt.not_found": "找不到这条提示词。它可能已被删除，或列表已过期——请刷新后重试。",
+  "prompt.folder_not_found": "指定的提示词文件夹不存在。提示词文件夹与素材文件夹是两棵独立的树。",
 
   // migration 域
   "migration.journal_corrupt": "库迁移记录损坏，已停止迁移。程序不会据此继续或回滚——两者都可能写坏权威数据。请保留库目录并联系支持。",
