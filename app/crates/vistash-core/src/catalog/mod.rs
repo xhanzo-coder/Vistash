@@ -31,6 +31,7 @@ mod testing;
 pub use image_metadata::{FolderMutationProgress, FolderName, FolderPath, Tag};
 pub use lifecycle::{PurgeFailure, PurgeReport, RestoreOutcome};
 pub use prompt_lifecycle::{PromptPurgeFailure, PromptPurgeReport, PromptRestoreOutcome};
+pub use linking::{ImportAndLinkItem, ImportAndLinkOutcome, ImportAndLinkReport};
 pub use prompt_metadata::{NewPrompt, PromptEdit};
 pub use query::{
     AssetLocation, AssetQuery, CatalogSnapshot, FolderFilter, PromptLocation, PromptQuery,

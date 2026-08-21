@@ -13,6 +13,35 @@ use super::Catalog;
 use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
 use crate::prompt::PromptId;
+use serde::Serialize;
+use std::path::Path;
+
+/// 单个源文件的"导入并关联"结果。
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportAndLinkItem {
+    pub source_path: String,
+    pub original_filename: String,
+    pub outcome: ImportAndLinkOutcome,
+}
+
+/// 逐项结果。部分成功是常态：每一项都如实说明它到了哪一步。
+#[derive(Debug, Clone, Serialize)]
+pub enum ImportAndLinkOutcome {
+    /// 内容已在库中（正常库或回收站），复用单份本体并关联成功。
+    LinkedExisting { hash: String },
+    /// 本次导入入库并关联成功。
+    LinkedImported { hash: String },
+    /// 已入库但关联失败：图片保留在库里，绝不冒充已关联。
+    ImportedButNotLinked { hash: String, error: AppError },
+    /// 没有进入图片库：导入本身失败。
+    ImportFailed { error: AppError },
+}
+
+/// 一次"本地导入后关联"的逐项结果。
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportAndLinkReport {
+    pub items: Vec<ImportAndLinkItem>,
+}
 
 impl Catalog {
     /// 把图片追加到提示词的有序关联列表末尾。
@@ -41,6 +70,9 @@ impl Catalog {
             return Ok(());
         }
         prompt.linked_image_hashes.extend(added);
+        // 权威写入前的统一观察点：批量编排（import_and_link）靠它注入
+        // "入库成功但关联失败"的确定性故障。
+        self.before_metadata_write()?;
         prompt.write_atomic(&path)?;
         if let Err(error) = self.index_mut()?.upsert_prompt(&prompt) {
             return self.rebuild_after_index_failure(error);
@@ -97,6 +129,86 @@ impl Catalog {
             return self.rebuild_after_index_failure(error);
         }
         Ok(())
+    }
+
+    /// "从图片库选择"与"本地导入后关联"的统一编排。
+    ///
+    /// 规格要求两个入口共用一条路径：库内已有的内容直接复用单份本体（绝不产生
+    /// 第二份），本地文件先走已批准的导入不变量（`import_one` 的完整校验与回滚）
+    /// 再关联。逐项报告：入库成功但关联失败时图片保留在库里并报"已入库但未
+    /// 关联"，绝不删除已完成的权威图片，也绝不冒充已关联。
+    pub fn import_and_link(
+        &mut self,
+        prompt_id: &PromptId,
+        sources: &[std::path::PathBuf],
+    ) -> Result<ImportAndLinkReport> {
+        // 先确认提示词可编辑：提示词不可用时不应导入任何文件。
+        self.load_editable_prompt(prompt_id, "关联")?;
+        let mut items = Vec::new();
+        for source in sources {
+            items.push(self.import_and_link_one(prompt_id, source)?);
+        }
+        Ok(ImportAndLinkReport { items })
+    }
+
+    /// 处理单个源文件。逐项失败编码在 `outcome` 里；只有索引这类环境级故障
+    /// 才以 `Err` 传播——此时已导入的图片同样保留，绝不回删权威数据。
+    fn import_and_link_one(
+        &mut self,
+        prompt_id: &PromptId,
+        source: &Path,
+    ) -> Result<ImportAndLinkItem> {
+        let path_label = source.to_string_lossy().into_owned();
+        let filename = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let item = |outcome| ImportAndLinkItem {
+            source_path: path_label.clone(),
+            original_filename: filename.clone(),
+            outcome,
+        };
+        let hash = match ContentHash::of_file(source) {
+            Ok(hash) => hash,
+            Err(error) => return Ok(item(ImportAndLinkOutcome::ImportFailed { error })),
+        };
+        // 已在库中的内容（正常库或回收站）复用单份本体，不重复导入。
+        let freshly_imported = if self.index()?.asset_exists(hash.as_str())? {
+            false
+        } else {
+            let options = crate::import::ImportOptions::default();
+            match crate::import::import_one(
+                self.library(),
+                source,
+                &options,
+                &mut crate::import::NoopObserver,
+            ) {
+                Ok(sidecar) => {
+                    self.index_imported(std::slice::from_ref(&sidecar))?;
+                    true
+                }
+                Err(error) => return Ok(item(ImportAndLinkOutcome::ImportFailed { error })),
+            }
+        };
+        // 重复关联是幂等空操作，所以重复选择同一张图也安全。
+        let outcome = match self.link_images(prompt_id, std::slice::from_ref(&hash)) {
+            Ok(()) => {
+                if freshly_imported {
+                    ImportAndLinkOutcome::LinkedImported {
+                        hash: hash.as_str().to_owned(),
+                    }
+                } else {
+                    ImportAndLinkOutcome::LinkedExisting {
+                        hash: hash.as_str().to_owned(),
+                    }
+                }
+            }
+            Err(error) => ImportAndLinkOutcome::ImportedButNotLinked {
+                hash: hash.as_str().to_owned(),
+                error,
+            },
+        };
+        Ok(item(outcome))
     }
 
     /// 图片永久删除前，从所有关联它的提示词（含回收站）移除该哈希并重选封面。
@@ -718,5 +830,128 @@ mod tests {
             .set_prompt_cover(&owner.id, Some(&unknown))
             .expect_err("本应拒绝未入库的封面");
         assert_eq!(error.code, Code::PromptCoverNotLinked);
+    }
+
+    #[test]
+    fn linking_from_library_reuses_the_existing_body_without_a_second_copy() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let owner = prompt(&mut fixture.catalog, "从库选图");
+        // 同内容的另一个本地路径副本：库里已经有这张图。
+        let copy = write_png(&fixture.source, "一副本.png", [255, 0, 0, 255]);
+        let fresh = write_png(&fixture.source, "三.png", [0, 0, 255, 255]);
+        let bodies = |catalog: &Catalog| {
+            std::fs::read_dir(catalog.library().objects_dir())
+                .expect("本体目录")
+                .count()
+        };
+
+        let before = bodies(&fixture.catalog);
+        let report = fixture
+            .catalog
+            .import_and_link(&owner.id, &[copy, fresh])
+            .expect("导入并关联");
+        assert!(matches!(
+            &report.items[0].outcome,
+            ImportAndLinkOutcome::LinkedExisting { hash }
+                if *hash == image_a.hash.as_str()
+        ));
+        assert!(matches!(
+            &report.items[1].outcome,
+            ImportAndLinkOutcome::LinkedImported { .. }
+        ));
+        assert_eq!(
+            bodies(&fixture.catalog),
+            before + 1,
+            "重复图片不得产生第二份本体"
+        );
+        let detail = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
+        assert_eq!(detail.linked_image_hashes.len(), 2);
+    }
+
+    #[test]
+    fn importing_and_linking_reports_each_source_individually() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
+        let owner = prompt(&mut fixture.catalog, "逐项结果");
+        let broken = fixture.source.join("不存在.png");
+        let bodies = |catalog: &Catalog| {
+            std::fs::read_dir(catalog.library().objects_dir())
+                .expect("本体目录")
+                .count()
+        };
+
+        let before = bodies(&fixture.catalog);
+        let report = fixture
+            .catalog
+            .import_and_link(&owner.id, &[first, second, broken])
+            .expect("导入并关联");
+        assert_eq!(report.items.len(), 3);
+        assert!(matches!(
+            &report.items[0].outcome,
+            ImportAndLinkOutcome::LinkedImported { .. }
+        ));
+        assert!(matches!(
+            &report.items[1].outcome,
+            ImportAndLinkOutcome::LinkedImported { .. }
+        ));
+        match &report.items[2].outcome {
+            ImportAndLinkOutcome::ImportFailed { error } => {
+                assert_eq!(error.code, crate::error::Code::ImportSourceUnreadable);
+            }
+            other => panic!("坏文件本应逐项报导入失败，实际是 {other:?}"),
+        }
+        assert_eq!(report.items[2].original_filename, "不存在.png");
+        assert_eq!(bodies(&fixture.catalog), before + 2, "只有两个文件入了库");
+        let detail = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
+        assert_eq!(detail.linked_image_hashes.len(), 2, "失败项不冒充已关联");
+    }
+
+    #[test]
+    fn a_link_failure_after_import_keeps_the_image_and_reports_it() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
+        let owner = prompt(&mut fixture.catalog, "入库但未关联");
+        // 注入第 0 次关联写入失败：第一张已入库但关联失败。
+        fixture.catalog.inject_metadata_failure_at(0);
+
+        let report = fixture
+            .catalog
+            .import_and_link(&owner.id, &[first, second])
+            .expect("编排本身不因单项失败而失败");
+        assert_eq!(report.items.len(), 2);
+        let first_hash = match &report.items[0].outcome {
+            ImportAndLinkOutcome::ImportedButNotLinked { hash, error } => {
+                assert_eq!(error.code, Code::LibraryAssetMetadataWriteFailed);
+                hash.clone()
+            }
+            other => panic!("第一项本应报已入库但未关联，实际是 {other:?}"),
+        };
+        assert!(matches!(
+            &report.items[1].outcome,
+            ImportAndLinkOutcome::LinkedImported { .. }
+        ));
+
+        // 已入库的图片必须保留：侧车在库里、索引可查，只是没关联。
+        assert!(fixture
+            .catalog
+            .library()
+            .sidecar_path(&ContentHash::parse(&first_hash).expect("哈希"))
+            .is_file());
+        assert!(fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .asset_exists(&first_hash)
+            .expect("查询"));
+        let detail = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
+        assert_eq!(
+            detail.linked_image_hashes.len(),
+            1,
+            "关联失败的那张不得出现在关联列表里"
+        );
     }
 }
