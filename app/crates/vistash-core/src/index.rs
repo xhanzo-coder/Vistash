@@ -213,6 +213,17 @@ pub struct PromptRow {
     pub deleted_at: Option<String>,
 }
 
+impl PromptRow {
+    /// 卡片封面的单一权威解析：显式封面优先，缺省取第一张关联图片；
+    /// 无关联时为纯文本卡片。规则只写这一处——瀑布流、详情列表与检查器
+    /// 都从这里取，不复制任何图片字节（只携带哈希引用）。
+    pub fn resolved_cover(&self) -> Option<&str> {
+        self.cover_image_hash
+            .as_deref()
+            .or(self.linked_image_hashes.first().map(String::as_str))
+    }
+}
+
 /// 索引的全量快照。
 ///
 /// 存在的理由是重建等价性测试：那条承诺要求"删掉索引重建后数据不丢失"，而验证它需要
@@ -1120,6 +1131,41 @@ mod tests {
     use crate::import::{self, ImportOptions, NoopObserver};
     use crate::prompt::{PromptId, PROMPT_FORMAT_VERSION};
     use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+    #[test]
+    fn a_card_resolves_its_cover_with_explicit_value_first_then_order() {
+        let row = |cover: Option<&str>, links: &[&str]| PromptRow {
+            id: "018f3c9e-6c00-7000-8000-0000000000a1".to_owned(),
+            body: "正文".to_owned(),
+            title: None,
+            model: None,
+            parameters: None,
+            note: String::new(),
+            favorite: false,
+            folders: Vec::new(),
+            tags: Vec::new(),
+            linked_image_hashes: links.iter().map(|s| (*s).to_owned()).collect(),
+            cover_image_hash: cover.map(str::to_owned),
+            created_at: String::new(),
+            updated_at: String::new(),
+            deleted_at: None,
+        };
+        assert_eq!(
+            row(None, &[]).resolved_cover(),
+            None,
+            "无关联的提示词是纯文本卡片"
+        );
+        assert_eq!(
+            row(None, &["乙", "甲"]).resolved_cover(),
+            Some("乙"),
+            "缺省封面取第一张关联图片"
+        );
+        assert_eq!(
+            row(Some("甲"), &["乙", "甲"]).resolved_cover(),
+            Some("甲"),
+            "显式封面优先于列表顺序"
+        );
+    }
 
     /// 固定的 UUIDv7 字面值。与 prompt.rs 测试同一原则：不生成 ID，失败信息必须可复现。
     const PROMPT_FULL: &str = "018f3c9e-6c00-7000-8000-0000000000a1";

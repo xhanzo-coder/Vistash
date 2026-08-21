@@ -68,6 +68,37 @@ impl Catalog {
         Ok(())
     }
 
+    /// 指定或清除提示词的显式封面。
+    ///
+    /// 封面不变量（必须是这条提示词已关联的图片）由权威写入层强制；这里把
+    /// 使用者的意图翻译成对有序关联列表的一个引用更新。`None` 清除显式值，
+    /// 回到"第一张关联图片"的缺省语义。重复设置同一状态是字节级幂等空操作。
+    pub fn set_prompt_cover(
+        &mut self,
+        prompt_id: &PromptId,
+        cover: Option<&ContentHash>,
+    ) -> Result<()> {
+        let (path, mut prompt) = self.load_editable_prompt(prompt_id, "封面")?;
+        // 已是这个显式状态就无事可做：幂等性落在字节层面，与 link_images 同语义。
+        if prompt.cover_image_hash.as_ref() == cover {
+            return Ok(());
+        }
+        if let Some(hash) = cover {
+            if !prompt.linked_image_hashes.contains(hash) {
+                return Err(AppError::detailed(
+                    Code::PromptCoverNotLinked,
+                    format!("只有已关联的图片才能设为封面：{hash}"),
+                ));
+            }
+        }
+        prompt.cover_image_hash = cover.cloned();
+        prompt.write_atomic(&path)?;
+        if let Err(error) = self.index_mut()?.upsert_prompt(&prompt) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
+
     /// 图片永久删除前，从所有关联它的提示词（含回收站）移除该哈希并重选封面。
     ///
     /// 设计第三条：这是唯一被允许批量改写提示词权威文件的跨文件事务——图片一旦
@@ -151,7 +182,27 @@ struct PendingLinkRemoval {
 mod tests {
     use super::*;
     use crate::catalog::testing::{fixture, import_with, write_png};
+    use crate::catalog::{FolderFilter, PromptLocation, PromptQuery};
     use crate::prompt::PromptAsset;
+
+    /// 查询正常库快照并取出指定提示词的轻量行，用于断言卡片封面解析。
+    fn card_cover(catalog: &Catalog, id: &PromptId) -> Option<String> {
+        catalog
+            .prompt_snapshot(&PromptQuery {
+                text: String::new(),
+                tags: Vec::new(),
+                folder: FolderFilter::All,
+                favorite: None,
+                location: PromptLocation::Active,
+            })
+            .expect("提示词快照")
+            .prompts
+            .into_iter()
+            .find(|row| row.id == id.as_str())
+            .expect("快照中应有这条提示词")
+            .resolved_cover()
+            .map(str::to_owned)
+    }
 
     fn prompt(catalog: &mut Catalog, body: &str) -> PromptAsset {
         catalog
@@ -529,5 +580,143 @@ mod tests {
                 .expect("反查");
             assert!(seen.is_empty());
         }
+    }
+
+    #[test]
+    fn setting_a_cover_pins_an_explicit_image_and_clearing_falls_back_in_order() {
+        let mut fixture = fixture();
+        let mut hashes = Vec::new();
+        for (name, color) in [
+            ("一", [255u8, 0, 0, 255]),
+            ("二", [0, 255, 0, 255]),
+            ("三", [0, 0, 255, 255]),
+        ] {
+            let source = write_png(&fixture.source, &format!("{name}.png"), color);
+            hashes.push(import_with(&mut fixture.catalog, &source, &[], &[]).hash);
+        }
+        let owner = prompt(&mut fixture.catalog, "封面顺序");
+        fixture
+            .catalog
+            .link_images(&owner.id, &hashes)
+            .expect("关联三张");
+
+        // 缺省封面解析：第一张关联图片。
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id).as_deref(),
+            Some(hashes[0].as_str())
+        );
+
+        // 显式指定第三张：显式值优先于顺序；重复设置是字节级幂等空操作。
+        fixture
+            .catalog
+            .set_prompt_cover(&owner.id, Some(&hashes[2]))
+            .expect("设为封面");
+        let path = fixture.catalog.library().prompt_path(&owner.id);
+        let before = std::fs::read(&path).expect("读权威文件字节");
+        fixture
+            .catalog
+            .set_prompt_cover(&owner.id, Some(&hashes[2]))
+            .expect("重复设置同一封面");
+        assert_eq!(
+            std::fs::read(&path).expect("读回权威文件字节"),
+            before,
+            "重复设置同一封面不得改动权威文件"
+        );
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id).as_deref(),
+            Some(hashes[2].as_str())
+        );
+
+        // 清除显式值回到缺省：顺序回落到第一张。
+        fixture.catalog.set_prompt_cover(&owner.id, None).expect("清除封面");
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id).as_deref(),
+            Some(hashes[0].as_str())
+        );
+
+        // 显式封面不受其他解除影响；解除它自己才按顺序回落。
+        fixture
+            .catalog
+            .set_prompt_cover(&owner.id, Some(&hashes[1]))
+            .expect("设第二张为封面");
+        fixture
+            .catalog
+            .unlink_image(&owner.id, &hashes[0])
+            .expect("解除第一张");
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id).as_deref(),
+            Some(hashes[1].as_str()),
+            "解除其他图片不得动摇显式封面"
+        );
+        fixture
+            .catalog
+            .unlink_image(&owner.id, &hashes[1])
+            .expect("解除封面本身");
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id).as_deref(),
+            Some(hashes[2].as_str()),
+            "解除显式封面后按剩余关联顺序回落"
+        );
+    }
+
+    #[test]
+    fn purging_the_cover_image_falls_back_to_the_first_remaining_link() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
+        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let owner = prompt(&mut fixture.catalog, "purge 封面回落");
+        fixture
+            .catalog
+            .link_images(&owner.id, &[image_a.hash.clone(), image_b.hash.clone()])
+            .expect("关联");
+        fixture
+            .catalog
+            .set_prompt_cover(&owner.id, Some(&image_a.hash))
+            .expect("显式封面");
+
+        fixture.catalog.delete_asset(&image_a.hash).expect("删除图片");
+        let report = fixture.catalog.purge_trash().expect("清空回收站");
+        assert_eq!(report.purged, 1);
+
+        let detail = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
+        assert_eq!(
+            detail.cover_image_hash, None,
+            "指向被 purge 图片的显式封面被清理"
+        );
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id).as_deref(),
+            Some(image_b.hash.as_str()),
+            "有效封面按顺序回落到第一张剩余关联"
+        );
+    }
+
+    #[test]
+    fn a_pure_text_prompt_has_no_cover_and_refuses_to_pin_one() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let owner = prompt(&mut fixture.catalog, "纯文本卡片");
+
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id),
+            None,
+            "无关联的提示词是纯文本卡片，没有封面"
+        );
+
+        // 已入库但未关联：拒绝并引导先建立关联。
+        let error = fixture
+            .catalog
+            .set_prompt_cover(&owner.id, Some(&image_a.hash))
+            .expect_err("本应拒绝未关联的封面");
+        assert_eq!(error.code, Code::PromptCoverNotLinked);
+        // 从未入库的哈希同样不是已关联图片，同一个失败语义。
+        let unknown = ContentHash::of_bytes(b"never-imported-cover");
+        let error = fixture
+            .catalog
+            .set_prompt_cover(&owner.id, Some(&unknown))
+            .expect_err("本应拒绝未入库的封面");
+        assert_eq!(error.code, Code::PromptCoverNotLinked);
     }
 }
