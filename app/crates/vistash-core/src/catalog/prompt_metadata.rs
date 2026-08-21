@@ -9,7 +9,7 @@
 //! 混在一个入口里会让"哪次按键触发哪份写入"变得无法回答。
 
 use super::Catalog;
-use super::{FolderName, FolderPath};
+use super::{FolderName, FolderPath, Tag};
 use crate::error::{AppError, Code, Result};
 use crate::prompt::{PromptAsset, PromptFolderList, PromptId, PROMPT_FORMAT_VERSION};
 use chrono::Utc;
@@ -215,20 +215,7 @@ impl Catalog {
                 ));
             }
         }
-        let path = self.library.prompt_path(id);
-        if !path.exists() {
-            return Err(AppError::detailed(
-                Code::PromptNotFound,
-                format!("正常库中不存在这条提示词：{id}"),
-            ));
-        }
-        let mut prompt = PromptAsset::read(&path)?;
-        if prompt.is_deleted() {
-            return Err(AppError::detailed(
-                Code::PromptWriteFailed,
-                format!("回收站提示词不能修改文件夹：{id}"),
-            ));
-        }
+        let (path, mut prompt) = self.load_editable_prompt(id, "文件夹")?;
         let mut canonical: Vec<String> = folders
             .iter()
             .map(|folder| folder.as_str().to_owned())
@@ -406,7 +393,63 @@ impl Catalog {
         Ok(())
     }
 
-    /// 批量提交提示词权威写入：任一文件写失败即逆序回滚全部字节。
+    /// 读取一条可修改的提示词：必须存在于正常库，且不处于回收站状态。
+    ///
+    /// 返回权威文件路径与内容，供各组织写入入口共用同一套拒绝语义。
+    fn load_editable_prompt(&self, id: &PromptId, what: &str) -> Result<(std::path::PathBuf, PromptAsset)> {
+        let path = self.library.prompt_path(id);
+        if !path.exists() {
+            return Err(AppError::detailed(
+                Code::PromptNotFound,
+                format!("正常库中不存在这条提示词：{id}"),
+            ));
+        }
+        let prompt = PromptAsset::read(&path)?;
+        if prompt.is_deleted() {
+            return Err(AppError::detailed(
+                Code::PromptWriteFailed,
+                format!("回收站提示词不能修改{what}：{id}"),
+            ));
+        }
+        Ok((path, prompt))
+    }
+
+    /// 设置一条提示词的共享标签（幂等，词表与图片共用）。
+    pub fn set_prompt_tags(&mut self, id: &PromptId, tags: &[Tag]) -> Result<()> {
+        // 词法校验先于任何读取：非法标签在触碰库之前就被拒绝。
+        let mut canonical: Vec<String> = tags.iter().map(|tag| tag.as_str().to_owned()).collect();
+        canonical.sort();
+        canonical.dedup();
+        let (path, mut prompt) = self.load_editable_prompt(id, "标签")?;
+        prompt.tags = canonical;
+        prompt.write_atomic(&path)?;
+        if let Err(error) = self.index_mut()?.upsert_prompt(&prompt) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
+
+    /// 写入提示词备注（多行纯文本，逐字保留）。备注自动保存不改变 `updated_at`。
+    pub fn set_prompt_note(&mut self, id: &PromptId, note: &str) -> Result<()> {
+        let (path, mut prompt) = self.load_editable_prompt(id, "备注")?;
+        prompt.note = note.to_owned();
+        prompt.write_atomic(&path)?;
+        if let Err(error) = self.index_mut()?.upsert_prompt(&prompt) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
+
+    /// 设置提示词收藏。二值状态，没有星级或旗标等中间态。
+    pub fn set_prompt_favorite(&mut self, id: &PromptId, favorite: bool) -> Result<()> {
+        let (path, mut prompt) = self.load_editable_prompt(id, "收藏")?;
+        prompt.favorite = favorite;
+        prompt.write_atomic(&path)?;
+        if let Err(error) = self.index_mut()?.upsert_prompt(&prompt) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
     fn commit_prompt_metadata(
         &mut self,
         prompts: &[(std::path::PathBuf, PromptAsset)],
@@ -951,5 +994,175 @@ mod tests {
             .set_prompt_folders(&missing, &[])
             .expect_err("给不存在的提示词设置归属本应报告缺失");
         assert_eq!(error.code, Code::PromptNotFound);
+    }
+
+    #[test]
+    fn prompt_tags_share_the_vocabulary_but_keep_separate_counts() {
+        let mut fixture = fixture();
+        let source = fixture.source.join("样例.png");
+        crate::catalog::testing::write_png(&fixture.source, "样例.png", [255, 0, 0, 255]);
+        crate::catalog::testing::import_with(&mut fixture.catalog, &source, &[], &["人物"]);
+        let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
+
+        fixture
+            .catalog
+            .set_prompt_tags(&created.id, &[tag("人物"), tag("仅提示词")])
+            .expect("设置提示词标签");
+
+        // 词面共用：同一个"人物"在两侧都能解析与使用。
+        let prompt_counts = fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .active_prompt_tag_counts()
+            .expect("提示词标签计数");
+        assert_eq!(
+            prompt_counts,
+            vec![("人物".to_owned(), 1), ("仅提示词".to_owned(), 1)]
+        );
+        let image_counts = fixture
+            .catalog
+            .index()
+            .expect("索引")
+            .active_tag_counts()
+            .expect("图片标签计数");
+        assert_eq!(
+            image_counts,
+            vec![("人物".to_owned(), 1)],
+            "提示词标签不得计入图片分库计数"
+        );
+    }
+
+    fn tag(raw: &str) -> super::Tag {
+        Tag::parse(raw).expect("合法标签")
+    }
+
+    #[test]
+    fn setting_prompt_tags_is_idempotent_and_canonical() {
+        let mut fixture = fixture();
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
+            .expect("创建文件夹");
+        let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
+        let path = fixture.catalog.library().prompt_path(&created.id);
+
+        fixture
+            .catalog
+            .set_prompt_tags(&created.id, &[tag("构图"), tag("人物"), tag("构图")])
+            .expect("设置标签");
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        // 码点序：人 < 构。重复项被吸收。
+        assert!(detail.folders.is_empty());
+        assert_eq!(detail.tags, vec!["人物".to_owned(), "构图".to_owned()]);
+        let after_first = std::fs::read(&path).expect("读取权威文件");
+
+        // 幂等：重复设置同一集合不产生任何字节变化。
+        fixture
+            .catalog
+            .set_prompt_tags(&created.id, &[tag("人物"), tag("构图")])
+            .expect("重复设置标签");
+        let after_second = std::fs::read(&path).expect("读取权威文件");
+        assert_eq!(after_second, after_first, "幂等设置不得改写权威文件");
+    }
+
+    #[test]
+    fn note_autosave_writes_verbatim_without_touching_other_fields() {
+        let mut fixture = fixture();
+        let created = fixture
+            .catalog
+            .create_prompt(&NewPrompt {
+                body: "正文".to_owned(),
+                title: Some("标题".to_owned()),
+                model: None,
+                parameters: None,
+                folders: vec![],
+                tags: vec!["人物".to_owned()],
+            })
+            .expect("创建");
+
+        fixture
+            .catalog
+            .set_prompt_note(&created.id, "第一行\n\n第三行  尾随空格  ")
+            .expect("写入备注");
+
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        assert_eq!(detail.note, "第一行\n\n第三行  尾随空格  ", "换行与空格逐字保留");
+        // 备注是独立的自动保存流：不得改动主字段，也不得推进 updated_at——
+        // 否则边打字边自动保存会让"更新时间"失去含义。
+        assert_eq!(detail.title.as_deref(), Some("标题"));
+        assert_eq!(detail.body, "正文");
+        assert_eq!(detail.tags, vec!["人物".to_owned()]);
+        assert_eq!(detail.updated_at, created.updated_at);
+        let snapshot = fixture.catalog.index().expect("索引").snapshot().expect("快照");
+        let row = snapshot
+            .prompts
+            .iter()
+            .find(|row| row.id == created.id.as_str())
+            .expect("索引中应有这条提示词");
+        assert_eq!(row.note, "第一行\n\n第三行  尾随空格  ");
+    }
+
+    #[test]
+    fn favorite_is_a_binary_state_that_persists() {
+        let mut fixture = fixture();
+        let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
+
+        fixture
+            .catalog
+            .set_prompt_favorite(&created.id, true)
+            .expect("收藏");
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        assert!(detail.favorite);
+        let snapshot = fixture.catalog.index().expect("索引").snapshot().expect("快照");
+        let row = snapshot
+            .prompts
+            .iter()
+            .find(|row| row.id == created.id.as_str())
+            .expect("索引中应有这条提示词");
+        assert!(row.favorite);
+
+        fixture
+            .catalog
+            .set_prompt_favorite(&created.id, false)
+            .expect("取消收藏");
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        assert!(!detail.favorite);
+    }
+
+    #[test]
+    fn prompt_field_writes_refuse_missing_or_trashed_targets() {
+        let mut fixture = fixture();
+        let missing = crate::prompt::PromptId::parse("018f3c9e-6c00-7000-8000-00000000dead")
+            .expect("构造 ID");
+        for (what, error) in [
+            (
+                "标签",
+                fixture.catalog.set_prompt_tags(&missing, &[tag("人物")]).expect_err("缺失目标应被拒"),
+            ),
+            ("备注", fixture.catalog.set_prompt_note(&missing, "n").expect_err("缺失目标应被拒")),
+            (
+                "收藏",
+                fixture
+                    .catalog
+                    .set_prompt_favorite(&missing, true)
+                    .expect_err("缺失目标应被拒"),
+            ),
+        ] {
+            assert_eq!(error.code, Code::PromptNotFound, "{what} 写入的缺失语义错误");
+        }
+
+        // 回收站中的提示词（deleted_at 已置）即使文件仍在正常目录位置，
+        // 也必须拒绝组织写入，而不是以正常素材身份被改写。
+        let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
+        let path = fixture.catalog.library().prompt_path(&created.id);
+        let mut trashed = fixture.catalog.prompt_detail(&created.id).expect("读回详情");
+        trashed.deleted_at = Some(chrono::Utc::now());
+        trashed.write_atomic(&path).expect("构造回收站状态");
+        let error = fixture
+            .catalog
+            .set_prompt_favorite(&created.id, true)
+            .expect_err("回收站提示词本应拒绝组织写入");
+        assert_eq!(error.code, Code::PromptWriteFailed);
     }
 }

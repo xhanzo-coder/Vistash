@@ -113,8 +113,17 @@
 > 复原；索引更新失败仍走全量重建兜底。新增错误码 `prompt.folder_exists`（含前端文案），
 > 并把 `before_metadata_write`/`inject_metadata_failure_at` 上移到 `catalog/mod.rs` 供两个
 > 领域模块共用；`Index` 新增 `list_prompts()`（只列正常库，回收站原文件夹由还原语义处理）。
-- [ ] 4.5 先建立共享标签词面、提示词标签幂等、分库计数、note 自动保存数据边界和 favorite 筛选测试
-- [ ] 4.6 实现提示词文件夹/标签、note/favorite 原子写入与派生索引维护
+- [x] 4.5 先建立共享标签词面、提示词标签幂等、分库计数、note 自动保存数据边界和 favorite 筛选测试
+- [x] 4.6 实现提示词文件夹/标签、note/favorite 原子写入与派生索引维护
+
+> 4.5/4.6 落在 `catalog/prompt_metadata.rs`（2026-08-21）：5 条测试先行（stub 红）后实现
+> 转绿。`set_prompt_tags` 复用图片侧 `Tag` 词法（共享词面），排序去重保证幂等——重复设置
+> 同一集合以"权威文件字节不变"钉住；分库计数经 `active_prompt_tag_counts` 与
+> `active_tag_counts` 钉住互不混算。`set_prompt_note` 逐字保留换行与空格，且不推进
+> `updated_at`、不改主字段（备注是独立自动保存流，否则边打字边保存会让更新时间失义）；
+> `set_prompt_favorite` 是纯二值。三个 setter 与 `set_prompt_folders` 共用新的
+> `load_editable_prompt` 助手，统一"正常库中不存在报 `prompt.not_found`、回收站状态拒绝
+> 组织写入报 `prompt.write_failed`"的语义，全部先写权威文件再同步派生索引。
 - [ ] 4.7 建立 `PromptQuery` 公开测试，覆盖标题/正文 Unicode 子串、精确/根文件夹、多标签 AND、收藏、正常/回收站与稳定排序
 - [ ] 4.8 实现只加载命中轻量行的提示词查询与按需完整详情接口
 
