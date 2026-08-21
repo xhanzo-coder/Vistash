@@ -361,7 +361,27 @@
 > `summarizeCommon` 计算多选检查器的共同/混合摘要：完全一致报 common；多值字段有分歧报
 > mixed 但仍携带共同子集（UI 呈现「人像（混合）」）；收藏二值不一致报 mixed。四道门禁通过
 > （前端 lint/typecheck/59 测试、Rust 282 测试零失败、clippy -D warnings 干净）。
-- [ ] 8.6 实现中等/窄窗口左栏折叠与右检查器抽屉，删除固定 960px 最小宽并保证焦点不被粘性层遮挡
+- [x] 8.6 实现中等/窄窗口左栏折叠与右检查器抽屉，删除固定 960px 最小宽并保证焦点不被粘性层遮挡
+
+> 8.6 落在新建的 `src/features/workspace/breakpoints.ts|test.tsx` 与
+> `workspaceDrawer.tsx|test.tsx`、`AssetWorkspace.tsx|test.tsx` 接线与 `styles.css`
+> （2026-08-21）。断点按设计第 116 行以 CSS px 视口宽度确定：`useWindowTier` 返回
+> wide/medium/narrow 三档（>1080 / ≤1080 / ≤720），经 matchMedia change 监听驱动，
+> 不按物理像素或系统缩放另建分支；断点数值与 styles.css 媒体查询的一致性由测试读取
+> 样式表原文钉住，改一处不改另一处会当场失败。抽屉机制两侧共用：`WorkspaceDrawer`
+> 在宽屏 inline 模式原位渲染内容，中等/窄窗口 drawer 模式呈现覆盖面板——打开时焦点
+> 移入面板、Esc 与点击背景请求关闭、关闭后焦点归还给打开前的元素；左分类栏是第一个
+> 消费方（side="start"，边缘入口按钮带 aria-expanded/aria-controls），右检查器在第 9
+> 章以 side="end" 接入同一组件，避免对尚不存在的检查器内容先造投机 API（与 8.1 的
+> 处理一致）。窄屏自动收起不写任何宽屏宽度偏好。AssetWorkspace 组件测试新增"中等
+> 窗口左栏收起为抽屉、边缘入口打开且 Esc 关闭"一条，既有测试显式设定宽屏视口；
+> jsdom 缺失的 matchMedia 由新增的全局测试 setup 补桩。styles.css 删除固定 960px
+> 最小宽，旧的 1100px 块替换为 720px 压缩块（顶栏与详情列），z-index 收敛为
+> sticky/drawer/dialog/skip 四档 token；键盘焦点遮挡问题以 `html` 的
+> scroll-padding-block-end 为粘性批量工具条预留高度解决，方向键滚动定位时聚焦项
+> 不会被贴底工具条盖住（虚拟化滚动容器的同类预留随第 9 章接入）。四道门禁通过
+> （前端 lint/typecheck/67 测试、Rust 282 测试零失败、clippy -D warnings 干净）。
+> 第 8 章至此完成。
 
 ## 9. 图片工作台
 

@@ -102,8 +102,11 @@
   --motion-ease: ease;
   --motion-ease-out: ease-out;
 
-  /* 层级：粘性批量工具条等页面内浮层 */
+  /* 层级：粘性工具条 < 抽屉 < 对话框 < 跳转链接 */
   --z-sticky: 30;
+  --z-drawer: 40;
+  --z-dialog: 50;
+  --z-skip: 60;
 }
 
 * {
@@ -113,9 +116,17 @@
 html,
 body,
 #root {
-  min-width: 960px;
   min-height: 100%;
   margin: 0;
+}
+
+/*
+ * 键盘焦点经滚动定位时为粘性批量工具条预留高度（任务 8.6）：
+ * 方向键把焦点移到视口下缘附近时，浏览器会把目标滚到预留线之上，
+ * 不会被贴底的工具条遮挡。
+ */
+html {
+  scroll-padding-block-end: 3.5rem;
 }
 
 body {
@@ -155,7 +166,7 @@ button:disabled {
 
 .skip-link {
   position: fixed;
-  z-index: 30;
+  z-index: var(--z-skip);
   inset-block-start: var(--space-2);
   inset-inline-start: var(--space-2);
   padding: 0.55rem var(--space-3);
@@ -697,7 +708,7 @@ button:disabled {
 
 .dialog-backdrop {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-dialog);
   inset: 0;
   display: grid;
   place-items: center;
@@ -746,9 +757,86 @@ button:disabled {
   filter: brightness(0.92);
 }
 
-@media (max-width: 1100px) {
-  .asset-workspace {
-    grid-template-columns: 210px minmax(0, 1fr);
+/*
+ * 中等/窄窗口（≤1080，与 breakpoints.ts 的 medium 断点一致）：左栏收起为抽屉，
+ * 栅格让出整行；rail-drawer 类由组件按窗口层级挂上。
+ */
+@media (max-width: 1080px) {
+  .asset-workspace.rail-drawer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 边缘入口：左右栏收起的窗口层级里，用它打开抽屉（组件按断点渲染）。 */
+.rail-toggle {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-3);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--text-size-sm);
+  transition: filter var(--motion-fast) var(--motion-ease-out);
+}
+
+.rail-toggle:hover {
+  filter: brightness(0.92);
+}
+
+.drawer-backdrop {
+  position: fixed;
+  z-index: var(--z-drawer);
+  inset: 0;
+  background: var(--surface-backdrop);
+}
+
+.workspace-drawer {
+  position: fixed;
+  inset-block: 0;
+  z-index: var(--z-drawer);
+  display: flex;
+  flex-direction: column;
+  width: min(320px, 86vw);
+  overflow-y: auto;
+  background: var(--surface-rail);
+  color: var(--text-on-rail);
+  box-shadow: var(--shadow-dialog);
+}
+
+/* 面板本身是程序化聚焦的容器：焦点环由内部控件呈现，容器不画第二枚。 */
+.workspace-drawer:focus {
+  outline: none;
+}
+
+.workspace-drawer-start {
+  inset-inline-start: 0;
+  border-inline-end: 1px solid var(--border-on-rail);
+  animation: drawer-in-from-start var(--motion-base) var(--motion-ease-out);
+}
+
+.workspace-drawer-end {
+  inset-inline-end: 0;
+  border-inline-start: 1px solid var(--border-on-rail);
+  animation: drawer-in-from-end var(--motion-base) var(--motion-ease-out);
+}
+
+@keyframes drawer-in-from-start {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes drawer-in-from-end {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+/* 窄窗口（≤720，与 breakpoints.ts 的 narrow 断点一致）：压缩顶栏与详情列。 */
+@media (max-width: 720px) {
+  .topbar {
+    gap: var(--space-2);
+    padding-inline: var(--space-3);
   }
 
   .asset-details {
@@ -757,6 +845,12 @@ button:disabled {
 
   .metadata-panel {
     position: static;
+  }
+
+  .query-bar,
+  .tag-filter,
+  .trash-toolbar {
+    padding-inline: var(--space-3);
   }
 }
 

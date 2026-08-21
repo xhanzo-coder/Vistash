@@ -69,11 +69,18 @@ class DormantIntersectionObserver implements IntersectionObserver {
   unobserve(): void {}
 }
 
+/** jsdom 不做布局，窗口层级由显式设定的视口宽度决定（任务 8.6）。 */
+function setWindowWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+}
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
     configurable: true,
     value: true,
   });
+  // 既有测试面向宽屏三栏行为：左栏原位展开。
+  setWindowWidth(1440);
   queries = [];
   purgeCalls = 0;
   ipcCalls = [];
@@ -111,6 +118,7 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  setWindowWidth(1024);
   document.body.replaceChildren();
 });
 
@@ -281,6 +289,42 @@ test("从回收站还原并保留缺失文件夹警告", async () => {
   );
   if (warning === null) throw new Error("缺少还原缺失文件夹警告");
   expect(warning.textContent).toContain("已删除的文件夹");
+
+  await act(async () => root.unmount());
+});
+
+test("中等窗口左栏收起为抽屉，边缘入口打开且 Esc 关闭", async () => {
+  // 跨过 1080 断点：左栏默认收起，栅格让出整行。
+  setWindowWidth(1000);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} />);
+  });
+  await flush();
+
+  // 收起状态下栏内容不在文档里，但边缘入口可见且声明它控制的面板。
+  expect(document.querySelector(".catalog-rail")).toBeNull();
+  const toggle = container.querySelector<HTMLButtonElement>(".rail-toggle");
+  if (toggle === null) throw new Error("缺少分类边缘入口");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(toggle.getAttribute("aria-controls")).toBe("catalog-rail-panel");
+
+  // 打开：栏内容出现在对话框面板中。
+  await act(async () => toggle.click());
+  const panel = document.querySelector<HTMLElement>("#catalog-rail-panel");
+  if (panel === null) throw new Error("缺少抽屉面板");
+  expect(panel.getAttribute("role")).toBe("dialog");
+  expect(panel.querySelector(".catalog-rail")).not.toBeNull();
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+  // Esc 关闭：面板与栏内容一并移除。
+  await act(async () => {
+    panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(document.querySelector("#catalog-rail-panel")).toBeNull();
+  expect(document.querySelector(".catalog-rail")).toBeNull();
 
   await act(async () => root.unmount());
 });

@@ -29,6 +29,8 @@ import type {
   PurgeReport,
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
+import { useWindowTier } from "../workspace/breakpoints";
+import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
 import { AssetGrid } from "./AssetGrid";
 import { AssetPreview } from "./AssetPreview";
 
@@ -57,6 +59,12 @@ export function AssetWorkspace({ refreshVersion }: { refreshVersion: number }) {
   const [newFolderName, setNewFolderName] = useState("");
   const [renameValue, setRenameValue] = useState("");
   const [folderProgress, setFolderProgress] = useState<FolderMutationProgress | null>(null);
+
+  // 中等/窄窗口左栏收起为抽屉（任务 8.6）：宽屏原位展开，其余层级默认收起、
+  // 经边缘入口打开。窄屏自动收起不写任何宽屏宽度偏好。
+  const tier = useWindowTier();
+  const drawerMode = tier === "wide" ? "inline" : "drawer";
+  const [railOpen, setRailOpen] = useState(false);
 
   const query = useMemo<AssetQuery>(
     // 收藏筛选属于第 9 章的检查器与筛选条；在它落地前恒为"不限"。
@@ -221,101 +229,113 @@ export function AssetWorkspace({ refreshVersion }: { refreshVersion: number }) {
   }
 
   return (
-    <section className="asset-workspace" aria-label="素材工作区">
-      <aside className="catalog-rail">
-        <div className="rail-heading">
-          <p className="eyebrow">CATALOG</p>
-          <h2>素材档案</h2>
-        </div>
-        <nav aria-label="素材位置" className="catalog-nav">
-          <button
-            type="button"
-            aria-current={location === "active" && folder.kind === "all" ? "page" : undefined}
-            onClick={() => selectFolder({ kind: "all" })}
-          >
-            <span>全部素材</span>
-            <span>{location === "active" && folder.kind === "all" ? snapshot?.assets.length : ""}</span>
-          </button>
-          <button
-            type="button"
-            aria-current={location === "active" && folder.kind === "root" ? "page" : undefined}
-            onClick={() => selectFolder({ kind: "root" })}
-          >
-            根文件夹
-          </button>
-          <div className="folder-list" aria-label="逻辑文件夹">
-            {snapshot?.folders.map((path) => (
-              <button
-                type="button"
-                key={path}
-                data-folder={path}
-                aria-current={
-                  location === "active" && folder.kind === "path" && folder.path === path
-                    ? "page"
-                    : undefined
-                }
-                style={{ paddingInlineStart: `${1 + path.split("/").length * 0.8}rem` }}
-                onClick={() => selectFolder({ kind: "path", path })}
-              >
-                {path.split("/").at(-1)}
-              </button>
-            ))}
+    <section
+      className={`asset-workspace${drawerMode === "drawer" ? " rail-drawer" : ""}`}
+      aria-label="素材工作区"
+    >
+      <WorkspaceDrawer
+        mode={drawerMode}
+        side="start"
+        label="素材分类"
+        open={railOpen}
+        onClose={() => setRailOpen(false)}
+        panelId="catalog-rail-panel"
+      >
+        <aside className="catalog-rail">
+          <div className="rail-heading">
+            <p className="eyebrow">CATALOG</p>
+            <h2>素材档案</h2>
           </div>
-          <button
-            type="button"
-            aria-label="回收站"
-            aria-current={location === "trash" ? "page" : undefined}
-            onClick={() => {
-              setLocation("trash");
-              setFolder({ kind: "all" });
-              setSelectedTags([]);
-              setSelectedHash(null);
-            }}
-          >
-            <span>回收站</span>
-            <span>{snapshot?.trash_count ?? 0}</span>
-          </button>
-        </nav>
-
-        {location === "active" && (
-          <div className="folder-actions">
-            <form onSubmit={(event) => void submitFolder(event)}>
-              <label htmlFor="new-folder">{folder.kind === "path" ? "新建子文件夹" : "新建文件夹"}</label>
-              <div className="compact-form">
-                <input
-                  id="new-folder"
-                  name="new-folder"
-                  autoComplete="off"
-                  value={newFolderName}
-                  onChange={(event) => setNewFolderName(event.target.value)}
-                  required
-                />
-                <button type="submit" disabled={mutating}>新增</button>
-              </div>
-            </form>
-            {folder.kind === "path" && (
-              <div className="folder-edit">
-                <label htmlFor="rename-folder">重命名当前文件夹</label>
-                <input
-                  id="rename-folder"
-                  name="rename-folder"
-                  autoComplete="off"
-                  value={renameValue}
-                  onChange={(event) => setRenameValue(event.target.value)}
-                />
-                <div className="button-row">
-                  <button type="button" onClick={requestFolderRename} disabled={mutating}>
-                    保存名称
-                  </button>
-                  <button type="button" className="danger-ghost" onClick={requestFolderDelete}>
-                    删除文件夹
-                  </button>
+          <nav aria-label="素材位置" className="catalog-nav">
+            <button
+              type="button"
+              aria-current={location === "active" && folder.kind === "all" ? "page" : undefined}
+              onClick={() => selectFolder({ kind: "all" })}
+            >
+              <span>全部素材</span>
+              <span>{location === "active" && folder.kind === "all" ? snapshot?.assets.length : ""}</span>
+            </button>
+            <button
+              type="button"
+              aria-current={location === "active" && folder.kind === "root" ? "page" : undefined}
+              onClick={() => selectFolder({ kind: "root" })}
+            >
+              根文件夹
+            </button>
+            <div className="folder-list" aria-label="逻辑文件夹">
+              {snapshot?.folders.map((path) => (
+                <button
+                  type="button"
+                  key={path}
+                  data-folder={path}
+                  aria-current={
+                    location === "active" && folder.kind === "path" && folder.path === path
+                      ? "page"
+                      : undefined
+                  }
+                  style={{ paddingInlineStart: `${1 + path.split("/").length * 0.8}rem` }}
+                  onClick={() => selectFolder({ kind: "path", path })}
+                >
+                  {path.split("/").at(-1)}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              aria-label="回收站"
+              aria-current={location === "trash" ? "page" : undefined}
+              onClick={() => {
+                setLocation("trash");
+                setFolder({ kind: "all" });
+                setSelectedTags([]);
+                setSelectedHash(null);
+              }}
+            >
+              <span>回收站</span>
+              <span>{snapshot?.trash_count ?? 0}</span>
+            </button>
+          </nav>
+  
+          {location === "active" && (
+            <div className="folder-actions">
+              <form onSubmit={(event) => void submitFolder(event)}>
+                <label htmlFor="new-folder">{folder.kind === "path" ? "新建子文件夹" : "新建文件夹"}</label>
+                <div className="compact-form">
+                  <input
+                    id="new-folder"
+                    name="new-folder"
+                    autoComplete="off"
+                    value={newFolderName}
+                    onChange={(event) => setNewFolderName(event.target.value)}
+                    required
+                  />
+                  <button type="submit" disabled={mutating}>新增</button>
                 </div>
-              </div>
-            )}
-          </div>
-        )}
-      </aside>
+              </form>
+              {folder.kind === "path" && (
+                <div className="folder-edit">
+                  <label htmlFor="rename-folder">重命名当前文件夹</label>
+                  <input
+                    id="rename-folder"
+                    name="rename-folder"
+                    autoComplete="off"
+                    value={renameValue}
+                    onChange={(event) => setRenameValue(event.target.value)}
+                  />
+                  <div className="button-row">
+                    <button type="button" onClick={requestFolderRename} disabled={mutating}>
+                      保存名称
+                    </button>
+                    <button type="button" className="danger-ghost" onClick={requestFolderDelete}>
+                      删除文件夹
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </aside>
+      </WorkspaceDrawer>
 
       <div className="catalog-main">
         {folderProgress !== null && (
@@ -330,6 +350,17 @@ export function AssetWorkspace({ refreshVersion }: { refreshVersion: number }) {
             <p className="eyebrow">LOCAL ARCHIVE</p>
             <h2>{location === "trash" ? "回收站" : titleForFolder(folder)}</h2>
           </div>
+          {drawerMode === "drawer" && (
+            <button
+              type="button"
+              className="rail-toggle"
+              aria-expanded={railOpen}
+              aria-controls="catalog-rail-panel"
+              onClick={() => setRailOpen(true)}
+            >
+              分类
+            </button>
+          )}
           <label className="search-field">
             <span>文件名</span>
             <input
