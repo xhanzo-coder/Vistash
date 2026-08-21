@@ -36,8 +36,8 @@ pub use prompt_lifecycle::{PromptPurgeFailure, PromptPurgeReport, PromptRestoreO
 pub use linking::{ImportAndLinkItem, ImportAndLinkOutcome, ImportAndLinkReport};
 pub use prompt_metadata::{NewPrompt, PromptEdit};
 pub use query::{
-    AssetLocation, AssetQuery, CatalogSnapshot, FolderFilter, PromptLocation, PromptQuery,
-    PromptSnapshot, TagUsage,
+    AssetLocation, AssetQuery, CatalogSnapshot, FolderFilter, GlobalSearchResult, ImageDetail,
+    PromptLocation, PromptQuery, PromptSnapshot, TagUsage,
 };
 
 #[cfg(test)]

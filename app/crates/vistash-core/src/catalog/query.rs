@@ -5,6 +5,7 @@
 //! 查询都会让这条等价性无法被测试证明。
 
 use crate::error::Result;
+use crate::hashing::ContentHash;
 use crate::index::{AssetRow, FolderSelection, Index, PromptRow};
 use serde::Serialize;
 
@@ -89,6 +90,31 @@ pub struct CatalogSnapshot {
     pub trash_count: usize,
 }
 
+/// 全局搜索的一次结果：按素材类型分组的轻量行。
+///
+/// 分组本身就是类型定位——一条结果属于哪个组，它就是哪种素材；各组数量即
+/// `assets.len()` / `prompts.len()`，界面据此显示分组计数而不混出无类型瀑布流。
+/// 只携带派生索引里的轻量行：原图字节、色卡渲染与关联展开都留给检查器按需
+/// 请求，全局搜索绝不逐项加载它们。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GlobalSearchResult {
+    /// 命中的正常库图片，排序与图片视图一致（导入时间倒序）。
+    pub assets: Vec<AssetRow>,
+    /// 命中的正常库提示词，排序与提示词视图一致（创建时间倒序）。
+    pub prompts: Vec<PromptRow>,
+}
+
+/// 图片检查器的一次按需详情。
+///
+/// 与 `prompt_detail` 同一分层：列表与搜索只拿轻量行，检查器打开时才组装
+/// 这份详情。原图字节仍走 `read_asset_body` 单独请求，这里不读任何本体文件。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ImageDetail {
+    pub asset: AssetRow,
+    /// 关联这张图的全部提示词（含回收站提示词），经派生反查回答。
+    pub linked_prompts: Vec<PromptRow>,
+}
+
 impl Catalog {
     pub fn rebuild_index(&mut self) -> Result<()> {
         self.index.take();
@@ -151,6 +177,52 @@ impl Catalog {
                 .map(|(tag, count)| TagUsage { tag, count })
                 .collect(),
             trash_count: index.deleted_prompt_count()?,
+        })
+    }
+
+    /// 跨图片与提示词的全局搜索：文本命中图片文件名/标签或提示词标题/正文/标签。
+    ///
+    /// 只搜正常库——回收站素材不属于快速跳转的呈现范围。空白文本返回空结果而
+    /// 不是全部素材。文本语义与各自视图一致：Rust 侧大小写折叠子串匹配，排序
+    /// 直接复用两个视图查询的稳定顺序。
+    pub fn global_search(&self, text: &str) -> Result<GlobalSearchResult> {
+        let needle = text.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(GlobalSearchResult {
+                assets: Vec::new(),
+                prompts: Vec::new(),
+            });
+        }
+        let index = self.index()?;
+        let mut assets = index.query_assets(false, FolderSelection::All, &[], None, "")?;
+        assets.retain(|asset| {
+            asset.original_filename.to_lowercase().contains(&needle)
+                || asset
+                    .tags
+                    .iter()
+                    .any(|tag| tag.to_lowercase().contains(&needle))
+        });
+        let mut prompts = index.query_prompts(false, FolderSelection::All, &[], None, "")?;
+        prompts.retain(|prompt| {
+            prompt
+                .title
+                .as_deref()
+                .is_some_and(|title| title.to_lowercase().contains(&needle))
+                || prompt.body.to_lowercase().contains(&needle)
+                || prompt
+                    .tags
+                    .iter()
+                    .any(|tag| tag.to_lowercase().contains(&needle))
+        });
+        Ok(GlobalSearchResult { assets, prompts })
+    }
+
+    /// 图片检查器的按需详情：轻量行加关联提示词反查。
+    pub fn image_detail(&self, hash: &ContentHash) -> Result<ImageDetail> {
+        let index = self.index()?;
+        Ok(ImageDetail {
+            asset: index.asset_row(hash.as_str())?,
+            linked_prompts: index.prompts_for_image(hash.as_str())?,
         })
     }
 }
@@ -977,5 +1049,244 @@ mod tests {
                 "018f3c9e-6c00-7000-8000-0000000000f3",
             ]
         );
+    }
+
+    #[test]
+    fn global_search_matches_filenames_tags_titles_and_bodies() {
+        let mut fixture = fixture();
+        import_with(
+            &mut fixture.catalog,
+            &write_png(&fixture.source, "逆光-构图.png", [255, 0, 0, 255]),
+            &[],
+            &["风景"],
+        );
+        import_with(
+            &mut fixture.catalog,
+            &write_png(&fixture.source, "街景.png", [0, 255, 0, 255]),
+            &[],
+            &["人物"],
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000a1",
+                "cinematic lighting, warm tones",
+                Some("逆光人像"),
+                &[],
+                &["人像"],
+                false,
+                100,
+            ),
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000a2",
+                "夜色中的霓虹灯街道",
+                None,
+                &[],
+                &[],
+                false,
+                200,
+            ),
+        );
+        let search = |catalog: &crate::catalog::Catalog, text: &str| {
+            catalog.global_search(text).expect("全局搜索")
+        };
+        let names =
+            |result: &GlobalSearchResult| result.assets.iter().map(|a| a.original_filename.clone()).collect::<Vec<_>>();
+        let prompt_ids = |result: &GlobalSearchResult| {
+            result.prompts.iter().map(|p| p.id.clone()).collect::<Vec<_>>()
+        };
+
+        // 文件名命中图片，标题命中提示词：同一文本分属两个类型分组。
+        let backlit = search(&fixture.catalog, "逆光");
+        assert_eq!(names(&backlit), vec!["逆光-构图.png".to_owned()]);
+        assert_eq!(
+            prompt_ids(&backlit),
+            vec!["018f3c9e-6c00-7000-8000-0000000000a1".to_owned()]
+        );
+        // 标签命中：文件名里没有"风景"，靠标签命中。
+        assert_eq!(names(&search(&fixture.catalog, "风景")), vec!["逆光-构图.png".to_owned()]);
+        // 图片标签与提示词标签是两套词面，各自命中各自的分组。
+        assert_eq!(names(&search(&fixture.catalog, "人物")), vec!["街景.png".to_owned()]);
+        // 正文大小写折叠命中英文。
+        assert_eq!(
+            prompt_ids(&search(&fixture.catalog, "CINEMATIC")),
+            vec!["018f3c9e-6c00-7000-8000-0000000000a1".to_owned()]
+        );
+        // 正文中文子串命中无标题素材；提示词标签也能命中。
+        assert_eq!(
+            prompt_ids(&search(&fixture.catalog, "霓虹")),
+            vec!["018f3c9e-6c00-7000-8000-0000000000a2".to_owned()]
+        );
+        assert_eq!(
+            prompt_ids(&search(&fixture.catalog, "人像")),
+            vec!["018f3c9e-6c00-7000-8000-0000000000a1".to_owned()]
+        );
+        // 无命中就是空结果，而不是全部素材。
+        let nothing = search(&fixture.catalog, "不存在的词");
+        assert!(nothing.assets.is_empty() && nothing.prompts.is_empty());
+    }
+
+    #[test]
+    fn global_search_groups_counts_and_excludes_both_trashes() {
+        let mut fixture = fixture();
+        import_with(
+            &mut fixture.catalog,
+            &write_png(&fixture.source, "逆光-a.png", [255, 0, 0, 255]),
+            &[],
+            &[],
+        );
+        import_with(
+            &mut fixture.catalog,
+            &write_png(&fixture.source, "逆光-b.png", [0, 255, 0, 255]),
+            &[],
+            &[],
+        );
+        let trashed_image = import_with(
+            &mut fixture.catalog,
+            &write_png(&fixture.source, "逆光-已删.png", [0, 0, 255, 255]),
+            &[],
+            &[],
+        );
+        fixture
+            .catalog
+            .delete_asset(&trashed_image.hash)
+            .expect("移入图片回收站");
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000b1",
+                "逆光正文",
+                None,
+                &[],
+                &[],
+                false,
+                100,
+            ),
+        );
+        let mut trashed_prompt = crafted_prompt(
+            "018f3c9e-6c00-7000-8000-0000000000b2",
+            "逆光的回收站正文",
+            None,
+            &[],
+            &[],
+            false,
+            200,
+        );
+        trashed_prompt.deleted_at = Some(chrono::DateTime::from_timestamp(900, 0).expect("固定时刻"));
+        trashed_prompt.deleted_from_folders = Some(Vec::new());
+        place_prompt(&mut fixture.catalog, &trashed_prompt);
+
+        let result = fixture
+            .catalog
+            .global_search("逆光")
+            .expect("全局搜索");
+
+        // 分组数量即各组长度；两类回收站都不进入快速跳转范围。
+        assert_eq!(result.assets.len(), 2);
+        assert_eq!(result.prompts.len(), 1);
+        assert!(result
+            .assets
+            .iter()
+            .all(|asset| asset.original_filename != "逆光-已删.png"));
+        assert_eq!(
+            result.prompts[0].id,
+            "018f3c9e-6c00-7000-8000-0000000000b1"
+        );
+    }
+
+    #[test]
+    fn a_blank_global_search_returns_an_empty_result_instead_of_everything() {
+        let mut fixture = fixture();
+        import_with(
+            &mut fixture.catalog,
+            &write_png(&fixture.source, "存在.png", [255, 0, 0, 255]),
+            &[],
+            &[],
+        );
+        place_prompt(
+            &mut fixture.catalog,
+            &crafted_prompt(
+                "018f3c9e-6c00-7000-8000-0000000000c9",
+                "存在的正文",
+                None,
+                &[],
+                &[],
+                false,
+                100,
+            ),
+        );
+
+        for text in ["", "   "] {
+            let result = fixture.catalog.global_search(text).expect("全局搜索");
+            assert!(
+                result.assets.is_empty() && result.prompts.is_empty(),
+                "空白文本 {text:?} 必须返回空结果"
+            );
+        }
+    }
+
+    #[test]
+    fn image_detail_composes_the_row_and_every_linking_prompt() {
+        let mut fixture = fixture();
+        let image = import_with(
+            &mut fixture.catalog,
+            &write_png(&fixture.source, "详情.png", [255, 0, 0, 255]),
+            &[],
+            &[],
+        );
+        let active = prompt_via_create(&mut fixture.catalog, "活跃的关联提示词");
+        let later_trashed = prompt_via_create(&mut fixture.catalog, "之后进回收站的提示词");
+        fixture
+            .catalog
+            .link_images(&active.id, std::slice::from_ref(&image.hash))
+            .expect("关联第一张");
+        fixture
+            .catalog
+            .link_images(&later_trashed.id, std::slice::from_ref(&image.hash))
+            .expect("关联第二张");
+        fixture
+            .catalog
+            .delete_prompt(&later_trashed.id)
+            .expect("移入提示词回收站");
+
+        let detail = fixture
+            .catalog
+            .image_detail(&image.hash)
+            .expect("读取图片详情");
+        assert_eq!(detail.asset.original_filename, "详情.png");
+        // 反查含回收站提示词：检查器如实体现已删除状态。
+        let linked_ids: Vec<String> = detail
+            .linked_prompts
+            .iter()
+            .map(|prompt| prompt.id.clone())
+            .collect();
+        assert_eq!(linked_ids.len(), 2);
+        assert!(linked_ids.contains(&active.id.as_str().to_owned()));
+        assert!(linked_ids.contains(&later_trashed.id.as_str().to_owned()));
+
+        // 从未入库的哈希给出明确错误，而不是空详情。
+        let unknown = crate::hashing::ContentHash::of_bytes(b"unknown-detail-hash");
+        let error = fixture
+            .catalog
+            .image_detail(&unknown)
+            .expect_err("未知哈希应失败");
+        assert_eq!(error.code, Code::LibraryNotFound);
+    }
+
+    /// 经生产创建路径拿到一条正常库提示词（与 crafted_prompt 的直写路径互补）。
+    fn prompt_via_create(catalog: &mut crate::catalog::Catalog, body: &str) -> PromptAsset {
+        catalog
+            .create_prompt(&crate::catalog::NewPrompt {
+                body: body.to_owned(),
+                title: None,
+                model: None,
+                parameters: None,
+                folders: vec![],
+                tags: vec![],
+            })
+            .expect("创建提示词")
     }
 }
