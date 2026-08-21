@@ -19,6 +19,7 @@
 //! 提示词元数据与普通关联/封面按同一规则各自成为兄弟模块，由任务 4.x 与 6.x 在有实际
 //! 内容时建立。现在就建立空模块只会留下一层没有内容的间接。
 
+mod batch;
 mod image_metadata;
 mod lifecycle;
 mod linking;
@@ -28,6 +29,7 @@ mod query;
 #[cfg(test)]
 mod testing;
 
+pub use batch::{BatchFailure, BatchProgress, BatchReport, SilentProgress};
 pub use image_metadata::{FolderMutationProgress, FolderName, FolderPath, Tag};
 pub use lifecycle::{PurgeFailure, PurgeReport, RestoreOutcome};
 pub use prompt_lifecycle::{PromptPurgeFailure, PromptPurgeReport, PromptRestoreOutcome};

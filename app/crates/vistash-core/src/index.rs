@@ -688,6 +688,26 @@ impl Index {
             .map_err(|e| sql_err("查询素材存在性失败", e))
     }
 
+    /// 按哈希取单个素材行（含组织字段）。批量组织用它读当前值、计算新集合。
+    pub fn asset_row(&self, hash: &str) -> Result<AssetRow> {
+        let mut assets =
+            self.load_assets_with_params("WHERE hash = ?1", &[hash.to_owned()], None)?;
+        assets.pop().ok_or_else(|| {
+            AppError::detailed(
+                Code::LibraryNotFound,
+                format!("索引中没有这个素材：{hash}"),
+            )
+        })
+    }
+
+    /// 按 ID 取单个提示词行（含回收站），供批量组织读当前值与显示名。
+    pub fn prompt_row(&self, id: &str) -> Result<PromptRow> {
+        let mut rows = self.load_prompts("p WHERE p.id = ?1", &[id.to_owned()])?;
+        rows.pop().ok_or_else(|| {
+            AppError::detailed(Code::PromptNotFound, format!("索引中没有这条提示词：{id}"))
+        })
+    }
+
     /// 反查关联了某张图片的全部提示词（含回收站），按 ID 排序。
     ///
     /// 反查必须包含回收站提示词：设计第三条要求图片反查能显示"关联提示词已
