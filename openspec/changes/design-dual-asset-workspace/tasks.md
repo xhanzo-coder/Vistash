@@ -341,8 +341,26 @@
 > 消费方接入随第 9 章 AssetWorkspace 重建进行，本任务交付的是带完整合同测试的接缝。
 > 四道门禁通过（前端 lint/typecheck/35 测试、Rust 282 测试零失败、clippy -D warnings
 > 干净）。
-- [ ] 8.4 先为统一 `SelectionModel` reducer 建立单击、Ctrl/Shift、框选、Ctrl+A、活动项、范围锚点、Esc 与跨视图保留测试
-- [ ] 8.5 实现可被图片与提示词视图复用的选择 Context、批量工具条、共同/混合检查器摘要与键盘焦点语法
+- [x] 8.4 先为统一 `SelectionModel` reducer 建立单击、Ctrl/Shift、框选、Ctrl+A、活动项、范围锚点、Esc 与跨视图保留测试
+- [x] 8.5 实现可被图片与提示词视图复用的选择 Context、批量工具条、共同/混合检查器摘要与键盘焦点语法
+
+> 8.4/8.5 落在 `src/features/workspace/selection.ts|test.ts` 与新建的
+> `selectionContext.tsx|test.tsx`、`batchToolbar.tsx|test.tsx`、`inspectorSummary.ts|test.ts`
+> （2026-08-21）。状态机是纯 reducer（不触碰 React 与 IPC），保存五类事实：查询有序 ID、
+> 活动 ID、选中集合、范围锚点与聚焦 ID；13 条合同测试逐条钉住任务列举的交互——单击替换、
+> Ctrl/Cmd 并入与移出（活动/锚点跟随被点项）、Shift 范围（锚点不动、无锚点退化为单击）、
+> 框选默认替换/additive 并入且不碰键盘状态、Ctrl+A 不动活动与锚点、Esc 只清选中保留活动
+> 与聚焦、方向键/Home/End 移动活动项（Shift 从固定锚点生长或收缩范围）、空域上任何动作
+> 都安全，以及跨视图保留三态：同一查询域原样返回、缩域取交集并清空越界字段、扩域不影响
+> 既有选中。8.5 在其上建立 `SelectionProvider`/`useSelection`：useReducer + 局部 Context
+> （决策第七条，不用全局状态库），把修饰键单击翻译成动作、把键盘语法挂到 `handleKeyDown`
+> （返回是否已处理供视图决定 preventDefault，打字焦点在 input/textarea/contentEditable
+> 内时不劫持）；查询域变化经 effect 下发 `idsReplaced`，同一批 ID 由快速路径原样返回。
+> `BatchToolbar` 是纯外壳：计数文案、全选/清除与 children 插槽（第 9/10 章注入视图专属
+> 批量动作），count 为 0 不渲染，样式全部走语义 token 并把粘性层级提升为 `--z-sticky`。
+> `summarizeCommon` 计算多选检查器的共同/混合摘要：完全一致报 common；多值字段有分歧报
+> mixed 但仍携带共同子集（UI 呈现「人像（混合）」）；收藏二值不一致报 mixed。四道门禁通过
+> （前端 lint/typecheck/59 测试、Rust 282 测试零失败、clippy -D warnings 干净）。
 - [ ] 8.6 实现中等/窄窗口左栏折叠与右检查器抽屉，删除固定 960px 最小宽并保证焦点不被粘性层遮挡
 
 ## 9. 图片工作台

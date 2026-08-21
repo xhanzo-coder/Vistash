@@ -101,6 +101,9 @@
   --motion-base: 150ms;
   --motion-ease: ease;
   --motion-ease-out: ease-out;
+
+  /* 层级：粘性批量工具条等页面内浮层 */
+  --z-sticky: 30;
 }
 
 * {
@@ -766,6 +769,41 @@ button:disabled {
 
 .confirm-dialog {
   animation: dialog-in var(--motion-base) var(--motion-ease-out);
+}
+
+/* 批量工具条：有选中项时贴在集合底部，视图专属动作经插槽追加。 */
+.batch-toolbar {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface-card);
+  border-top: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-raised);
+}
+
+.batch-toolbar-count {
+  margin-inline-end: auto;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.batch-toolbar-action {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: filter var(--motion-fast) var(--motion-ease-out);
+}
+
+.batch-toolbar-action:hover {
+  filter: brightness(0.92);
 }
 
 @media (prefers-reduced-motion: reduce) {
