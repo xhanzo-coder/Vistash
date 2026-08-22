@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssetWorkspace } from "./features/assets/AssetWorkspace";
 import { ErrorLine } from "./features/library/ErrorLine";
+import { PromptWorkspace } from "./features/prompts/PromptWorkspace";
 import { LibraryPicker } from "./features/library/LibraryPicker";
 import {
   WorkspaceTopBar,
@@ -154,17 +155,11 @@ export function App() {
       <main id="main-content" className="app-main">
         {section === "prompts" ? (
           /*
-            未实现的入口必须显式说明"尚未实现"，禁止渲染成空列表：空列表与"库中确实没有
-            内容"无法区分，会使使用者误判功能已存在但数据丢失。
+            提示词工作区（任务 10.3）：与图片侧同级的一等工作区。refreshVersion 与
+            图片侧共享同一 catalogVersion——任一侧的结构性变更都推进它，两个工作区
+            各自按需刷新自己的快照。
           */
-          <section>
-            <h2>提示词库</h2>
-            <p>
-              <strong>尚未实现。</strong>
-              提示词的录入、反推产出与检索将在后继变更中加入。此处先占住一级入口的位置，
-              以免日后加入时改动导航层级。
-            </p>
-          </section>
+          <PromptWorkspace refreshVersion={catalogVersion} libraryId={status.library_id} />
         ) : (
           <AssetWorkspace refreshVersion={catalogVersion} libraryId={status.library_id} />
         )}

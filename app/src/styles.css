@@ -261,14 +261,16 @@ button:disabled {
   margin: var(--space-3) var(--space-6);
 }
 
-.asset-workspace {
+.asset-workspace,
+.prompt-workspace {
   flex: 1;
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
 }
 
 /* 宽屏三栏：右检查器原位常驻（with-inspector 由组件按窗口层级挂上）。 */
-.asset-workspace.with-inspector {
+.asset-workspace.with-inspector,
+.prompt-workspace.with-inspector {
   grid-template-columns: 240px minmax(0, 1fr) 300px;
 }
 
@@ -934,6 +936,88 @@ button:disabled {
   font-family: var(--font-mono);
 }
 
+/*
+ * 聚焦阅读（任务 10.3）：占满中央区替换集合视图；进入/退出由检查器按钮控制，
+ * 滚动恢复由布局偏好的滚动键负责，本视图自身不记忆位置。
+ */
+.prompt-body-focus {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: var(--space-3);
+  min-height: 0;
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.prompt-body-focus h2 {
+  margin: 0;
+}
+
+.prompt-body-focus .muted {
+  margin: 0;
+}
+
+/*
+ * 正文呈现：完整换行展示、可横向滚动超长行。聚焦阅读的大版面与检查器内的
+ * 紧凑版共用同一套外观，仅以容器约束尺寸。
+ */
+.focus-body,
+.inspector-body-full {
+  margin: 0;
+  padding: var(--space-3);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--text-size-sm);
+  line-height: 1.55;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+/* 检查器关联图片格位：固定方格，加载文案与失败原因都在格内显式呈现。 */
+.linked-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.linked-thumb {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  place-items: center;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-size-xs);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.linked-thumb p {
+  margin: 0;
+  padding: var(--space-1);
+  text-align: center;
+}
+
+.linked-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .view-switch {
   display: flex;
   gap: 0;
@@ -1344,7 +1428,8 @@ button:disabled {
  * 栅格让出整行；rail-drawer 类由组件按窗口层级挂上。
  */
 @media (max-width: 1080px) {
-  .asset-workspace.rail-drawer {
+  .asset-workspace.rail-drawer,
+  .prompt-workspace.rail-drawer {
     grid-template-columns: minmax(0, 1fr);
   }
 }

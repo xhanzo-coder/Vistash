@@ -1,0 +1,422 @@
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+import { asAppError } from "../../shared/errors";
+import {
+  promptSnapshot,
+  setPromptFavorite,
+  setPromptFolders,
+  setPromptTags,
+} from "../../shared/ipc";
+import type {
+  AppError,
+  FolderFilter,
+  PromptQuery,
+  PromptSnapshot,
+} from "../../shared/types";
+import { ErrorLine } from "../library/ErrorLine";
+import { useWindowTier } from "../workspace/breakpoints";
+import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
+import { SelectionProvider } from "../workspace/selectionContext";
+import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
+import { PromptBodyFocus } from "./PromptBodyFocus";
+import { PromptCardWaterfall } from "./PromptCardWaterfall";
+import { PromptDetailList } from "./PromptDetailList";
+import { PromptInspector } from "./PromptInspector";
+import {
+  DEFAULT_PROMPT_SORT,
+  sortPrompts,
+  type PromptSort,
+  type PromptSortColumn,
+} from "./promptSort";
+
+/**
+ * 提示词工作区外壳（任务 10.3 首版）。
+ *
+ * 与图片侧 AssetWorkspace 同构：左分类、中央集合、右检查器三栏；查询状态、
+ * 快照刷新与变更协调都在这里，中央视图与检查器只是呈现端。
+ *
+ * 布局偏好只消费滚动偏移（"prompts-waterfall"/"prompts-list" 键），视图、筛选
+ * 与排序用组件内状态：useLibraryLayout 的顶层 view/folder/tags/favorite 字段
+ * 归图片侧所有，提示词侧写它们会互相覆盖；滚动键由消费方命名，天然隔离。
+ */
+export function PromptWorkspace({
+  refreshVersion,
+  libraryId,
+}: {
+  refreshVersion: number;
+  libraryId: string | null;
+}) {
+  const { layout, update } = useLibraryLayout(libraryId);
+  const [text, setText] = useState("");
+  const deferredText = useDeferredValue(text);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [folder, setFolder] = useState<FolderFilter>({ kind: "all" });
+  // 收藏筛选：null=不限，true=只看收藏；规格里收藏是二值状态。
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [location, setLocation] = useState<"active" | "trash">("active");
+  const [snapshot, setSnapshot] = useState<PromptSnapshot | null>(null);
+  // 聚焦阅读：只由检查器的显式按钮进入；单击仅更新右检查器。
+  const [bodyFocusId, setBodyFocusId] = useState<string | null>(null);
+  // 右检查器抽屉（中等/窄窗口）的开关；宽屏原位展开时忽略。
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [error, setError] = useState<AppError | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [mutating, setMutating] = useState(false);
+  // 视图与排序不进布局偏好（见组件头注释）；两视图共用同一顺序。
+  const [view, setView] = useState<WorkspaceView>("waterfall");
+  const [sort, setSort] = useState<PromptSort>({ ...DEFAULT_PROMPT_SORT });
+
+  // 中等/窄窗口左栏收起为抽屉：宽屏原位展开，其余层级默认收起、经边缘入口打开。
+  const tier = useWindowTier();
+  const drawerMode = tier === "wide" ? "inline" : "drawer";
+  const [railOpen, setRailOpen] = useState(false);
+
+  const query = useMemo<PromptQuery>(
+    () => ({
+      text: deferredText,
+      tags: selectedTags,
+      folder,
+      favorite: favoriteOnly ? true : null,
+      location,
+    }),
+    [deferredText, favoriteOnly, folder, location, selectedTags],
+  );
+  const snapshotRequest = useMemo(
+    () => ({ query, refreshVersion }),
+    [query, refreshVersion],
+  );
+
+  // 两种视图共用同一顺序（规格：切换视图不清空查询、排序、选择与活动项）。
+  const sortedPrompts = useMemo(
+    () => sortPrompts(snapshot?.prompts ?? [], sort),
+    [snapshot, sort],
+  );
+
+  function changeSort(column: PromptSortColumn) {
+    setSort((current) =>
+      current.column === column
+        ? { column, direction: current.direction === "asc" ? "desc" : "asc" }
+        : { column, direction: "asc" },
+    );
+  }
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await promptSnapshot(query);
+      setSnapshot(next);
+      setError(null);
+    } catch (raw) {
+      setError(asAppError(raw));
+    } finally {
+      setLoading(false);
+    }
+  }, [query]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSnapshot() {
+      try {
+        const next = await promptSnapshot(snapshotRequest.query);
+        if (cancelled) return;
+        setSnapshot(next);
+        setError(null);
+      } catch (raw) {
+        if (!cancelled) setError(asAppError(raw));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void loadSnapshot();
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshotRequest]);
+
+  // 聚焦阅读的目标从当前查询解析；权威刷新把它移除后自动退回集合视图。
+  const bodyFocus =
+    bodyFocusId === null
+      ? null
+      : (sortedPrompts.find((prompt) => prompt.id === bodyFocusId) ?? null);
+
+  async function runMutation(operation: () => Promise<void>, refreshCurrentQuery: boolean) {
+    if (mutating) return;
+    setMutating(true);
+    try {
+      await operation();
+      if (refreshCurrentQuery) await refresh();
+      setError(null);
+    } catch (raw) {
+      setError(asAppError(raw));
+    } finally {
+      setMutating(false);
+    }
+  }
+
+  function selectFolder(next: FolderFilter) {
+    setLocation("active");
+    setFolder(next);
+  }
+
+  function toggleTag(tag: string) {
+    setSelectedTags((current) =>
+      current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
+    );
+  }
+
+  return (
+    <section
+      className={`prompt-workspace${drawerMode === "drawer" ? " rail-drawer" : ""}${
+        drawerMode === "inline" ? " with-inspector" : ""
+      }`}
+      aria-label="提示词工作区"
+    >
+      <WorkspaceDrawer
+        mode={drawerMode}
+        side="start"
+        label="提示词分类"
+        open={railOpen}
+        onClose={() => setRailOpen(false)}
+        panelId="prompt-rail-panel"
+      >
+        <aside className="catalog-rail">
+          <div className="rail-heading">
+            <p className="eyebrow">PROMPTS</p>
+            <h2>提示词档案</h2>
+          </div>
+          <nav aria-label="提示词位置" className="catalog-nav">
+            <button
+              type="button"
+              aria-current={location === "active" && folder.kind === "all" ? "page" : undefined}
+              onClick={() => selectFolder({ kind: "all" })}
+            >
+              <span>全部提示词</span>
+              <span>
+                {location === "active" && folder.kind === "all" ? snapshot?.prompts.length : ""}
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-current={location === "active" && folder.kind === "root" ? "page" : undefined}
+              onClick={() => selectFolder({ kind: "root" })}
+            >
+              根文件夹
+            </button>
+            <div className="folder-list" aria-label="提示词文件夹">
+              {snapshot?.folders.map((path) => (
+                <button
+                  type="button"
+                  key={path}
+                  data-folder={path}
+                  aria-current={
+                    location === "active" && folder.kind === "path" && folder.path === path
+                      ? "page"
+                      : undefined
+                  }
+                  style={{ paddingInlineStart: `${1 + path.split("/").length * 0.8}rem` }}
+                  onClick={() => selectFolder({ kind: "path", path })}
+                >
+                  {path.split("/").at(-1)}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              aria-label="回收站"
+              aria-current={location === "trash" ? "page" : undefined}
+              onClick={() => {
+                setLocation("trash");
+                setFolder({ kind: "all" });
+                setSelectedTags([]);
+              }}
+            >
+              <span>回收站</span>
+              <span>{snapshot?.trash_count ?? 0}</span>
+            </button>
+          </nav>
+        </aside>
+      </WorkspaceDrawer>
+
+      {/* 统一选择模型：Provider 上移到中央区与右检查器之外，视图等价切换共享选择。 */}
+      <SelectionProvider ids={sortedPrompts.map((prompt) => prompt.id)}>
+      <div className="catalog-main">
+        <header className="query-bar">
+          <div>
+            <p className="eyebrow">PROMPT LIBRARY</p>
+            <h2>
+              {location === "trash"
+                ? "回收站"
+                : folder.kind === "root"
+                  ? "根文件夹"
+                  : folder.kind === "path"
+                    ? folder.path
+                    : "全部提示词"}
+            </h2>
+          </div>
+          {drawerMode === "drawer" && (
+            <button
+              type="button"
+              className="rail-toggle"
+              aria-expanded={railOpen}
+              aria-controls="prompt-rail-panel"
+              onClick={() => setRailOpen(true)}
+            >
+              分类
+            </button>
+          )}
+          {drawerMode === "drawer" && (
+            <button
+              type="button"
+              className="rail-toggle"
+              aria-expanded={inspectorOpen}
+              aria-controls="prompt-inspector-panel"
+              onClick={() => setInspectorOpen(true)}
+            >
+              检查器
+            </button>
+          )}
+          <div className="view-switch" role="group" aria-label="集合视图">
+            <button
+              type="button"
+              aria-pressed={view === "waterfall"}
+              onClick={() => setView("waterfall")}
+            >
+              卡片瀑布流
+            </button>
+            <button
+              type="button"
+              aria-pressed={view === "list"}
+              onClick={() => setView("list")}
+            >
+              详情列表
+            </button>
+          </div>
+          <label className="search-field">
+            <span>搜索</span>
+            <input
+              type="search"
+              name="prompt-search"
+              autoComplete="off"
+              aria-label="按标题或正文搜索"
+              placeholder="搜索标题或正文…"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+            />
+          </label>
+          {/* 收藏筛选入口：中央视图只返回 favorite=true 的正常提示词。 */}
+          <button
+            type="button"
+            className={`favorite-filter${favoriteOnly ? " is-on" : ""}`}
+            aria-pressed={favoriteOnly}
+            onClick={() => setFavoriteOnly((current) => !current)}
+          >
+            ★ 只看收藏
+          </button>
+          <span className="result-count">{snapshot?.prompts.length ?? 0} 条</span>
+        </header>
+
+        {location === "active" && (snapshot?.tags.length ?? 0) > 0 && (
+          <div className="tag-filter" aria-label="标签筛选">
+            {snapshot?.tags.map((usage) => (
+              <button
+                type="button"
+                key={usage.tag}
+                aria-pressed={selectedTags.includes(usage.tag)}
+                onClick={() => toggleTag(usage.tag)}
+              >
+                {usage.tag} <span>{usage.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {error !== null && <ErrorLine error={error} />}
+        {loading && snapshot === null ? (
+          <p role="status" className="workspace-loading">正在读取提示词编目…</p>
+        ) : bodyFocus !== null ? (
+          /* 聚焦阅读（显式进入）：占满中央区，退出后回原列表位置。 */
+          <PromptBodyFocus
+            key={bodyFocus.id}
+            prompt={bodyFocus}
+            onClose={() => setBodyFocusId(null)}
+          />
+        ) : (
+          /*
+            集合视图（任务 10.1/10.2）。选择权威在统一 SelectionModel：单击只选中并
+            更新右检查器。瀑布流与详情列表挂在同一个 Provider 上，切换视图时查询、
+            排序、选择与活动项全部保留。
+          */
+          sortedPrompts.length === 0 ? (
+            <div className="empty-state">
+              <p className="eyebrow">NO PROMPTS</p>
+              <h3>这里还没有匹配的提示词</h3>
+              <p>调整查询条件，或从检查器新建一条手写记录。</p>
+            </div>
+          ) : view === "list" ? (
+            <PromptDetailList
+              prompts={sortedPrompts}
+              scrollKey="prompts-list"
+              savedOffset={layout.scrollOffsets["prompts-list"] ?? 0}
+              onScrollOffset={(offset) =>
+                update({
+                  scrollOffsets: { ...layout.scrollOffsets, "prompts-list": offset },
+                })
+              }
+              sort={sort}
+              onSortChange={changeSort}
+            />
+          ) : (
+            <PromptCardWaterfall
+              prompts={sortedPrompts}
+              scrollKey="prompts-waterfall"
+              savedOffset={layout.scrollOffsets["prompts-waterfall"] ?? 0}
+              onScrollOffset={(offset) =>
+                update({
+                  scrollOffsets: { ...layout.scrollOffsets, "prompts-waterfall": offset },
+                })
+              }
+              onToggleFavorite={(id, favorite) =>
+                void runMutation(() => setPromptFavorite(id, favorite), true)
+              }
+            />
+          )
+        )}
+      </div>
+
+      <WorkspaceDrawer
+        mode={drawerMode}
+        side="end"
+        label="提示词检查器"
+        open={inspectorOpen}
+        onClose={() => setInspectorOpen(false)}
+        panelId="prompt-inspector-panel"
+      >
+        <aside className="inspector-rail" aria-label="提示词检查器">
+          <PromptInspector
+            prompts={sortedPrompts}
+            folders={snapshot?.folders ?? []}
+            mutating={mutating}
+            onSetFolders={(id, nextFolders) =>
+              void runMutation(() => setPromptFolders(id, nextFolders), true)
+            }
+            onSetTags={(id, nextTags) =>
+              void runMutation(() => setPromptTags(id, nextTags), true)
+            }
+            onToggleFavorite={(id, favorite) =>
+              void runMutation(() => setPromptFavorite(id, favorite), true)
+            }
+            onOpenBodyFocus={(id) => setBodyFocusId(id)}
+          />
+        </aside>
+      </WorkspaceDrawer>
+      </SelectionProvider>
+    </section>
+  );
+}
