@@ -22,6 +22,12 @@ type PromptInspectorProps = {
   onEditBodyFocus: (id: string) => void;
   /** 关联图片发生任何变更后刷新权威快照（任务 10.5）。 */
   onImagesChanged: () => void;
+  /** 当前处于提示词回收站位置：组织编辑让位给还原入口（任务 10.6）。 */
+  trashLocation: boolean;
+  /** 把活动项移入提示词回收站；确认对话框由工作区承载。 */
+  onDeletePrompt: (id: string) => void;
+  /** 从提示词回收站还原活动项；缺失文件夹警告由工作区呈现。 */
+  onRestorePrompt: (id: string) => void;
 };
 
 /**
@@ -43,6 +49,9 @@ export function PromptInspector({
   onOpenBodyFocus,
   onEditBodyFocus,
   onImagesChanged,
+  trashLocation,
+  onDeletePrompt,
+  onRestorePrompt,
 }: PromptInspectorProps) {
   const { state } = useSelection();
   const [tagDraft, setTagDraft] = useState("");
@@ -146,91 +155,117 @@ export function PromptInspector({
       >
         <p className="eyebrow">ORGANIZE</p>
         <h3 id="prompt-inspector-organization-heading">组织</h3>
-        {/*
-          提示词文件夹树与图片彼此独立、同路径字面值可各自存在（规格）。库内没有
-          预建空文件夹的命令——文件夹由成员关系派生，因此除勾选既有路径外还提供
-          新路径输入，提交时并入归属数组，后端按需建立路径。
-        */}
-        <fieldset>
-          <legend>提示词文件夹</legend>
-          {folders.length === 0 ? (
-            <p className="muted">尚无文件夹路径。</p>
-          ) : (
-            folders.map((folder) => (
-              <label key={folder} className="check-row">
-                <input
-                  type="checkbox"
-                  value={folder}
-                  checked={active.folders.includes(folder)}
-                  disabled={mutating}
-                  onChange={() => {
-                    const next = active.folders.includes(folder)
-                      ? active.folders.filter((item) => item !== folder)
-                      : [...active.folders, folder];
-                    onSetFolders(active.id, next);
-                  }}
-                />
-                <span>{folder}</span>
-              </label>
-            ))
-          )}
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitNewFolder();
-            }}
-          >
-            <label htmlFor="new-prompt-folder">新建文件夹路径</label>
-            <div className="compact-form">
-              <input
-                id="new-prompt-folder"
-                name="new-prompt-folder"
-                autoComplete="off"
-                placeholder="如 人像/室内"
-                value={folderDraft}
-                onChange={(event) => setFolderDraft(event.target.value)}
-                required
-              />
-              <button type="submit" disabled={mutating}>添加</button>
-            </div>
-          </form>
-        </fieldset>
-        <div className="tag-editor">
-          <h4>共享标签</h4>
-          <div className="tag-list">
-            {active.tags.map((tag) => (
-              <button
-                type="button"
-                key={tag}
-                aria-label={`移除标签 ${tag}`}
-                disabled={mutating}
-                onClick={() => onSetTags(active.id, active.tags.filter((item) => item !== tag))}
+        {trashLocation ? (
+          <>
+            {/* 回收站里的提示词保留全部内容与关联：这里只提供还原出路（任务 10.6）。 */}
+            <p className="muted">回收站中的提示词保留正文、组织与全部图片关联，还原后即可继续编辑。</p>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={mutating}
+              onClick={() => onRestorePrompt(active.id)}
+            >
+              还原提示词
+            </button>
+          </>
+        ) : (
+          <>
+            {/*
+              提示词文件夹树与图片彼此独立、同路径字面值可各自存在（规格）。库内没有
+              预建空文件夹的命令——文件夹由成员关系派生，因此除勾选既有路径外还提供
+              新路径输入，提交时并入归属数组，后端按需建立路径。
+            */}
+            <fieldset>
+              <legend>提示词文件夹</legend>
+              {folders.length === 0 ? (
+                <p className="muted">尚无文件夹路径。</p>
+              ) : (
+                folders.map((folder) => (
+                  <label key={folder} className="check-row">
+                    <input
+                      type="checkbox"
+                      value={folder}
+                      checked={active.folders.includes(folder)}
+                      disabled={mutating}
+                      onChange={() => {
+                        const next = active.folders.includes(folder)
+                          ? active.folders.filter((item) => item !== folder)
+                          : [...active.folders, folder];
+                        onSetFolders(active.id, next);
+                      }}
+                    />
+                    <span>{folder}</span>
+                  </label>
+                ))
+              )}
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitNewFolder();
+                }}
               >
-                {tag} ×
-              </button>
-            ))}
-          </div>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              onSetTags(active.id, [...active.tags, tagDraft]);
-              setTagDraft("");
-            }}
-          >
-            <label htmlFor="new-prompt-tag">添加标签</label>
-            <div className="compact-form">
-              <input
-                id="new-prompt-tag"
-                name="new-prompt-tag"
-                autoComplete="off"
-                value={tagDraft}
-                onChange={(event) => setTagDraft(event.target.value)}
-                required
-              />
-              <button type="submit" disabled={mutating}>添加</button>
+                <label htmlFor="new-prompt-folder">新建文件夹路径</label>
+                <div className="compact-form">
+                  <input
+                    id="new-prompt-folder"
+                    name="new-prompt-folder"
+                    autoComplete="off"
+                    placeholder="如 人像/室内"
+                    value={folderDraft}
+                    onChange={(event) => setFolderDraft(event.target.value)}
+                    required
+                  />
+                  <button type="submit" disabled={mutating}>添加</button>
+                </div>
+              </form>
+            </fieldset>
+            <div className="tag-editor">
+              <h4>共享标签</h4>
+              <div className="tag-list">
+                {active.tags.map((tag) => (
+                  <button
+                    type="button"
+                    key={tag}
+                    aria-label={`移除标签 ${tag}`}
+                    disabled={mutating}
+                    onClick={() => onSetTags(active.id, active.tags.filter((item) => item !== tag))}
+                  >
+                    {tag} ×
+                  </button>
+                ))}
+              </div>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSetTags(active.id, [...active.tags, tagDraft]);
+                  setTagDraft("");
+                }}
+              >
+                <label htmlFor="new-prompt-tag">添加标签</label>
+                <div className="compact-form">
+                  <input
+                    id="new-prompt-tag"
+                    name="new-prompt-tag"
+                    autoComplete="off"
+                    value={tagDraft}
+                    onChange={(event) => setTagDraft(event.target.value)}
+                    required
+                  />
+                  <button type="submit" disabled={mutating}>添加</button>
+                </div>
+              </form>
             </div>
-          </form>
-        </div>
+            {/* 移入回收站是可逆操作，但仍经工作区的二次确认对话框发起。 */}
+            <button
+              type="button"
+              className="danger-button"
+              disabled={mutating}
+              onClick={() => onDeletePrompt(active.id)}
+            >
+              移入回收站
+            </button>
+          </>
+        )}
       </section>
 
       {/* 备注是独立自动保存流（任务 10.4）：不推进更新时间，失败保留草稿。 */}

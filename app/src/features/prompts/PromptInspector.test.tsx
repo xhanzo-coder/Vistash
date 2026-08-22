@@ -72,6 +72,8 @@ type Handlers = {
   onOpenBodyFocus?: (id: string) => void;
   onEditBodyFocus?: (id: string) => void;
   onImagesChanged?: () => void;
+  onDeletePrompt?: (id: string) => void;
+  onRestorePrompt?: (id: string) => void;
 };
 
 /**
@@ -99,6 +101,7 @@ function ClickProxy({ prompts }: { prompts: readonly PromptRow[] }) {
 async function setupInspector(
   prompts: readonly PromptRow[],
   handlers: Handlers = {},
+  options: { trashLocation?: boolean } = {},
 ): Promise<{
   root: HTMLElement;
   proxy: (index: number) => HTMLButtonElement;
@@ -139,6 +142,9 @@ async function setupInspector(
           onOpenBodyFocus={handlers.onOpenBodyFocus ?? (() => {})}
           onEditBodyFocus={handlers.onEditBodyFocus ?? (() => {})}
           onImagesChanged={handlers.onImagesChanged ?? (() => {})}
+          trashLocation={options.trashLocation ?? false}
+          onDeletePrompt={handlers.onDeletePrompt ?? (() => {})}
+          onRestorePrompt={handlers.onRestorePrompt ?? (() => {})}
         />
       </SelectionProvider>
     );
@@ -375,4 +381,33 @@ test("多选时检查器只呈现数量摘要而不呈现单件分区", async ()
   expect(harness.root.textContent).toContain("已选 2 项");
   expect(() => harness.section("info")).toThrow();
   expect(() => harness.section("organization")).toThrow();
+});
+
+test("回收站位置的组织分区让位给还原入口并上报还原请求", async () => {
+  const restored: string[] = [];
+  const harness = await setupInspector(
+    [makePrompt({ folders: ["人像"] })],
+    { onRestorePrompt: (id) => restored.push(id) },
+    { trashLocation: true },
+  );
+  await act(async () => harness.proxy(0).click());
+
+  const organization = harness.section("organization");
+  // 组织编辑整体让位：没有文件夹勾选，也没有移入回收站。
+  expect(organization.querySelector('input[type="checkbox"]')).toBeNull();
+  expect([...organization.querySelectorAll("button")].some((b) => b.textContent?.trim() === "移入回收站")).toBe(false);
+
+  await act(async () => harness.buttonByText("还原提示词").click());
+  expect(restored).toEqual(["prompt-0"]);
+});
+
+test("正常位置的组织分区提供移入回收站入口并上报删除请求", async () => {
+  const deleted: string[] = [];
+  const harness = await setupInspector([makePrompt()], {
+    onDeletePrompt: (id) => deleted.push(id),
+  });
+  await act(async () => harness.proxy(0).click());
+
+  await act(async () => harness.buttonByText("移入回收站").click());
+  expect(deleted).toEqual(["prompt-0"]);
 });

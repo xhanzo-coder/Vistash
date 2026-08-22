@@ -8,7 +8,10 @@ import {
 
 import { asAppError } from "../../shared/errors";
 import {
+  deletePrompt,
   promptSnapshot,
+  purgePromptTrash,
+  restorePrompt,
   setPromptFavorite,
   setPromptFolders,
   setPromptTags,
@@ -16,15 +19,19 @@ import {
 import type {
   AppError,
   FolderFilter,
+  PromptPurgeReport,
   PromptQuery,
+  PromptRow,
   PromptSnapshot,
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
+import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
 import { SelectionProvider } from "../workspace/selectionContext";
 import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
 import { PromptBodyFocus } from "./PromptBodyFocus";
+import { promptDisplayTitle } from "./promptDisplay";
 import { PromptCardWaterfall } from "./PromptCardWaterfall";
 import { PromptDetailList } from "./PromptDetailList";
 import { PromptInspector } from "./PromptInspector";
@@ -34,6 +41,14 @@ import {
   type PromptSort,
   type PromptSortColumn,
 } from "./promptSort";
+
+/** 二次确认对话框的待办：确认时执行，取消即丢弃。 */
+type ConfirmRequest = {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => Promise<void>;
+};
 
 /**
  * 提示词工作区外壳（任务 10.3 首版）。
@@ -70,6 +85,10 @@ export function PromptWorkspace({
   const [error, setError] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
+  // 回收站（任务 10.6）：还原缺失文件夹的非阻断警告、清空回收站二次确认与逐项结果。
+  const [notice, setNotice] = useState<AppError | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [purgeReport, setPurgeReport] = useState<PromptPurgeReport | null>(null);
   // 视图与排序不进布局偏好（见组件头注释）；两视图共用同一顺序。
   const [view, setView] = useState<WorkspaceView>("waterfall");
   const [sort, setSort] = useState<PromptSort>({ ...DEFAULT_PROMPT_SORT });
@@ -151,6 +170,7 @@ export function PromptWorkspace({
   async function runMutation(operation: () => Promise<void>, refreshCurrentQuery: boolean) {
     if (mutating) return;
     setMutating(true);
+    setNotice(null);
     try {
       await operation();
       if (refreshCurrentQuery) await refresh();
@@ -160,6 +180,51 @@ export function PromptWorkspace({
     } finally {
       setMutating(false);
     }
+  }
+
+  function requestPromptDelete(prompt: PromptRow) {
+    setConfirm({
+      title: "移入提示词回收站？",
+      body: `“${promptDisplayTitle(prompt)}”将从正常提示词中移除，可从回收站还原；关联的图片不受影响。`,
+      confirmLabel: "移入回收站",
+      onConfirm: async () => {
+        await deletePrompt(prompt.id);
+      },
+    });
+  }
+
+  function requestPromptPurge() {
+    const count = snapshot?.trash_count ?? 0;
+    setConfirm({
+      title: "永久清空提示词回收站？",
+      body: `将永久删除 ${count} 条提示词。此操作无法还原；它们的普通图片关联会被移除，图片素材本身不受影响。`,
+      confirmLabel: "永久删除",
+      onConfirm: async () => {
+        const report = await purgePromptTrash();
+        setPurgeReport(report);
+      },
+    });
+  }
+
+  async function confirmOperation() {
+    if (confirm === null) return;
+    const operation = confirm.onConfirm;
+    setConfirm(null);
+    await runMutation(operation, true);
+  }
+
+  function restoreFromTrash(id: string) {
+    void runMutation(async () => {
+      const outcome = await restorePrompt(id);
+      // 还原不被缺失文件夹阻断：恢复仍存在的路径，其余落回提示词根位置，
+      // 缺失路径必须显式列出（规格）。
+      if (outcome.missing_folders.length > 0) {
+        setNotice({
+          code: "trash.restore_target_folder_missing",
+          detail: `缺失文件夹：${outcome.missing_folders.join("、")}`,
+        });
+      }
+    }, true);
   }
 
   function selectFolder(next: FolderFilter) {
@@ -339,6 +404,36 @@ export function PromptWorkspace({
           </div>
         )}
 
+        {/* 回收站工具条（任务 10.6）：清空必须显式二次确认，取消不执行任何写入。 */}
+        {location === "trash" && (
+          <div className="trash-toolbar">
+            <p>删除提示词仍保存在当前库内，正文、组织与图片关联原样保留。</p>
+            <button
+              type="button"
+              className="danger-button"
+              disabled={(snapshot?.trash_count ?? 0) === 0 || mutating}
+              onClick={requestPromptPurge}
+            >
+              清空回收站
+            </button>
+          </div>
+        )}
+
+        {purgeReport !== null && (
+          <div role="status" className="operation-status">
+            <p>
+              已永久删除 {purgeReport.purged} 条
+              {purgeReport.failures.length > 0 && `，失败 ${purgeReport.failures.length} 条`}
+            </p>
+            {purgeReport.failures.map((failure) => (
+              <div key={failure.id}>
+                <strong>{failure.title ?? failure.id}</strong>
+                <ErrorLine error={failure.error} />
+              </div>
+            ))}
+          </div>
+        )}
+        {notice !== null && <ErrorLine error={notice} />}
         {error !== null && <ErrorLine error={error} />}
         {loading && snapshot === null ? (
           <p role="status" className="workspace-loading">正在读取提示词编目…</p>
@@ -411,6 +506,7 @@ export function PromptWorkspace({
             prompts={sortedPrompts}
             folders={snapshot?.folders ?? []}
             mutating={mutating}
+            trashLocation={location === "trash"}
             onSetFolders={(id, nextFolders) =>
               void runMutation(() => setPromptFolders(id, nextFolders), true)
             }
@@ -429,10 +525,26 @@ export function PromptWorkspace({
               setBodyFocusId(id);
             }}
             onImagesChanged={() => void refresh()}
+            onDeletePrompt={(id) => {
+              const prompt = sortedPrompts.find((item) => item.id === id);
+              if (prompt !== undefined) requestPromptDelete(prompt);
+            }}
+            onRestorePrompt={(id) => restoreFromTrash(id)}
           />
         </aside>
       </WorkspaceDrawer>
       </SelectionProvider>
+
+      {confirm !== null && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          busy={mutating}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => void confirmOperation()}
+        />
+      )}
     </section>
   );
 }

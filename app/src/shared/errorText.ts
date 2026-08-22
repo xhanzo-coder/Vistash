@@ -23,7 +23,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   // trash 域
   "trash.delete_failed": "把素材移入库内回收站失败。",
   "trash.restore_failed": "从库内回收站还原素材失败。",
-  "trash.restore_target_folder_missing": "还原失败：素材删除前所属的文件夹已不存在。",
+  "trash.restore_target_folder_missing": "还原成功，但删除前的部分文件夹已不存在；缺失的归属已落回根位置，详情见下。",
   "trash.purge_failed": "彻底删除失败。",
 
   // color_card 域

@@ -40,6 +40,14 @@ const SNAPSHOT: PromptSnapshot = {
 
 let queries: PromptQuery[];
 let ipcCalls: Array<{ command: string; payload: unknown }>;
+/** 回收站位置应答的条目：默认空库，回收站动作测试按需放入。 */
+let trashPrompts: PromptRow[];
+/** restore_prompt 与 purge_prompt_trash 的应答；回收站测试按需改写。 */
+let restoreOutcome: { missing_folders: string[] };
+let purgeReply: {
+  purged: number;
+  failures: Array<{ id: string; title: string | null; error: { code: string; detail: string | null } }>;
+};
 
 class DormantIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -107,6 +115,9 @@ beforeEach(() => {
   stubScrollTop();
   queries = [];
   ipcCalls = [];
+  trashPrompts = [];
+  restoreOutcome = { missing_folders: [] };
+  purgeReply = { purged: 0, failures: [] };
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:vistash-test"),
@@ -122,17 +133,20 @@ beforeEach(() => {
       if (!isPromptQuery(query)) throw new TypeError("query 不是合法对象");
       queries.push(query);
       return query.location === "trash"
-        ? { ...SNAPSHOT, prompts: [], trash_count: SNAPSHOT.trash_count }
+        ? { ...SNAPSHOT, prompts: trashPrompts, trash_count: SNAPSHOT.trash_count }
         : SNAPSHOT;
     }
     if (
       command === "set_prompt_favorite" ||
       command === "set_prompt_folders" ||
       command === "set_prompt_tags" ||
-      command === "set_prompt_note"
+      command === "set_prompt_note" ||
+      command === "delete_prompt"
     ) {
       return undefined;
     }
+    if (command === "restore_prompt") return restoreOutcome;
+    if (command === "purge_prompt_trash") return purgeReply;
     if (command === "update_prompt") {
       return { format_version: 2, ...makePrompt(2) };
     }
@@ -431,3 +445,121 @@ test("聚焦阅读退出后详情列表恢复原滚动位置", async () => {
 
   await harness.unmount();
 });
+
+test("清空提示词回收站经二次确认：呈现数量、取消默认聚焦、确认后逐项报告", async () => {
+  purgeReply = { purged: 3, failures: [] };
+  const harness = await setupWorkspace();
+
+  const trash = harness.container.querySelector<HTMLButtonElement>('[aria-label="回收站"]');
+  if (trash === null) throw new Error("缺少回收站入口");
+  await act(async () => trash.click());
+  await flush();
+
+  // 回收站工具条出现；trash_count=3 时清空按钮可用。
+  const purgeButton = buttonWithText(harness.container, "清空回收站");
+  expect(purgeButton.disabled).toBe(false);
+  expect(purgeButton.className).toContain("danger-button");
+
+  await act(async () => purgeButton.click());
+  const dialog = harness.container.querySelector<HTMLDivElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少二次确认对话框");
+  // 数量必须显式呈现；默认焦点落在取消（失手落在安全侧）。
+  expect(dialog.textContent).toContain("3 条提示词");
+  expect(dialog.ownerDocument.activeElement?.textContent).toBe("取消");
+
+  // 取消绝不执行写入。
+  await act(async () => buttonWithText(dialog, "取消").click());
+  expect(ipcCalls.some((call) => call.command === "purge_prompt_trash")).toBe(false);
+
+  // 确认后走 purge_prompt_trash 并呈现逐项结果，随后权威刷新当前查询。
+  const queriesAtStart = queries.length;
+  await act(async () => buttonWithText(harness.container, "清空回收站").click());
+  const dialogAgain = harness.container.querySelector<HTMLDivElement>('[role="dialog"]');
+  if (dialogAgain === null) throw new Error("缺少二次确认对话框");
+  await act(async () => buttonWithText(dialogAgain, "永久删除").click());
+  await flush();
+  // 无参命令的载荷形状由 IPC 层决定，这里只断言命令确实发出。
+  expect(ipcCalls.some((call) => call.command === "purge_prompt_trash")).toBe(true);
+  const report = harness.container.querySelector(".operation-status");
+  if (report === null) throw new Error("缺少清理报告");
+  expect(report.textContent).toContain("已永久删除 3 条");
+  expect(queries.length).toBe(queriesAtStart + 1);
+
+  // 图片不变呈现：整个清空流程没有发出任何图片写命令。
+  const imageWrites = ipcCalls.filter((call) =>
+    /^(delete_asset|purge_trash|set_asset_|batch_set_asset|batch_delete_assets)/.test(call.command),
+  );
+  expect(imageWrites).toEqual([]);
+
+  await harness.unmount();
+});
+
+test("检查器在回收站位置让位给还原入口，缺失文件夹以稳定警告码呈现且不阻断还原", async () => {
+  restoreOutcome = { missing_folders: ["人像/室内"] };
+  trashPrompts = [makePrompt(5)];
+  const harness = await setupWorkspace();
+
+  const trash = harness.container.querySelector<HTMLButtonElement>('[aria-label="回收站"]');
+  if (trash === null) throw new Error("缺少回收站入口");
+  await act(async () => trash.click());
+  await flush();
+
+  const card = harness.container.querySelector<HTMLButtonElement>("[data-prompt-card]");
+  if (card === null) throw new Error("回收站里缺少提示词卡片");
+  await act(async () => card.click());
+
+  // 组织分区被还原入口替换：不再提供文件夹勾选与移入回收站。
+  const organization = harness.container.querySelector<HTMLElement>(
+    '[data-inspector-section="organization"]',
+  );
+  if (organization === null) throw new Error("缺少组织分区");
+  expect(organization.textContent).toContain("还原提示词");
+  expect(organization.querySelector('input[type="checkbox"]')).toBeNull();
+  expect(buttonWithTextExists(organization, "移入回收站")).toBe(false);
+
+  await act(async () => buttonWithText(harness.container, "还原提示词").click());
+  await flush();
+  expect(ipcCalls).toContainEqual({
+    command: "restore_prompt",
+    payload: { id: "prompt-5" },
+  });
+  // 还原不被缺失文件夹阻断：稳定警告码 + 缺失路径显式列出。
+  const notice = harness.container.querySelector<HTMLElement>(
+    '[data-error-code="trash.restore_target_folder_missing"]',
+  );
+  if (notice === null) throw new Error("缺少缺失文件夹警告");
+  expect(notice.textContent).toContain("人像/室内");
+
+  await harness.unmount();
+});
+
+test("正常区的检查器提供移入回收站入口，经确认对话框发起 delete_prompt", async () => {
+  const harness = await setupWorkspace();
+
+  const card = harness.container.querySelector<HTMLButtonElement>(
+    '[data-prompt-card][data-id="prompt-2"]',
+  );
+  if (card === null) throw new Error("缺少提示词卡片");
+  await act(async () => card.click());
+  await act(async () => buttonWithText(harness.container, "移入回收站").click());
+
+  const dialog = harness.container.querySelector<HTMLDivElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少二次确认对话框");
+  // 正文首行命名的提示词在确认文案中以可识别标题呈现。
+  expect(dialog.textContent).toContain("正文首行 2");
+
+  await act(async () => buttonWithText(dialog, "移入回收站").click());
+  await flush();
+  expect(ipcCalls).toContainEqual({
+    command: "delete_prompt",
+    payload: { id: "prompt-2" },
+  });
+
+  await harness.unmount();
+});
+
+function buttonWithTextExists(scope: ParentNode, text: string): boolean {
+  return [...scope.querySelectorAll("button")].some(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+}

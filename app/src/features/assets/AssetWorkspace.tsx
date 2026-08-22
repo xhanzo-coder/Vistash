@@ -3,7 +3,6 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
@@ -31,6 +30,7 @@ import type {
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
+import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
 import { SelectionProvider } from "../workspace/selectionContext";
 import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
@@ -606,48 +606,6 @@ export function AssetWorkspace({
         />
       )}
     </section>
-  );
-}
-
-function ConfirmDialog({
-  title,
-  body,
-  confirmLabel,
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  body: string;
-  confirmLabel: string;
-  busy: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const cancelRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const button = cancelRef.current;
-    if (button === null) throw new Error("确认对话框取消按钮不存在");
-    button.focus();
-  }, []);
-
-  return (
-    <div className="dialog-backdrop">
-      <section role="dialog" aria-modal="true" aria-labelledby="confirm-title" className="confirm-dialog">
-        <p className="eyebrow">CONFIRM</p>
-        <h2 id="confirm-title">{title}</h2>
-        <p>{body}</p>
-        <div className="dialog-actions">
-          <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy}>
-            取消
-          </button>
-          <button type="button" className="danger-button" onClick={onConfirm} disabled={busy}>
-            {confirmLabel}
-          </button>
-        </div>
-      </section>
-    </div>
   );
 }
 
