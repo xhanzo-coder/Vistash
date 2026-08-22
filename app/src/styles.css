@@ -113,10 +113,16 @@
   box-sizing: border-box;
 }
 
+/*
+ * 视口固定布局的高度链（任务 11.4 基线测量暴露的 release 缺陷）：
+ * 根到工作台逐级封顶，中央列成为 flex 容器，集合视图自己是唯一滚动者——
+ * 虚拟化读到的容器高度才是视口高而不是全部内容高。此前整页只有 min-height，
+ * 集合容器被 10,000 个项目撑开，overflow 永不触发，窗口化完全失效。
+ */
 html,
 body,
 #root {
-  min-height: 100%;
+  height: 100%;
   margin: 0;
 }
 
@@ -196,7 +202,7 @@ button:disabled {
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
   background: var(--surface-paper);
 }
 
@@ -346,6 +352,9 @@ button:disabled {
   flex: 1;
   display: flex;
   flex-direction: column;
+  /* 高度链的关键一环（任务 11.4）：不收缩的 flex item 会被集合内容撑穿，
+     下游的虚拟化窗口化随之失效。 */
+  min-height: 0;
 }
 
 .app-shell > [role="status"],
@@ -354,11 +363,19 @@ button:disabled {
   margin: var(--space-3) var(--space-6);
 }
 
+/* 库选择/迁移等整页区块：shell 高度已封顶，超长内容自己滚（任务 11.4）。 */
+.app-shell > section:not(.asset-workspace):not(.prompt-workspace) {
+  overflow-y: auto;
+}
+
 .asset-workspace,
 .prompt-workspace {
   flex: 1;
   display: grid;
+  min-height: 0;
   grid-template-columns: 240px minmax(0, 1fr);
+  /* 行高钉在可用空间内：列内容再长也由各自的 overflow 处理（任务 11.4）。 */
+  grid-template-rows: minmax(0, 1fr);
 }
 
 /* 宽屏三栏：右检查器原位常驻（with-inspector 由组件按窗口层级挂上）。 */
@@ -370,7 +387,7 @@ button:disabled {
 .catalog-rail {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  overflow-y: auto;
   padding: var(--space-5) 0.85rem;
   color: var(--text-on-rail);
   background: var(--surface-rail);
@@ -497,7 +514,10 @@ button:disabled {
 }
 
 .catalog-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   padding: var(--space-5) var(--space-6) var(--space-8);
   background: var(--surface-paper);
 }
@@ -1357,12 +1377,12 @@ button:disabled {
  * 中等/窄窗口经 side="end" 的 WorkspaceDrawer 覆盖。
  */
 .inspector-rail {
-  align-self: start;
-  position: sticky;
-  top: 0;
-  max-height: 100vh;
+  /* 行高已被钉在视口内（任务 11.4）：列随行拉伸，超长内容自己滚。 */
+  align-self: stretch;
+  max-height: 100%;
   overflow-y: auto;
   display: grid;
+  align-content: start;
   gap: var(--space-4);
   padding: var(--space-4);
   background: var(--surface-canvas);
