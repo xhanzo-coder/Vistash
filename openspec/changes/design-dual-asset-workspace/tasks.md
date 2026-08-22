@@ -398,7 +398,8 @@
 
 ## 10. 提示词工作台与普通关联
 
-- [ ] 10.1 实现虚拟化提示词卡片瀑布流，覆盖单封面/+N、纯文本卡片、标题缺省、复制与收藏
+- [x] 10.1 实现虚拟化提示词卡片瀑布流，覆盖单封面/+N、纯文本卡片、标题缺省、复制与收藏
+  - 2026-08-22 落地：新建 `features/prompts/`——`PromptCardWaterfall` 复用图片侧同构的 lanes 窗口化（waterfallMetrics + useScrollRestore + useRovingFocus + SelectionModel），卡片身份是提示词而非关联图片；有图卡片只渲染一张封面（显式 cover_image_hash，缺省回落第一张关联）加 `+N` 计数徽章，无图卡片是纯文本卡片且不渲染任何占位 img；标题缺省统一走 `promptDisplay.ts` 的 `promptDisplayTitle`（显式标题优先，否则正文首个非空行），供后续列表与搜索共用；复制经 `navigator.clipboard.writeText` 写完整当前正文，成功给"已复制"状态、失败给 role=alert 出路提示；收藏为卡片角部 aria-pressed 开关，经 `onToggleFavorite` 上报工作区。卡片高度由 `promptCardMetrics.ts` 纯估算（封面 3:2 + 正文截断 4 行），styles.css 的 line-clamp/行高与常量一一对应并有注释互指；复制/收藏是叠放芯片而非嵌套 button。附带把 Thumbnail 的懒加载生命周期抽成 `workspace/thumbnailUrl.ts` 供封面复用（Thumbnail 行为不变）。测试 14 项：窗口化万级上限、纯文本卡片无占位图、封面+4 计数、标题缺省/显式优先、剪贴板成功与拒绝、收藏上报、单击/Ctrl 选择；设计 token 守卫测试拦下徽章裸颜色后改用 `--surface-backdrop`/`--text-on-accent`。
 - [ ] 10.2 实现虚拟化提示词详情列表、文本摘要、组织/关联列与视图等价切换
 - [ ] 10.3 实现提示词检查器当前正文、标题/模型/参数、组织、备注、关联图片与长文本聚焦编辑器
 - [ ] 10.4 实现提示词主要字段显式保存/`Ctrl+S`、取消、未保存导航拦截、保存失败草稿保留与备注独立自动保存
