@@ -391,7 +391,8 @@
   - 2026-08-22 落地：`AssetDetailList` 单车道虚拟化（固定行高 56px），八列按规格齐备（缩略图/文件名/文件夹/标签/尺寸/格式/导入时间/备注摘要）；文件名、尺寸（面积并列回退宽度）、格式、导入时间四列可排序并带 aria-sort 与方向箭头，多值列不排序；`assetSort.ts` 客户端稳定排序（不改输入数组，穷尽 switch 保护）；`noteSummary.ts` 取首个非空行折叠空白截断加省略号。两视图挂在同一个 SelectionProvider 上，视图切换经 `layout.view` 持久化且查询不重发、选择与活动项保留（集成测试断言 IPC 次数不变）；滚动偏移独立记在 `scrollOffsets["assets-list"]`。共享行为抽为 `useScrollRestore`/`useRovingFocus` 钩子，瀑布流同步重构复用。
 - [x] 9.3 实现图片检查器信息/色卡、组织、备注、关联提示词分区和双击/Enter 聚焦原图模式
   - 2026-08-22 落地：两个视图的 onKeyDown 先交给统一 SelectionModel 键盘语法，剩余 Enter 且存在活动项时才触发 `onOpenFocused`——聚焦原图只能双击或 Enter 显式进入（jsdom 的 dblclick 不派发前置 click，测试期望值按此固定）。`AssetInspector` 经 SelectionModel 解析活动项与多选：单件呈现四个可定位分区（`data-inspector-section` info/organization/note/links），多选只呈现数量摘要；信息/色卡分区取自编目元数据（色卡失败走 ErrorLine 稳定码），组织分区的文件夹勾选/标签增删回调进 runMutation+快照刷新，回收站位置以"还原素材"替代组织编辑并隐藏删除按钮，备注分区只读并显式标注编辑随 9.4 接入。`AssetPromptLinks` 以 hash 为 key 重挂载自取 image_detail：已关联列表对回收站提示词显式标记"已删除"不隐藏，解除经 unlink_image 后刷新，建立经 prompt_snapshot（活动区）候选多选逐条 link_images（后端幂等），已关联候选不再出现在选择器。SelectionProvider 上移包住中央区+右检查器（宽屏 `.with-inspector` 第三列原位，中窄窗口 side="end" 抽屉+查询条边缘入口），单击只更新检查器不替换集合视图；旧 AssetDetails 删除，删除/还原动作迁入检查器，AssetPreview 复用为聚焦模式（退出按钮改"退出聚焦"，聚焦目标被权威刷新移除时自动退回集合视图）。
-- [ ] 9.4 实现图片 note 延迟/失焦/`Ctrl+Enter` 自动保存状态机、favorite 快捷操作与保存失败草稿保留
+- [x] 9.4 实现图片 note 延迟/失焦/`Ctrl+Enter` 自动保存状态机、favorite 快捷操作与保存失败草稿保留
+  - 2026-08-22 落地：`AssetNoteEditor` 以 hash 为 key 重挂载，写入路径只读 ref（防抖回调/失焦/Ctrl+Enter 三入口共用），停止输入 800ms 自动保存；失败时草稿原样留在编辑框并经 ErrorLine 呈现 `library.asset_metadata_write_failed` 稳定码，dirty 不清除——再次修改、移出焦点或 Ctrl+Enter 都会重试；保存在途又输入时保持编辑态并重新排队；卸载时仍有未落盘草稿则尽力补写一次。检查器信息分区头部加二值收藏开关（aria-pressed，不扩展为评级），查询条加"只看收藏"筛选按钮驱动 query.favorite，中央视图随之只返回收藏的正常图片。状态区 role="status" aria-live 呈现 未保存/正在保存…/已保存。
 - [ ] 9.5 实现图片回收站、还原缺失文件夹警告、逐项 purge 结果与取消默认焦点二次确认
 
 ## 10. 提示词工作台与普通关联
