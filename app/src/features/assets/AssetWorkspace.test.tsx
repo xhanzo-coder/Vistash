@@ -137,7 +137,16 @@ beforeEach(() => {
     if (command === "restore_asset") return { missing_folders: ["已删除的文件夹"] };
     if (command === "purge_trash") {
       purgeCalls += 1;
-      return { purged: 1, failures: [] };
+      return {
+        purged: 1,
+        failures: [
+          {
+            hash: "f".repeat(64),
+            original_filename: "滞留文件.png",
+            error: { code: "library.asset_metadata_write_failed", detail: "文件被占用" },
+          },
+        ],
+      };
     }
     throw new Error(`未预期的 IPC：${command}`);
   });
@@ -434,6 +443,44 @@ test("中等窗口左栏收起为抽屉，边缘入口打开且 Esc 关闭", asy
   });
   expect(document.querySelector("#catalog-rail-panel")).toBeNull();
   expect(document.querySelector(".catalog-rail")).toBeNull();
+
+  await act(async () => root.unmount());
+});
+
+test("清空回收站后呈现逐项结果，失败项带文件名与错误码", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>('[aria-label="回收站"]')?.click(),
+  );
+  await flush();
+
+  const purge = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "清空回收站",
+  );
+  if (purge === undefined) throw new Error("缺少清空回收站按钮");
+  await act(async () => purge.click());
+  const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少二次确认对话框");
+  await act(async () => buttonWithText(dialog, "永久删除").click());
+  await flush();
+
+  // 逐项结果：成功计数与失败项（文件名 + 稳定错误码）并存，不以部分成功冒充全部成功。
+  const status = container.querySelector<HTMLElement>(".operation-status");
+  if (status === null) throw new Error("缺少逐项结果区");
+  expect(status.textContent).toContain("已永久删除 1 个");
+  expect(status.textContent).toContain("失败 1 个");
+  expect(status.textContent).toContain("滞留文件.png");
+  const failure = status.querySelector<HTMLElement>(
+    '[data-error-code="library.asset_metadata_write_failed"]',
+  );
+  if (failure === null) throw new Error("缺少失败项错误码");
 
   await act(async () => root.unmount());
 });
