@@ -108,6 +108,12 @@ export function AssetWaterfall({
     <div
       ref={scrollRef}
       className="asset-waterfall"
+      /* 瀑布流是 listbox 键盘模式（任务 11.3）：容器承载多选语义，卡片是选项；
+         方向键/Home/End 与 Shift 范围由统一 SelectionModel 经 onKeyDown 接管，
+         与详情列表的 grid 模式共享同一套选择语法。 */
+      role="listbox"
+      aria-multiselectable="true"
+      aria-orientation="vertical"
       onScroll={(event: UIEvent<HTMLDivElement>) => onScrollOffset(event.currentTarget.scrollTop)}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         if (handleKeyDown(event)) {
@@ -131,6 +137,7 @@ export function AssetWaterfall({
             <button
               key={item.key}
               type="button"
+              role="option"
               data-waterfall-item=""
               data-index={item.index}
               data-hash={asset.hash}

@@ -281,6 +281,45 @@ test("Esc 在脏状态下同样先要三选一", async () => {
   await harness.unmount();
 });
 
+test("对话框打开后 Esc 是留在当前页，Tab 圈住三个动作（任务 11.3）", async () => {
+  const closed: number[] = [];
+  const harness = await setupFocus(makePrompt(), { onClose: () => closed.push(1) }, true);
+
+  await act(async () => setInputValue(harness.bodyArea(), "圈内的草稿"));
+  await act(async () => harness.buttonByText("返回列表").click());
+  expect(harness.root.querySelector('[role="dialog"]')).not.toBeNull();
+
+  // 焦点在对话框内，Esc 走安全侧"留在当前页"且不再触发外层的折叠请求。
+  const dialog = harness.root.querySelector<HTMLElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少未保存对话框");
+  await act(async () => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
+  expect(harness.root.querySelector('[role="dialog"]')).toBeNull();
+  expect(closed).toEqual([]);
+  expect(harness.bodyArea().value).toBe("圈内的草稿");
+
+  // Tab 圈住三个动作：从默认焦点（留在当前页/圈首）正向到放弃修改、再到保存并离开，
+  // 再正向一次绕回圈首——不泄漏到底层页面。
+  await act(async () => harness.buttonByText("返回列表").click());
+  pressTab(false);
+  expect(document.activeElement?.textContent).toBe("放弃修改");
+  pressTab(false);
+  expect(document.activeElement?.textContent).toBe("保存并离开");
+  pressTab(false);
+  expect(document.activeElement?.textContent).toBe("留在当前页");
+
+  await harness.unmount();
+});
+
+function pressTab(shift: boolean): void {
+  document.activeElement?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Tab", shiftKey: shift, bubbles: true }),
+  );
+}
+
 test("全局脏探针：干净放行、脏时请求解决并要求拦截", async () => {
   const harness = await setupFocus(makePrompt(), {}, true);
 

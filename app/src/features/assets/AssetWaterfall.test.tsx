@@ -216,6 +216,12 @@ test("单击选中、Ctrl 并入、Shift 范围与双击打开回调", async () 
   act(() => harness.item(1).click());
   expect(harness.selection().selected).toEqual([makeAsset(1).hash]);
 
+  // listbox 键盘模式语义（任务 11.3）：容器多选、卡片是选项。
+  const scroller = harness.scroller();
+  expect(scroller.getAttribute("role")).toBe("listbox");
+  expect(scroller.getAttribute("aria-multiselectable")).toBe("true");
+  expect(harness.item(1).getAttribute("role")).toBe("option");
+
   // Ctrl+单击并入。
   act(() => {
     harness.item(3).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));

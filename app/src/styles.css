@@ -158,6 +158,17 @@ button:disabled {
   outline-offset: 2px;
 }
 
+/*
+ * 高对比偏好（任务 11.3）：系统开启"更高对比度"时把弱边界提升到强边界——
+ * 边界不再依赖 subtle 层的低对比表达；焦点环保持不变（它本来就满足非文本
+ * 3:1）。取值仍是语义 token 换档，无裸颜色，组件规则零改动。
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --border-subtle: var(--border-strong);
+  }
+}
+
 /* 深色表面上的焦点环换浅色一枚，保证在深底上仍然可见。 */
 .topbar :focus-visible,
 .catalog-rail :focus-visible {

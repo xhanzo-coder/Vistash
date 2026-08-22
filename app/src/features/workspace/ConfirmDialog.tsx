@@ -1,10 +1,13 @@
 import { useEffect, useRef } from "react";
 
+import { useDialogFocusTrap } from "./dialogFocus";
+
 /**
  * 危险操作的二次确认对话框（图片侧与提示词侧共用）。
  *
  * 规格钉死两条：取消是默认焦点（Enter/空格的失手落在安全侧），取消绝不触发
- * 任何写入。挂载即聚焦取消按钮；busy 期间两个按钮都不可再点。
+ * 任何写入。挂载即聚焦取消按钮；busy 期间两个按钮都不可再点，Esc 同样被忽略。
+ * 焦点陷阱、Esc 关闭与触发器归还由 useDialogFocusTrap 统一落实（任务 11.3）。
  */
 export function ConfirmDialog({
   title,
@@ -22,6 +25,10 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogFocusTrap(dialogRef, () => {
+    if (!busy) onCancel();
+  });
 
   useEffect(() => {
     const button = cancelRef.current;
@@ -31,7 +38,13 @@ export function ConfirmDialog({
 
   return (
     <div className="dialog-backdrop">
-      <section role="dialog" aria-modal="true" aria-labelledby="confirm-title" className="confirm-dialog">
+      <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        className="confirm-dialog"
+      >
         <p className="eyebrow">CONFIRM</p>
         <h2 id="confirm-title">{title}</h2>
         <p>{body}</p>

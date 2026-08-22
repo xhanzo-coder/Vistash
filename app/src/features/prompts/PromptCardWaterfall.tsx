@@ -148,6 +148,12 @@ export function PromptCardWaterfall({
     <div
       ref={scrollRef}
       className="prompt-waterfall"
+      /* 瀑布流是 listbox 键盘模式（任务 11.3）：卡片命中区是选项，方向键/
+         Home/End 与 Shift 范围由统一 SelectionModel 接管；卡内的复制/收藏是
+         Tab 可达的附属控件，不参与方向键巡游。 */
+      role="listbox"
+      aria-multiselectable="true"
+      aria-orientation="vertical"
       onScroll={(event: UIEvent<HTMLDivElement>) => onScrollOffset(event.currentTarget.scrollTop)}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         if (handleKeyDown(event)) {
@@ -181,6 +187,7 @@ export function PromptCardWaterfall({
             >
               <button
                 type="button"
+                role="option"
                 data-prompt-card=""
                 data-index={item.index}
                 data-id={prompt.id}
