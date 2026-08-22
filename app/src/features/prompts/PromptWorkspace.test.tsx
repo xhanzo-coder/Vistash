@@ -133,6 +133,9 @@ beforeEach(() => {
     ) {
       return undefined;
     }
+    if (command === "update_prompt") {
+      return { format_version: 2, ...makePrompt(2) };
+    }
     if (command === "asset_thumbnail") return new ArrayBuffer(8);
     throw new Error(`未预期的 IPC：${command}`);
   });
@@ -159,6 +162,17 @@ function setInput(input: HTMLInputElement, value: string): void {
   if (descriptor?.set === undefined) throw new Error("HTMLInputElement.value setter 不存在");
   descriptor.set.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** 兼容 textarea 的输入模拟（聚焦编辑器的正文用 textarea 承载）。 */
+function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  const descriptor =
+    el instanceof HTMLTextAreaElement
+      ? Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")
+      : Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  if (descriptor?.set === undefined) throw new Error("value setter 不存在");
+  descriptor.set.call(el, value);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function buttonWithText(container: ParentNode, text: string): HTMLButtonElement {
@@ -329,6 +343,48 @@ test("切换详情列表保留选择与排序且不重新查询", async () => {
   if (again === null) throw new Error("切回后缺少原提示词卡片");
   expect(again.getAttribute("aria-selected")).toBe("true");
   expect(queries.length).toBe(queriesAtStart);
+
+  await harness.unmount();
+});
+
+test("编辑主字段进入聚焦编辑器，显式保存后刷新权威快照", async () => {
+  const harness = await setupWorkspace();
+  const queriesAtStart = queries.length;
+
+  const card = harness.container.querySelector<HTMLButtonElement>(
+    '[data-prompt-card][data-id="prompt-2"]',
+  );
+  if (card === null) throw new Error("缺少提示词卡片");
+  await act(async () => card.click());
+
+  // 检查器的编辑入口直接落在编辑状态，而不是只读聚焦阅读。
+  await act(async () => buttonWithText(harness.container, "编辑主字段").click());
+  await flush();
+  const bodyArea = harness.container.querySelector<HTMLTextAreaElement>(
+    'textarea[name="prompt-body"]',
+  );
+  if (bodyArea === null) throw new Error("缺少正文编辑框");
+  expect(bodyArea.value).toBe(makePrompt(2).body);
+
+  await act(async () => setInputValue(bodyArea, "显式保存的新正文"));
+  await act(async () => buttonWithText(harness.container, "保存").click());
+  await flush();
+
+  expect(ipcCalls).toContainEqual({
+    command: "update_prompt",
+    payload: {
+      id: "prompt-2",
+      edit: {
+        body: "显式保存的新正文",
+        title: null,
+        model: makePrompt(2).model,
+        parameters: null,
+      },
+    },
+  });
+  // 保存成功触发权威刷新：快照查询恰好多发出一次。
+  expect(queries.length).toBe(queriesAtStart + 1);
+  expect(harness.container.textContent).toContain("已保存");
 
   await harness.unmount();
 });

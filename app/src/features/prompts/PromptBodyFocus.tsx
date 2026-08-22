@@ -1,24 +1,167 @@
+import { useEffect, useRef, useState } from "react";
+
+import { asAppError } from "../../shared/errors";
+import { updatePrompt } from "../../shared/ipc";
+import type { AppError, PromptRow } from "../../shared/types";
+import { ErrorLine } from "../library/ErrorLine";
+import { setPromptDraftGuard } from "./draftGuard";
 import { promptDisplayTitle } from "./promptDisplay";
-import type { PromptRow } from "../../shared/types";
+
+type SaveStatus =
+  | { kind: "idle" }
+  | { kind: "saving" }
+  | { kind: "saved" }
+  | { kind: "failed"; error: AppError };
+
+/** 主字段草稿。权威里的可空字段在编辑态一律用空字符串表示"未填写"。 */
+type FieldDrafts = {
+  body: string;
+  title: string;
+  model: string;
+  parameters: string;
+};
+
+function draftsOf(prompt: PromptRow): FieldDrafts {
+  return {
+    body: prompt.body,
+    title: prompt.title ?? "",
+    model: prompt.model ?? "",
+    parameters: prompt.parameters ?? "",
+  };
+}
+
+/** 空白等价于未填写：保存时空串归一为 null，脏检查同样按归一后比较。 */
+function nullable(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : value;
+}
+
+function isDirty(prompt: PromptRow, drafts: FieldDrafts): boolean {
+  return (
+    drafts.body !== prompt.body ||
+    (drafts.title.trim() === "" ? null : drafts.title) !== prompt.title ||
+    (drafts.model.trim() === "" ? null : drafts.model) !== prompt.model ||
+    (drafts.parameters.trim() === "" ? null : drafts.parameters) !== prompt.parameters
+  );
+}
 
 /**
- * 长文本聚焦阅读视图（任务 10.3）。
+ * 长文本聚焦编辑器（任务 10.3 只读呈现，任务 10.4 升级为显式保存编辑）。
  *
- * 规格允许长文本进入可扩展聚焦编辑器，但必须保持返回原列表位置的能力。本组件
- * 占满中央区替换集合视图；退出后集合视图重新挂载，滚动偏移由布局偏好经
- * useScrollRestore 恢复——"返回原列表位置"因此由既有滚动恢复机制保证，不需要
- * 额外记忆。编辑与显式保存状态机在任务 10.4 接入本容器。
+ * 主字段（正文/标题/模型/参数）只在明确编辑状态中修改，由"保存"或 Ctrl+S 显式
+ * 写入；保存失败不退出编辑状态也不丢弃草稿（规格硬约束）。备注是独立自动保存流，
+ * 不进本状态机——它留在检查器里由 NoteAutoSaveEditor 负责。
+ *
+ * 导航拦截的结构性分工：编辑发生在占满中央区的聚焦视图里，此时集合视图不可达，
+ * "切换素材"与脏草稿在结构上不会共存；而折叠编辑器（返回列表/Esc）、切换一级
+ * 入口与关闭窗口都经 `draftGuard` 的脏探针拦下，弹出保存/放弃/留在当前页。
+ *
+ * 权威刷新把当前提示词移除后本视图自动卸载退回列表——这是唯一可能静默丢失草稿
+ * 的路径（目标已不存在），属可接受边缘。
  */
 export function PromptBodyFocus({
   prompt,
+  initialEditing = false,
   onClose,
+  onSaved,
 }: {
   prompt: PromptRow;
+  /** 由检查器"编辑主字段"进入时直接落在编辑状态。 */
+  initialEditing?: boolean;
   onClose: () => void;
+  /** 显式保存成功后调用：工作区据此刷新权威快照。 */
+  onSaved: () => Promise<void> | void;
 }) {
+  const [editing, setEditing] = useState(initialEditing);
+  const [drafts, setDrafts] = useState<FieldDrafts>(() => draftsOf(prompt));
+  const [status, setStatus] = useState<SaveStatus>({ kind: "idle" });
+  const [confirmClose, setConfirmClose] = useState(false);
+
+  const dirty = editing && isDirty(prompt, drafts);
+  // 脏探针镜像：全局守卫在事件回调里查询，不能依赖渲染期闭包。
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+
+  useEffect(() => {
+    setPromptDraftGuard({
+      isDirty: () => dirtyRef.current,
+      requestResolve: () => setConfirmClose(true),
+    });
+    return () => setPromptDraftGuard(null);
+  }, []);
+
+  // 只被事件回调调用：闭包里的 drafts 即当前渲染的最新值。
+  async function attemptSave(): Promise<boolean> {
+    if (!dirty || status.kind === "saving") return false;
+    setStatus({ kind: "saving" });
+    try {
+      await updatePrompt(prompt.id, {
+        body: drafts.body,
+        title: nullable(drafts.title),
+        model: nullable(drafts.model),
+        parameters: nullable(drafts.parameters),
+      });
+      // 权威刷新后 props 更新，草稿与新权威一致，脏状态自然解除。
+      await onSaved();
+      setStatus({ kind: "saved" });
+      return true;
+    } catch (raw) {
+      // 失败不退出编辑、不清草稿：稳定错误码就地呈现。
+      setStatus({ kind: "failed", error: asAppError(raw) });
+      return false;
+    }
+  }
+
+  /** 折叠/退出请求：干净则直接离开；有未保存修改先要三选一。 */
+  function requestClose() {
+    if (dirtyRef.current) {
+      setConfirmClose(true);
+      return;
+    }
+    onClose();
+  }
+
+  function discardAndClose() {
+    setDrafts(draftsOf(prompt));
+    setEditing(false);
+    setStatus({ kind: "idle" });
+    setConfirmClose(false);
+    onClose();
+  }
+
+  /** 字段更新的唯一入口：任何新输入都让"已保存"失效回编辑态。 */
+  function updateField(key: keyof FieldDrafts, value: string) {
+    setDrafts((current): FieldDrafts => ({ ...current, [key]: value }));
+    setStatus((current) => (current.kind === "saving" ? current : { kind: "idle" }));
+  }
+
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!confirmClose) return;
+    const button = cancelRef.current;
+    if (button === null) throw new Error("确认对话框取消按钮不存在");
+    button.focus();
+  }, [confirmClose]);
+
   return (
-    <section className="prompt-body-focus" aria-label="聚焦阅读">
-      <button type="button" className="back-button" onClick={onClose}>
+    <section
+      className="prompt-body-focus"
+      aria-label="聚焦阅读"
+      onKeyDown={(event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          if (editing) void attemptSave();
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          requestClose();
+        }
+      }}
+    >
+      <button type="button" className="back-button" onClick={requestClose}>
         返回列表
       </button>
 
@@ -27,7 +170,147 @@ export function PromptBodyFocus({
         {prompt.model ?? "未记录模型"} · 更新于 {prompt.updated_at.slice(0, 10)}
       </p>
 
-      <pre className="focus-body">{prompt.body}</pre>
+      {!editing ? (
+        <>
+          {/* 只读呈现完整当前正文；修改必须显式进入编辑状态（规格）。 */}
+          <pre className="focus-body">{prompt.body}</pre>
+          <div className="button-row">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => {
+                setDrafts(draftsOf(prompt));
+                setStatus({ kind: "idle" });
+                setEditing(true);
+              }}
+            >
+              编辑主字段
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="prompt-edit-grid">
+          <label className="prompt-edit-field">
+            <span>标题</span>
+            <input
+              type="text"
+              name="prompt-title"
+              autoComplete="off"
+              value={drafts.title}
+              onChange={(event) => updateField("title", event.target.value)}
+            />
+          </label>
+          <div className="prompt-edit-pair">
+            <label className="prompt-edit-field">
+              <span>模型 / 平台</span>
+              <input
+                type="text"
+                name="prompt-model"
+                autoComplete="off"
+                value={drafts.model}
+                onChange={(event) => updateField("model", event.target.value)}
+              />
+            </label>
+            <label className="prompt-edit-field">
+              <span>参数说明</span>
+              <input
+                type="text"
+                name="prompt-parameters"
+                autoComplete="off"
+                value={drafts.parameters}
+                onChange={(event) => updateField("parameters", event.target.value)}
+              />
+            </label>
+          </div>
+          <label className="prompt-edit-field">
+            <span>正文</span>
+            <textarea
+              name="prompt-body"
+              rows={14}
+              value={drafts.body}
+              onChange={(event) => updateField("body", event.target.value)}
+            />
+          </label>
+          <div className="button-row">
+            {/* 无修改或保存中禁用；Ctrl+S 与按钮共用同一条写入路径。 */}
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!dirty || status.kind === "saving"}
+              onClick={() => void attemptSave()}
+            >
+              保存
+            </button>
+            <button
+              type="button"
+              disabled={status.kind === "saving"}
+              onClick={() => {
+                // 取消 = 放弃修改并回到只读呈现。
+                setDrafts(draftsOf(prompt));
+                setStatus({ kind: "idle" });
+                setEditing(false);
+              }}
+            >
+              取消
+            </button>
+            <p role="status" aria-live="polite" className="note-status">
+              {status.kind === "saving" && "正在保存…"}
+              {status.kind === "saved" && "已保存"}
+              {status.kind !== "saving" && status.kind !== "saved" && dirty && "有未保存的修改"}
+            </p>
+          </div>
+          {status.kind === "failed" && (
+            <>
+              <ErrorLine error={status.error} />
+              <p className="muted">保存失败；全部修改仍保留在上方编辑框中，可重试或取消。</p>
+            </>
+          )}
+        </div>
+      )}
+
+      {confirmClose && (
+        <div className="dialog-backdrop">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="prompt-draft-dialog-title"
+            className="confirm-dialog"
+          >
+            <p className="eyebrow">UNSAVED</p>
+            <h2 id="prompt-draft-dialog-title">有未保存的修改</h2>
+            <p>主字段存在未保存的修改。保存后离开、放弃修改，还是留在当前页面？</p>
+            <div className="dialog-actions">
+              <button
+                ref={cancelRef}
+                type="button"
+                onClick={() => setConfirmClose(false)}
+              >
+                留在当前页
+              </button>
+              <button type="button" className="danger-ghost" onClick={discardAndClose}>
+                放弃修改
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={status.kind === "saving"}
+                onClick={() => {
+                  void (async () => {
+                    const saved = await attemptSave();
+                    if (saved) {
+                      onClose();
+                      return;
+                    }
+                    setConfirmClose(false);
+                  })();
+                }}
+              >
+                保存并离开
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }

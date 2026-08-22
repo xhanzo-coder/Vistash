@@ -4,6 +4,7 @@ import type { PromptRow } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useSelection } from "../workspace/selectionContext";
 import { useLazyThumbnailUrl } from "../workspace/thumbnailUrl";
+import { PromptNoteEditor } from "./PromptNoteEditor";
 import { promptDisplayTitle } from "./promptDisplay";
 
 type PromptInspectorProps = {
@@ -18,6 +19,8 @@ type PromptInspectorProps = {
   onToggleFavorite: (id: string, favorite: boolean) => void;
   /** 请求进入长文本聚焦阅读（中央区替换，退出回原列表位置）。 */
   onOpenBodyFocus: (id: string) => void;
+  /** 请求进入聚焦编辑器并直接落在主字段编辑状态（任务 10.4）。 */
+  onEditBodyFocus: (id: string) => void;
 };
 
 /**
@@ -63,6 +66,7 @@ export function PromptInspector({
   onSetTags,
   onToggleFavorite,
   onOpenBodyFocus,
+  onEditBodyFocus,
 }: PromptInspectorProps) {
   const { state } = useSelection();
   const [tagDraft, setTagDraft] = useState("");
@@ -136,14 +140,27 @@ export function PromptInspector({
         <h4>当前正文</h4>
         {/* 规格要求呈现完整当前正文；这里是唯一权威正文的只读呈现。 */}
         <pre className="inspector-body-full">{active.body}</pre>
-        <button
-          type="button"
-          className="primary-button"
-          disabled={mutating}
-          onClick={() => onOpenBodyFocus(active.id)}
-        >
-          聚焦阅读
-        </button>
+        {/*
+          主字段的修改只在聚焦编辑器的明确编辑状态里发生（规格）；检查器只提供
+          阅读入口与编辑入口，自身不承载主字段草稿。
+        */}
+        <div className="button-row">
+          <button
+            type="button"
+            disabled={mutating}
+            onClick={() => onOpenBodyFocus(active.id)}
+          >
+            聚焦阅读
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={mutating}
+            onClick={() => onEditBodyFocus(active.id)}
+          >
+            编辑主字段
+          </button>
+        </div>
       </section>
 
       <section
@@ -240,7 +257,7 @@ export function PromptInspector({
         </div>
       </section>
 
-      {/* 备注的独立自动保存状态机在任务 10.4 接入；本切片先只读呈现权威值。 */}
+      {/* 备注是独立自动保存流（任务 10.4）：不推进更新时间，失败保留草稿。 */}
       <section
         className="inspector-section"
         data-inspector-section="note"
@@ -248,11 +265,7 @@ export function PromptInspector({
       >
         <p className="eyebrow">NOTE</p>
         <h3 id="prompt-inspector-note-heading">备注</h3>
-        {active.note === "" ? (
-          <p className="muted">尚无备注。</p>
-        ) : (
-          <pre className="inspector-note-text">{active.note}</pre>
-        )}
+        <PromptNoteEditor key={active.id} id={active.id} note={active.note} />
       </section>
 
       <section

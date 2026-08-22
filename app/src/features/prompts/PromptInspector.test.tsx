@@ -55,6 +55,7 @@ type Handlers = {
   onSetTags?: (id: string, tags: string[]) => void;
   onToggleFavorite?: (id: string, favorite: boolean) => void;
   onOpenBodyFocus?: (id: string) => void;
+  onEditBodyFocus?: (id: string) => void;
 };
 
 /**
@@ -120,6 +121,7 @@ async function setupInspector(
             );
           }}
           onOpenBodyFocus={handlers.onOpenBodyFocus ?? (() => {})}
+          onEditBodyFocus={handlers.onEditBodyFocus ?? (() => {})}
         />
       </SelectionProvider>
     );
@@ -251,20 +253,39 @@ test("标签的添加与移除经共享标签回调", async () => {
   expect(calls.at(-1)).toEqual({ kind: "tags", tags: ["夜景"] });
 });
 
-test("备注分区只读呈现权威备注，空备注给出明确文案", async () => {
+test("备注分区提供自动保存编辑框并预填权威值", async () => {
+  mockIPC((command) => {
+    if (command === "set_prompt_note") return undefined;
+    if (command === "asset_thumbnail") return new ArrayBuffer(8);
+    throw new Error(`未预期的 IPC：${command}`);
+  });
   const harness = await setupInspector([
-    makePrompt(),
-    makePrompt({ id: "prompt-1", note: "出图要点：低饱和\n避免过曝" }),
+    makePrompt({ note: "出图要点：低饱和\n避免过曝" }),
   ]);
   await act(async () => harness.proxy(0).click());
-  expect(harness.section("note").textContent).toContain("尚无备注");
 
-  await act(async () => harness.proxy(1).click());
-  const noteText = harness.section("note").querySelector(".inspector-note-text");
-  if (noteText === null) throw new Error("缺少备注文本");
-  expect(noteText.textContent).toBe("出图要点：低饱和\n避免过曝");
-  // 本切片无编辑框：备注自动保存编辑器由任务 10.4 接入。
-  expect(harness.section("note").querySelector("textarea")).toBeNull();
+  const textarea = harness
+    .section("note")
+    .querySelector<HTMLTextAreaElement>('textarea[aria-label="提示词备注"]');
+  if (textarea === null) throw new Error("缺少备注编辑框");
+  expect(textarea.value).toBe("出图要点：低饱和\n避免过曝");
+  // 保存状态区存在（保存中/已保存/失败由共享 NoteAutoSaveEditor 的测试覆盖）。
+  expect(harness.section("note").querySelector(".note-status")).not.toBeNull();
+});
+
+test("信息分区提供聚焦阅读与编辑主字段两个显式入口", async () => {
+  const opened: string[] = [];
+  const edited: string[] = [];
+  const harness = await setupInspector([makePrompt()], {
+    onOpenBodyFocus: (id) => opened.push(id),
+    onEditBodyFocus: (id) => edited.push(id),
+  });
+  await act(async () => harness.proxy(0).click());
+
+  await act(async () => harness.buttonByText("聚焦阅读").click());
+  await act(async () => harness.buttonByText("编辑主字段").click());
+  expect(opened).toEqual(["prompt-0"]);
+  expect(edited).toEqual(["prompt-0"]);
 });
 
 test("无关联图片时给出建立关联的出路文案", async () => {

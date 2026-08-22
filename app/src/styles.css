@@ -983,6 +983,46 @@ button:disabled {
   border-radius: var(--radius-sm);
 }
 
+/*
+ * 主字段显式编辑表单（任务 10.4）：输入框沿用搜索框的表面与描边 token；
+ * 正文 textarea 占据剩余高度并保持多行纯文本呈现。
+ */
+.prompt-edit-grid {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+}
+
+.prompt-edit-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-3);
+}
+
+.prompt-edit-field {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+}
+
+.prompt-edit-field input,
+.prompt-edit-field textarea {
+  width: 100%;
+  padding: 0.55rem 0.62rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.prompt-edit-field textarea {
+  min-height: 16rem;
+  resize: vertical;
+  line-height: 1.55;
+}
+
 /* 检查器关联图片格位：固定方格，加载文案与失败原因都在格内显式呈现。 */
 .linked-thumbs {
   display: grid;

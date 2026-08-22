@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AssetWorkspace } from "./features/assets/AssetWorkspace";
 import { ErrorLine } from "./features/library/ErrorLine";
+import { blockIfPromptDraftDirty } from "./features/prompts/draftGuard";
 import { PromptWorkspace } from "./features/prompts/PromptWorkspace";
 import { LibraryPicker } from "./features/library/LibraryPicker";
 import {
@@ -94,6 +95,44 @@ export function App() {
     };
   }, [opened, runImport]);
 
+  // 未保存主字段草稿的窗口级拦截（任务 10.4）：关闭窗口前先问保存/放弃/留在
+  // 当前页。只在 Tauri 运行时里可用；纯浏览器/测试环境没有原生关闭事件可拦。
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return undefined;
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const fn = await getCurrentWindow().onCloseRequested((event) => {
+          if (blockIfPromptDraftDirty()) event.preventDefault();
+        });
+        if (cancelled) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      } catch {
+        // 无 Tauri 运行时或事件不可用：退化为不拦截，工作区内的导航闸口仍然生效。
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (unlisten !== null) unlisten();
+    };
+  }, []);
+
+  /** 一级入口切换：提示词侧有未保存草稿时先要三选一，不放行切换。 */
+  const handleSectionChange = useCallback(
+    (next: WorkspaceSection) => {
+      if (next !== section && blockIfPromptDraftDirty()) return;
+      setSection(next);
+    },
+    [section],
+  );
+
   if (statusError !== null) {
     return (
       <main>
@@ -136,7 +175,11 @@ export function App() {
         不是素材详情的侧栏——规格的理由是结构性的：提示词是一等资产，存在不关联任何
         素材的手写记录，侧栏在结构上容纳不了这类记录。
       */}
-      <WorkspaceTopBar section={section} onSectionChange={setSection} libraryPath={status.path} />
+      <WorkspaceTopBar
+        section={section}
+        onSectionChange={handleSectionChange}
+        libraryPath={status.path}
+      />
 
       {importing && (
         <p role="status">

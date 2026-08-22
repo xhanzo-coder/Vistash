@@ -62,7 +62,9 @@ export function PromptWorkspace({
   const [location, setLocation] = useState<"active" | "trash">("active");
   const [snapshot, setSnapshot] = useState<PromptSnapshot | null>(null);
   // 聚焦阅读：只由检查器的显式按钮进入；单击仅更新右检查器。
+  // bodyFocusEdit 区分"聚焦阅读"与"编辑主字段"两种进入方式（任务 10.4）。
   const [bodyFocusId, setBodyFocusId] = useState<string | null>(null);
+  const [bodyFocusEdit, setBodyFocusEdit] = useState(false);
   // 右检查器抽屉（中等/窄窗口）的开关；宽屏原位展开时忽略。
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
@@ -341,11 +343,16 @@ export function PromptWorkspace({
         {loading && snapshot === null ? (
           <p role="status" className="workspace-loading">正在读取提示词编目…</p>
         ) : bodyFocus !== null ? (
-          /* 聚焦阅读（显式进入）：占满中央区，退出后回原列表位置。 */
+          /*
+            聚焦阅读/编辑（显式进入）：占满中央区，退出后回原列表位置。主字段的
+            显式保存在这里完成，成功后 onSaved 触发权威刷新。
+          */
           <PromptBodyFocus
             key={bodyFocus.id}
             prompt={bodyFocus}
+            initialEditing={bodyFocusEdit}
             onClose={() => setBodyFocusId(null)}
+            onSaved={refresh}
           />
         ) : (
           /*
@@ -412,7 +419,14 @@ export function PromptWorkspace({
             onToggleFavorite={(id, favorite) =>
               void runMutation(() => setPromptFavorite(id, favorite), true)
             }
-            onOpenBodyFocus={(id) => setBodyFocusId(id)}
+            onOpenBodyFocus={(id) => {
+              setBodyFocusEdit(false);
+              setBodyFocusId(id);
+            }}
+            onEditBodyFocus={(id) => {
+              setBodyFocusEdit(true);
+              setBodyFocusId(id);
+            }}
           />
         </aside>
       </WorkspaceDrawer>
