@@ -8,6 +8,13 @@ import {
 } from "react";
 
 import {
+  batchAddAssetFolder,
+  batchAddAssetTag,
+  batchDeleteAssets,
+  batchLinkToPrompt,
+  batchRemoveAssetFolder,
+  batchRemoveAssetTag,
+  batchSetAssetFavorite,
   catalogSnapshot,
   createFolder,
   deleteAsset,
@@ -24,6 +31,8 @@ import type {
   AppError,
   AssetQuery,
   AssetRow,
+  BatchProgress,
+  BatchReport,
   CatalogSnapshot,
   FolderFilter,
   FolderMutationProgress,
@@ -32,6 +41,7 @@ import type {
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
 import { AppliedFilterChips, type AppliedFilterChip } from "../workspace/AppliedFilterChips";
+import { BatchToolbar } from "../workspace/batchToolbar";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
@@ -85,6 +95,9 @@ export function AssetWorkspace({
   const [mutating, setMutating] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [purgeReport, setPurgeReport] = useState<PurgeReport | null>(null);
+  // 批量组织（任务 11.2）：统一 BatchReport 逐项失败隔离，进度按项转交。
+  const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [newFolderName, setNewFolderName] = useState("");
   const [renameValue, setRenameValue] = useState("");
   const [folderProgress, setFolderProgress] = useState<FolderMutationProgress | null>(null);
@@ -345,6 +358,34 @@ export function AssetWorkspace({
     });
   }
 
+  /**
+   * 批量动作（任务 11.2）：统一经 runMutation 走忙碌与错误协调；BatchReport
+   * 就地呈现（设计第六条：逐项失败隔离，不以部分成功冒充全部成功）。
+   */
+  function runBatch(
+    operation: (onProgress: (progress: BatchProgress) => void) => Promise<BatchReport>,
+    refreshCurrentQuery: boolean,
+  ) {
+    void runMutation(async () => {
+      const report = await operation((progress) => setBatchProgress(progress));
+      setBatchReport(report);
+    }, refreshCurrentQuery);
+  }
+
+  /** 批量移入回收站：与清空回收站同级危险动作，必须显式二次确认。 */
+  function requestBatchDelete(hashes: string[]) {
+    setConfirm({
+      title: "批量移入回收站？",
+      body: `选中的 ${hashes.length} 张图片将移入图片回收站，可随时逐项还原；它们的普通提示词关联保留。`,
+      confirmLabel: "移入回收站",
+      refreshCurrentQuery: true,
+      onConfirm: async () => {
+        const report = await batchDeleteAssets(hashes, (progress) => setBatchProgress(progress));
+        setBatchReport(report);
+      },
+    });
+  }
+
   async function confirmOperation() {
     if (confirm === null) return;
     const operation = confirm.onConfirm;
@@ -593,6 +634,26 @@ export function AssetWorkspace({
             ))}
           </div>
         )}
+        {/* 批量报告（任务 11.2）：成功与失败并存呈现，失败逐项带稳定错误码。 */}
+        {batchProgress !== null && (
+          <p role="status" className="folder-progress">
+            正在批量处理 {batchProgress.done}/{batchProgress.total}…
+          </p>
+        )}
+        {batchReport !== null && (
+          <div role="status" className="operation-status">
+            <p>
+              批量完成：成功 {batchReport.succeeded} 项
+              {batchReport.failures.length > 0 && `，失败 ${batchReport.failures.length} 项`}
+            </p>
+            {batchReport.failures.map((failure) => (
+              <div key={failure.id}>
+                <strong>{failure.display_name}</strong>
+                <ErrorLine error={failure.error} />
+              </div>
+            ))}
+          </div>
+        )}
         {notice !== null && <ErrorLine error={notice} />}
         {error !== null && <ErrorLine error={error} />}
         {loading && snapshot === null ? (
@@ -620,6 +681,9 @@ export function AssetWorkspace({
             </div>
           ) : layout.view === "list" ? (
             <AssetDetailList
+              /* 集合视图按库重挂载（任务 11.2）：换库即全新 DOM，滚动恢复等该库
+                 自己的读取返回后进行，上一库的滚动位置不会残留。 */
+              key={libraryId ?? "no-library"}
               assets={sortedAssets}
               scrollKey="assets-list"
               savedOffset={layout.scrollOffsets["assets-list"] ?? 0}
@@ -634,6 +698,7 @@ export function AssetWorkspace({
             />
           ) : (
             <AssetWaterfall
+              key={libraryId ?? "no-library"}
               assets={sortedAssets}
               scrollKey="assets-waterfall"
               savedOffset={layout.scrollOffsets["assets-waterfall"] ?? 0}
@@ -646,6 +711,10 @@ export function AssetWorkspace({
             />
           )
         )}
+
+        {/* 批量工具条（任务 11.2）：计数/全选/清除是所有视图共有的动作；
+            视图专属的批量组织操作按规格放在右检查器的多选分区。 */}
+        <BatchBar total={sortedAssets.length} />
       </div>
 
       <WorkspaceDrawer
@@ -686,6 +755,31 @@ export function AssetWorkspace({
             onToggleFavorite={(hash, favorite) =>
               void runMutation(() => setAssetFavorite(hash, favorite), true)
             }
+            onBatchFolders={(hashes, path, add) =>
+              runBatch(
+                (progress) =>
+                  add
+                    ? batchAddAssetFolder(hashes, path, progress)
+                    : batchRemoveAssetFolder(hashes, path, progress),
+                true,
+              )
+            }
+            onBatchTags={(hashes, tag, add) =>
+              runBatch(
+                (progress) =>
+                  add
+                    ? batchAddAssetTag(hashes, tag, progress)
+                    : batchRemoveAssetTag(hashes, tag, progress),
+                true,
+              )
+            }
+            onBatchFavorite={(hashes, favorite) =>
+              runBatch((progress) => batchSetAssetFavorite(hashes, favorite, progress), true)
+            }
+            onBatchLinkToPrompt={(promptId, hashes) =>
+              runBatch((progress) => batchLinkToPrompt(promptId, hashes, progress), false)
+            }
+            onBatchDelete={requestBatchDelete}
           />
         </aside>
       </WorkspaceDrawer>
@@ -730,6 +824,19 @@ function ExternalActivation({ request }: { request: { id: string; nonce: number 
     onItemClick(request.id, new MouseEvent("click"));
   }, [request, state, onItemClick]);
   return null;
+}
+
+/** 批量工具条桥（任务 11.2）：计数与全选/清除动作都来自统一 SelectionModel。 */
+function BatchBar({ total }: { total: number }) {
+  const { state, selectAll, clearSelection } = useSelection();
+  return (
+    <BatchToolbar
+      count={state.selectedIds.size}
+      totalCount={total}
+      onSelectAll={selectAll}
+      onClear={clearSelection}
+    />
+  );
 }
 
 function finalFolderSegment(path: string): string {

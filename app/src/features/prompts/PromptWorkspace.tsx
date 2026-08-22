@@ -9,7 +9,14 @@ import {
 
 import { asAppError } from "../../shared/errors";
 import {
+  batchAddPromptFolder,
+  batchAddPromptTag,
+  batchDeletePrompts,
+  batchRemovePromptFolder,
+  batchRemovePromptTag,
+  batchSetPromptFavorite,
   deletePrompt,
+  linkImages,
   promptSnapshot,
   purgePromptTrash,
   restorePrompt,
@@ -19,6 +26,8 @@ import {
 } from "../../shared/ipc";
 import type {
   AppError,
+  BatchProgress,
+  BatchReport,
   FolderFilter,
   PromptPurgeReport,
   PromptQuery,
@@ -27,6 +36,7 @@ import type {
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
+import { BatchToolbar } from "../workspace/batchToolbar";
 import { AppliedFilterChips, type AppliedFilterChip } from "../workspace/AppliedFilterChips";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
@@ -95,6 +105,9 @@ export function PromptWorkspace({
   const [notice, setNotice] = useState<AppError | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [purgeReport, setPurgeReport] = useState<PromptPurgeReport | null>(null);
+  // 批量操作（任务 11.2）：进度按项转交呈现，报告按项列出失败（设计第六条）。
+  const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   // 视图与排序不进布局偏好（见组件头注释）；两视图共用同一顺序。
   const [view, setView] = useState<WorkspaceView>("waterfall");
   const [sort, setSort] = useState<PromptSort>({ ...DEFAULT_PROMPT_SORT });
@@ -293,6 +306,69 @@ export function PromptWorkspace({
         setPurgeReport(report);
       },
     });
+  }
+
+  // 批量动作的统一协调（任务 11.2，设计第六条）：BatchOrganizer 只翻译意图，
+  // 写入经后端批量命令逐项隔离，进度按项转交呈现，报告按项列出失败。
+  function runBatch(
+    operation: (onProgress: (progress: BatchProgress) => void) => Promise<BatchReport>,
+    refreshCurrentQuery: boolean,
+  ) {
+    void runMutation(async () => {
+      const report = await operation((progress) => setBatchProgress(progress));
+      setBatchReport(report);
+    }, refreshCurrentQuery);
+  }
+
+  function requestBatchDelete(ids: string[]) {
+    setConfirm({
+      title: "批量移入回收站？",
+      body: `选中的 ${ids.length} 条提示词将移入提示词回收站，可随时逐项还原；它们与图片的普通关联保留。`,
+      confirmLabel: "移入回收站",
+      onConfirm: async () => {
+        const report = await batchDeletePrompts(ids, (progress) => setBatchProgress(progress));
+        setBatchReport(report);
+      },
+    });
+  }
+
+  /**
+   * 批量建立图片关联（任务 11.2）：后端没有批量关联命令，这里逐条
+   * link_images 并聚合出同一形状的 BatchReport——单条失败不阻断其余条目
+   * （设计第六条），失败项优先用标题呈现，行已不在时回退用 id。
+   */
+  function batchLinkImagesTo(hash: string, ids: string[]) {
+    runBatch(async (onProgress) => {
+      let done = 0;
+      // 内层把每条的拒绝都转成 AppError 兑现值，Promise.all 因此不会整体中断；
+      // finally 保证成功与失败都推进进度。结果与 id 成对携带，免去按下标回查。
+      const outcomes = await Promise.all(
+        ids.map(
+          async (id): Promise<{ id: string; failure: AppError | null }> => {
+            try {
+              await linkImages(id, [hash]);
+              return { id, failure: null };
+            } catch (raw) {
+              return { id, failure: asAppError(raw) };
+            } finally {
+              done += 1;
+              onProgress({ done, total: ids.length });
+            }
+          },
+        ),
+      );
+      const failures: BatchReport["failures"] = [];
+      for (const outcome of outcomes) {
+        if (outcome.failure === null) continue;
+        const row = sortedPrompts.find((item) => item.id === outcome.id);
+        failures.push({
+          id: outcome.id,
+          display_name: row !== undefined ? promptDisplayTitle(row) : outcome.id,
+          error: outcome.failure,
+        });
+      }
+      return { succeeded: outcomes.length - failures.length, failures };
+    }, true);
   }
 
   async function confirmOperation() {
@@ -529,6 +605,27 @@ export function PromptWorkspace({
             ))}
           </div>
         )}
+        {/* 批量进度与报告（任务 11.2，设计第六条）：失败按项列出，成功计数汇总。 */}
+        {batchProgress !== null && (
+          <p role="status" className="folder-progress">
+            正在批量处理 {batchProgress.done}/{batchProgress.total}…
+          </p>
+        )}
+        {batchReport !== null && (
+          <div role="status" className="operation-status">
+            <p>
+              批量完成：成功 {batchReport.succeeded} 项
+              {batchReport.failures.length > 0 &&
+                `，失败 ${batchReport.failures.length} 项`}
+            </p>
+            {batchReport.failures.map((failure) => (
+              <div key={failure.id}>
+                <strong>{failure.display_name}</strong>
+                <ErrorLine error={failure.error} />
+              </div>
+            ))}
+          </div>
+        )}
         {notice !== null && <ErrorLine error={notice} />}
         {error !== null && <ErrorLine error={error} />}
         {loading && snapshot === null ? (
@@ -559,6 +656,9 @@ export function PromptWorkspace({
             </div>
           ) : view === "list" ? (
             <PromptDetailList
+              /* 集合视图按库重挂载（任务 11.2）：换库即全新 DOM，滚动恢复等该库
+                 自己的读取返回后进行，上一库的滚动位置不会残留。 */
+              key={libraryId ?? "no-library"}
               prompts={sortedPrompts}
               scrollKey="prompts-list"
               savedOffset={layout.scrollOffsets["prompts-list"] ?? 0}
@@ -572,6 +672,7 @@ export function PromptWorkspace({
             />
           ) : (
             <PromptCardWaterfall
+              key={libraryId ?? "no-library"}
               prompts={sortedPrompts}
               scrollKey="prompts-waterfall"
               savedOffset={layout.scrollOffsets["prompts-waterfall"] ?? 0}
@@ -586,6 +687,10 @@ export function PromptWorkspace({
             />
           )
         )}
+
+        {/* 批量工具条（任务 11.2）：计数/全选/清除是所有视图共有的动作；视图
+            专属的批量组织操作按规格放在右检查器的多选分区。 */}
+        <BatchBar total={sortedPrompts.length} />
       </div>
 
       <WorkspaceDrawer
@@ -626,6 +731,29 @@ export function PromptWorkspace({
               if (prompt !== undefined) requestPromptDelete(prompt);
             }}
             onRestorePrompt={(id) => restoreFromTrash(id)}
+            onBatchFolders={(ids, path, add) =>
+              runBatch(
+                (progress) =>
+                  add
+                    ? batchAddPromptFolder(ids, path, progress)
+                    : batchRemovePromptFolder(ids, path, progress),
+                true,
+              )
+            }
+            onBatchTags={(ids, tag, add) =>
+              runBatch(
+                (progress) =>
+                  add
+                    ? batchAddPromptTag(ids, tag, progress)
+                    : batchRemovePromptTag(ids, tag, progress),
+                true,
+              )
+            }
+            onBatchFavorite={(ids, favorite) =>
+              runBatch((progress) => batchSetPromptFavorite(ids, favorite, progress), true)
+            }
+            onBatchLinkImages={(hash, ids) => batchLinkImagesTo(hash, ids)}
+            onBatchDelete={(ids) => requestBatchDelete(ids)}
           />
         </aside>
       </WorkspaceDrawer>
@@ -664,4 +792,17 @@ function ExternalActivation({ request }: { request: { id: string; nonce: number 
     onItemClick(request.id, new MouseEvent("click"));
   }, [request, state, onItemClick]);
   return null;
+}
+
+/** 批量工具条桥（任务 11.2）：计数与全选/清除动作都来自统一 SelectionModel。 */
+function BatchBar({ total }: { total: number }) {
+  const { state, selectAll, clearSelection } = useSelection();
+  return (
+    <BatchToolbar
+      count={state.selectedIds.size}
+      totalCount={total}
+      onSelectAll={selectAll}
+      onClear={clearSelection}
+    />
+  );
 }

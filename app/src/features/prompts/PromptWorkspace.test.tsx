@@ -7,7 +7,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import type { GlobalLocateRequest } from "../workspace/GlobalSearch";
-import type { PromptQuery, PromptRow, PromptSnapshot } from "../../shared/types";
+import type {
+  AssetRow,
+  BatchReport,
+  CatalogSnapshot,
+  PromptQuery,
+  PromptRow,
+  PromptSnapshot,
+} from "../../shared/types";
 import { PromptWorkspace } from "./PromptWorkspace";
 
 /** 合成一条最小 PromptRow；带图变体按序号决定关联数量，与瀑布流测试同构。 */
@@ -49,6 +56,14 @@ let purgeReply: {
   purged: number;
   failures: Array<{ id: string; title: string | null; error: { code: string; detail: string | null } }>;
 };
+/** 全部 batch_* 命令的统一应答；多选批量测试按需改写（任务 11.2）。 */
+let batchReply: BatchReport;
+/** link_images 对这些提示词 id 抛错：驱动批量关联的逐项失败聚合。 */
+let linkFailureIds: string[];
+/** catalog_snapshot 的应答：批量关联选择器的图片候选，默认空库。 */
+let catalogReply: CatalogSnapshot | null;
+/** 分库布局偏好存储：read_layout 的应答源，write_layout 原样写入（任务 11.2）。 */
+let savedLayouts: Record<string, unknown>;
 
 class DormantIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -94,14 +109,20 @@ function stubGeometry(): void {
   });
 }
 
-/** jsdom 的 scrollTop 恒为 0：用可写访问器模拟真实滚动位置。 */
+/**
+ * jsdom 的 scrollTop 恒为 0：用可写访问器模拟真实滚动位置。
+ * 按元素存储（WeakMap）：双库切换会重挂载集合视图，共享单值会让新 DOM
+ * 读到上一库的偏移，掩盖真实的恢复语义。
+ */
 function stubScrollTop(): void {
-  let value = 0;
+  const offsets = new WeakMap<HTMLElement, number>();
   Object.defineProperty(HTMLElement.prototype, "scrollTop", {
     configurable: true,
-    get: () => value,
-    set: (next: number) => {
-      value = next;
+    get(this: HTMLElement) {
+      return offsets.get(this) ?? 0;
+    },
+    set(this: HTMLElement, next: number) {
+      offsets.set(this, next);
     },
   });
 }
@@ -119,6 +140,10 @@ beforeEach(() => {
   trashPrompts = [];
   restoreOutcome = { missing_folders: [] };
   purgeReply = { purged: 0, failures: [] };
+  batchReply = { succeeded: 0, failures: [] };
+  linkFailureIds = [];
+  catalogReply = null;
+  savedLayouts = {};
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:vistash-test"),
@@ -148,6 +173,49 @@ beforeEach(() => {
     }
     if (command === "restore_prompt") return restoreOutcome;
     if (command === "purge_prompt_trash") return purgeReply;
+    // 多选分区的批量关联选择器自取图片候选（任务 11.2）：默认空库。
+    if (command === "catalog_snapshot") {
+      return catalogReply ?? { assets: [], folders: [], tags: [], trash_count: 0 };
+    }
+    // 批量组织命令：统一 BatchReport 应答，逐项失败由报告呈现。
+    if (
+      command === "batch_add_prompt_folder" ||
+      command === "batch_remove_prompt_folder" ||
+      command === "batch_add_prompt_tag" ||
+      command === "batch_remove_prompt_tag" ||
+      command === "batch_set_prompt_favorite" ||
+      command === "batch_delete_prompts"
+    ) {
+      return batchReply;
+    }
+    // 批量建立图片关联在后端没有批量命令：工作区逐条调用 link_images，
+    // 这里按 id 抛出结构化错误驱动逐项失败的聚合呈现。
+    if (command === "link_images") {
+      if (
+        isRecordPayload(payload) &&
+        typeof payload.promptId === "string" &&
+        linkFailureIds.includes(payload.promptId)
+      ) {
+        throw { code: "library.prompt_write_failed", detail: "关联写入失败" };
+      }
+      return undefined;
+    }
+    // 分库布局偏好（任务 11.2）：按库隔离的读写，驱动双库布局恢复 seam 测试。
+    if (command === "read_layout") {
+      if (isRecordPayload(payload) && typeof payload.libraryId === "string") {
+        return savedLayouts[payload.libraryId] ?? null;
+      }
+      return null;
+    }
+    if (command === "write_layout") {
+      if (
+        isRecordPayload(payload) &&
+        typeof payload.libraryId === "string"
+      ) {
+        savedLayouts[payload.libraryId] = payload.layout;
+      }
+      return undefined;
+    }
     if (command === "update_prompt") {
       return { format_version: 2, ...makePrompt(2) };
     }
@@ -185,6 +253,18 @@ function setInput(input: HTMLInputElement, value: string): void {
   if (descriptor?.set === undefined) throw new Error("HTMLInputElement.value setter 不存在");
   descriptor.set.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setSelect(select: HTMLSelectElement, value: string): void {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+  if (descriptor?.set === undefined) throw new Error("HTMLSelectElement.value setter 不存在");
+  descriptor.set.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+/** mock 处理器里的载荷收窄：不用类型断言，运行时真的检查形状。 */
+function isRecordPayload(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 /** 兼容 textarea 的输入模拟（聚焦编辑器的正文用 textarea 承载）。 */
@@ -228,26 +308,33 @@ function isPromptQuery(value: unknown): value is PromptQuery {
 
 async function setupWorkspace(
   locate: (GlobalLocateRequest & { nonce: number }) | null = null,
+  libraryId: string | null = null,
 ): Promise<{
   container: HTMLElement;
-  rerender: (next: (GlobalLocateRequest & { nonce: number }) | null) => Promise<void>;
+  rerender: (
+    next: (GlobalLocateRequest & { nonce: number }) | null,
+    nextLibraryId?: string | null,
+  ) => Promise<void>;
   unmount: () => Promise<void>;
 }> {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  const render = (next: (GlobalLocateRequest & { nonce: number }) | null) => {
-    root.render(<PromptWorkspace refreshVersion={0} libraryId={null} locate={next} />);
+  const render = (
+    next: (GlobalLocateRequest & { nonce: number }) | null,
+    id: string | null,
+  ) => {
+    root.render(<PromptWorkspace refreshVersion={0} libraryId={id} locate={next} />);
   };
   await act(async () => {
-    render(locate);
+    render(locate, libraryId);
   });
   await flush();
   return {
     container,
-    rerender: (next) =>
+    rerender: (next, nextLibraryId = libraryId) =>
       act(async () => {
-        render(next);
+        render(next, nextLibraryId);
       }),
     unmount: () =>
       act(async () => {
@@ -651,6 +738,202 @@ test("已应用条件呈现为可移除芯片：移除搜索保留其余条件",
   expect(queries.at(-1)?.text).toBe("");
   expect(queries.at(-1)?.favorite).toBe(true);
   expect(harness.container.querySelectorAll(".filter-chip").length).toBe(1);
+
+  await harness.unmount();
+});
+
+/** Ctrl+单击选中两张卡片的公共步骤：返回批量分区断言所需的工具条。 */
+async function selectTwoCards(
+  container: HTMLElement,
+  firstId: string,
+  secondId: string,
+): Promise<HTMLElement> {
+  const first = container.querySelector<HTMLButtonElement>(
+    `[data-prompt-card][data-id="${firstId}"]`,
+  );
+  const second = container.querySelector<HTMLButtonElement>(
+    `[data-prompt-card][data-id="${secondId}"]`,
+  );
+  if (first === null || second === null) throw new Error("缺少待多选的提示词卡片");
+  await act(async () => first.click());
+  await act(async () => {
+    second.dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+  const toolbar = container.querySelector<HTMLElement>(".batch-toolbar");
+  if (toolbar === null) throw new Error("缺少批量工具条");
+  return toolbar;
+}
+
+test("多选呈现批量工具条与检查器批量分区，批量标签经后端批量命令", async () => {
+  batchReply = { succeeded: 2, failures: [] };
+  const harness = await setupWorkspace();
+
+  const toolbar = await selectTwoCards(harness.container, "prompt-0", "prompt-2");
+  expect(toolbar.textContent).toContain("已选 2 / 共 8 项");
+  expect(harness.container.querySelector('[data-inspector-section="info"]')).toBeNull();
+
+  // 新标签经批量组织表单添加到全部选中项：写入走统一的后端批量命令。
+  const batchSection = harness.container.querySelector<HTMLElement>(
+    '[data-inspector-section="batch"]',
+  );
+  if (batchSection === null) throw new Error("缺少检查器批量分区");
+  const tagInput = batchSection.querySelector<HTMLInputElement>("#batch-new-tag");
+  if (tagInput === null) throw new Error("缺少批量标签输入框");
+  const addTagButton = [...batchSection.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "添加",
+  );
+  if (addTagButton === undefined) throw new Error("缺少批量添加标签按钮");
+  await act(async () => {
+    setInput(tagInput, "夜景");
+    addTagButton.click();
+  });
+  await flush();
+
+  const call = ipcCalls.find((entry) => entry.command === "batch_add_prompt_tag");
+  expect(call?.payload).toEqual(
+    expect.objectContaining({ ids: ["prompt-0", "prompt-2"], tag: "夜景" }),
+  );
+  const status = harness.container.querySelector<HTMLElement>(".operation-status");
+  if (status === null) throw new Error("缺少批量报告区");
+  expect(status.textContent).toContain("批量完成：成功 2 项");
+
+  await harness.unmount();
+});
+
+test("批量建立图片关联逐条建立普通关联并聚合逐项失败", async () => {
+  linkFailureIds = ["prompt-2"];
+  const candidate: AssetRow = {
+    hash: "a".repeat(64),
+    hash_algo: "sha256",
+    media_type: "png",
+    ext: "png",
+    byte_size: 2048,
+    width: 1920,
+    height: 1080,
+    imported_at: "2026-08-21T08:30:00Z",
+    original_filename: "窗台.png",
+    source_path: null,
+    deleted_at: null,
+    color_card_status: "ok",
+    color_card_algo_version: 1,
+    color_card_failure_reason: null,
+    color_card_sampled_pixel_count: 100,
+    note: "",
+    favorite: false,
+    tags: [],
+    folders: [],
+    colors: [],
+  };
+  catalogReply = { assets: [candidate], folders: [], tags: [], trash_count: 0 };
+  const harness = await setupWorkspace();
+
+  await selectTwoCards(harness.container, "prompt-0", "prompt-2");
+
+  // 批量关联选择器自取活动区图片候选。
+  const linksSection = harness.container.querySelector<HTMLElement>(
+    '[data-inspector-section="batch-links"]',
+  );
+  if (linksSection === null) throw new Error("缺少批量关联分区");
+  expect(linksSection.textContent).toContain("批量建立图片关联");
+  const select = linksSection.querySelector<HTMLSelectElement>("#batch-link-image");
+  if (select === null) throw new Error("缺少目标图片选择器");
+  await act(async () => setSelect(select, candidate.hash));
+
+  const submit = [...linksSection.querySelectorAll("button")].find(
+    (item) => item.textContent?.trim() === "建立关联",
+  );
+  if (submit === undefined) throw new Error("缺少建立关联按钮");
+  await act(async () => submit.click());
+  await flush();
+
+  // 后端没有批量关联命令：工作区逐条调用 link_images，两条都发起。
+  const linkCalls = ipcCalls.filter((entry) => entry.command === "link_images");
+  expect(linkCalls.map((entry) => entry.payload)).toEqual([
+    { promptId: "prompt-0", hashes: [candidate.hash] },
+    { promptId: "prompt-2", hashes: [candidate.hash] },
+  ]);
+
+  // 单条失败不阻断其余条目（设计第六条）：失败项以可识别标题与稳定错误码呈现。
+  const status = harness.container.querySelector<HTMLElement>(".operation-status");
+  if (status === null) throw new Error("缺少批量报告区");
+  expect(status.textContent).toContain("成功 1 项");
+  expect(status.textContent).toContain("失败 1 项");
+  expect(status.textContent).toContain("正文首行 2");
+  expect(status.querySelector('[data-error-code="library.prompt_write_failed"]')).not.toBeNull();
+
+  await harness.unmount();
+});
+
+test("批量移入回收站经二次确认发起 batch_delete_prompts 并回显报告", async () => {
+  batchReply = { succeeded: 2, failures: [] };
+  const harness = await setupWorkspace();
+
+  await selectTwoCards(harness.container, "prompt-0", "prompt-2");
+
+  const dangerButton = harness.container.querySelector<HTMLButtonElement>(
+    '[data-inspector-section="batch-danger"] button',
+  );
+  if (dangerButton === null) throw new Error("缺少批量移入回收站按钮");
+  await act(async () => dangerButton.click());
+  const dialog = harness.container.querySelector<HTMLElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少二次确认对话框");
+  expect(dialog.textContent).toContain("选中的 2 条提示词");
+
+  const confirmDelete = [...dialog.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "移入回收站",
+  );
+  if (confirmDelete === undefined) throw new Error("缺少对话框确认按钮");
+  await act(async () => confirmDelete.click());
+  await flush();
+
+  const call = ipcCalls.find((entry) => entry.command === "batch_delete_prompts");
+  expect(call?.payload).toEqual(
+    expect.objectContaining({ ids: ["prompt-0", "prompt-2"] }),
+  );
+  const status = harness.container.querySelector<HTMLElement>(".operation-status");
+  if (status === null) throw new Error("缺少批量报告区");
+  expect(status.textContent).toContain("批量完成：成功 2 项");
+
+  await harness.unmount();
+});
+
+test("双库布局恢复：滚动偏移按库隔离，切换库各自恢复自己的位置", async () => {
+  savedLayouts = {
+    // 库 A 已保存过详情列表偏移；库 B 从未保存过。
+    "library-a": { scrollOffsets: { "prompts-list": 240 } },
+  };
+  const harness = await setupWorkspace(null, "library-a");
+  await flush();
+
+  await act(async () => buttonWithText(harness.container, "详情列表").click());
+  await flush();
+
+  // 库 A 的已存偏移在挂载时恢复。
+  const list = () => {
+    const el = harness.container.querySelector<HTMLElement>(".prompt-detail-list");
+    if (el === null) throw new Error("缺少详情列表滚动容器");
+    return el;
+  };
+  expect(list().scrollTop).toBe(240);
+
+  // 使用者滚到新位置并切到库 B：旧库待写先落盘，B 呈现自己的默认（无记忆）。
+  await act(async () => {
+    list().scrollTop = 500;
+    list().dispatchEvent(new Event("scroll"));
+  });
+  await act(async () => harness.rerender(null, "library-b"));
+  await flush();
+  await flush();
+  expect(savedLayouts["library-a"]).toEqual(
+    expect.objectContaining({ scrollOffsets: { "prompts-list": 500 } }),
+  );
+  expect(list().scrollTop).toBe(0);
+
+  // 切回库 A：恢复的是 A 自己的偏移，而不是 B 的残留或全局值。
+  await act(async () => harness.rerender(null, "library-a"));
+  await flush();
+  await flush();
+  expect(list().scrollTop).toBe(500);
 
   await harness.unmount();
 });

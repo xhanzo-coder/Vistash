@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
-import type { AssetRow } from "../../shared/types";
+import type { AssetRow, PromptRow } from "../../shared/types";
 import { AssetInspector } from "./AssetInspector";
 
 beforeEach(() => {
@@ -15,9 +15,13 @@ beforeEach(() => {
     configurable: true,
     value: true,
   });
-  // 关联提示词分区挂载即拉取 image_detail：本文件只测检查器自身，关联给空集。
+  // 关联提示词分区挂载即拉取 image_detail；多选分区的批量关联选择器自取
+  // prompt_snapshot 候选（任务 11.2）：本文件只测检查器自身，两者都给空集。
   mockIPC((command) => {
     if (command === "image_detail") return { asset: {}, linked_prompts: [] };
+    if (command === "prompt_snapshot") {
+      return { prompts: [], folders: [], tags: [], trash_count: 0 };
+    }
     throw new Error(`未预期的 IPC：${command}`);
   });
 });
@@ -63,6 +67,12 @@ type Handlers = {
   onDeleteAsset?: (hash: string) => void;
   onRestoreAsset?: (hash: string) => void;
   onToggleFavorite?: (hash: string, favorite: boolean) => void;
+  // 批量动作（任务 11.2）：只记录意图，写入与报告由工作区测试覆盖。
+  onBatchFolders?: (hashes: string[], path: string, add: boolean) => void;
+  onBatchTags?: (hashes: string[], tag: string, add: boolean) => void;
+  onBatchFavorite?: (hashes: string[], favorite: boolean) => void;
+  onBatchLinkToPrompt?: (promptId: string, hashes: string[]) => void;
+  onBatchDelete?: (hashes: string[]) => void;
 };
 
 /**
@@ -130,6 +140,17 @@ async function setupInspector(
           onDeleteAsset={handlers.onDeleteAsset ?? (() => {})}
           onRestoreAsset={handlers.onRestoreAsset ?? (() => {})}
           onToggleFavorite={handlers.onToggleFavorite ?? (() => {})}
+          onBatchFolders={(hashes, path, add) =>
+            handlers.onBatchFolders?.(hashes, path, add)
+          }
+          onBatchTags={(hashes, tag, add) => handlers.onBatchTags?.(hashes, tag, add)}
+          onBatchFavorite={(hashes, favorite) =>
+            handlers.onBatchFavorite?.(hashes, favorite)
+          }
+          onBatchLinkToPrompt={(promptId, hashes) =>
+            handlers.onBatchLinkToPrompt?.(promptId, hashes)
+          }
+          onBatchDelete={(hashes) => handlers.onBatchDelete?.(hashes)}
         />
       </SelectionProvider>
     );
@@ -169,6 +190,34 @@ function setInput(input: HTMLInputElement, value: string): void {
   if (descriptor?.set === undefined) throw new Error("HTMLInputElement.value setter 不存在");
   descriptor.set.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setSelect(select: HTMLSelectElement, value: string): void {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+  if (descriptor?.set === undefined) throw new Error("HTMLSelectElement.value setter 不存在");
+  descriptor.set.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+/** 批量关联选择器的提示词候选夹具（任务 11.2）。 */
+function makePrompt(overrides: Partial<PromptRow> = {}): PromptRow {
+  return {
+    id: "prompt-1",
+    body: "一只猫坐在窗台上",
+    title: "夜景构图",
+    model: null,
+    parameters: null,
+    note: "",
+    favorite: false,
+    folders: [],
+    tags: [],
+    linked_image_hashes: [],
+    cover_image_hash: null,
+    created_at: "2026-08-20T08:00:00Z",
+    updated_at: "2026-08-21T08:00:00Z",
+    deleted_at: null,
+    ...overrides,
+  };
 }
 
 test("无活动项时呈现操作引导而不是空白", async () => {
@@ -323,4 +372,164 @@ test("多选时检查器只呈现数量摘要而不呈现单件分区", async ()
   expect(harness.root.textContent).toContain("已选 2 项");
   expect(() => harness.section("info")).toThrow();
   expect(() => harness.section("organization")).toThrow();
+});
+
+test("多选批量组织分区按共同值呈现并携带完整选中集合上报", async () => {
+  const first = makeAsset();
+  const second = makeAsset({ hash: "c".repeat(64) });
+  // 两项都拥有标签"人物"（共同值）；文件夹"参考/构图"只在第一项里（混合值，
+  // 呈现为待补齐的半选）。批量动作只记录意图，写入由工作区测试覆盖。
+  const batch: Array<{
+    kind: string;
+    hashes?: string[];
+    target?: string;
+    add?: boolean;
+  }> = [];
+  const harness = await setupInspector([first, second], {
+    onBatchFolders: (hashes, path, add) =>
+      batch.push({ kind: "folders", hashes, target: path, add }),
+    onBatchTags: (hashes, tag, add) =>
+      batch.push({ kind: "tags", hashes, target: tag, add }),
+    onBatchFavorite: (hashes, favorite) =>
+      batch.push({ kind: "favorite", hashes, add: favorite }),
+  });
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  // 文件夹三态：两项都没有"参考/构图"，勾选即批量加入。
+  const joinFolder = harness.root.querySelector<HTMLInputElement>(
+    '[aria-label="批量加入文件夹 参考/构图"]',
+  );
+  if (joinFolder === null) throw new Error("缺少批量加入文件夹复选框");
+  await act(async () => joinFolder.click());
+  expect(batch.at(-1)).toEqual({
+    kind: "folders",
+    hashes: [first.hash, second.hash],
+    target: "参考/构图",
+    add: true,
+  });
+
+  // 标签并集：共同值"人物"以按下状态呈现，点击即批量移除。
+  const removeTag = harness.root.querySelector<HTMLButtonElement>(
+    '[aria-label="批量移除标签 人物"]',
+  );
+  if (removeTag === null) throw new Error("缺少批量移除标签按钮");
+  expect(removeTag.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => removeTag.click());
+  expect(batch.at(-1)).toEqual({
+    kind: "tags",
+    hashes: [first.hash, second.hash],
+    target: "人物",
+    add: false,
+  });
+
+  // 新标签经表单批量添加到全部选中项。
+  const tagInput = harness.root.querySelector<HTMLInputElement>("#batch-new-tag");
+  if (tagInput === null) throw new Error("缺少批量标签输入框");
+  await act(async () => {
+    setInput(tagInput, "夜景");
+    harness.button("添加").click();
+  });
+  expect(batch.at(-1)).toEqual({
+    kind: "tags",
+    hashes: [first.hash, second.hash],
+    target: "夜景",
+    add: true,
+  });
+
+  // 收藏是二值字段：两项都未收藏 → 提供全部收藏出路。
+  const favoriteButton = [...harness.root.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "全部收藏",
+  );
+  if (favoriteButton === undefined) throw new Error("缺少全部收藏按钮");
+  await act(async () => favoriteButton.click());
+  expect(batch.at(-1)).toEqual({
+    kind: "favorite",
+    hashes: [first.hash, second.hash],
+    add: true,
+  });
+});
+
+test("批量关联分区自取提示词候选并在提交时上报选中集合", async () => {
+  mockIPC((command) => {
+    if (command === "image_detail") return { asset: {}, linked_prompts: [] };
+    if (command === "prompt_snapshot") {
+      return {
+        prompts: [makePrompt()],
+        folders: [],
+        tags: [],
+        trash_count: 0,
+      };
+    }
+    throw new Error(`未预期的 IPC：${command}`);
+  });
+  const links: Array<{ promptId: string; hashes: string[] }> = [];
+  const first = makeAsset();
+  const second = makeAsset({ hash: "c".repeat(64) });
+  const harness = await setupInspector(
+    [first, second],
+    { onBatchLinkToPrompt: (promptId, hashes) => links.push({ promptId, hashes }) },
+  );
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  const linksSection = harness.section("batch-links");
+  expect(linksSection.textContent).toContain("批量建立提示词关联");
+  const select = linksSection.querySelector<HTMLSelectElement>("#batch-link-prompt");
+  if (select === null) throw new Error("缺少目标提示词选择器");
+  await act(async () => setSelect(select, "prompt-1"));
+
+  const submit = [...linksSection.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "建立关联",
+  );
+  if (submit === undefined) throw new Error("缺少建立关联按钮");
+  await act(async () => submit.click());
+  expect(links).toEqual([{ promptId: "prompt-1", hashes: [first.hash, second.hash] }]);
+});
+
+test("回收站中的多选只提供数量摘要而不提供批量操作", async () => {
+  const first = makeAsset({ deleted_at: "2026-08-19T01:00:00Z" });
+  const second = makeAsset({
+    hash: "c".repeat(64),
+    deleted_at: "2026-08-19T01:00:00Z",
+  });
+  const harness = await setupInspector([first, second], {}, { trashLocation: true });
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  expect(harness.root.textContent).toContain("已选 2 项");
+  expect(harness.root.textContent).toContain("回收站中的批量操作只提供还原");
+  expect(() => harness.section("batch")).toThrow();
+  expect(() => harness.section("batch-links")).toThrow();
+});
+
+test("批量移入回收站按钮把完整选中集合交给工作区确认", async () => {
+  const requests: string[][] = [];
+  const first = makeAsset();
+  const second = makeAsset({ hash: "c".repeat(64) });
+  const harness = await setupInspector(
+    [first, second],
+    { onBatchDelete: (hashes) => requests.push(hashes) },
+  );
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  const dangerButton = harness
+    .section("batch-danger")
+    .querySelector<HTMLButtonElement>("button.danger-button");
+  if (dangerButton === null) throw new Error("缺少批量移入回收站按钮");
+  await act(async () => dangerButton.click());
+  expect(requests).toEqual([[first.hash, second.hash]]);
 });

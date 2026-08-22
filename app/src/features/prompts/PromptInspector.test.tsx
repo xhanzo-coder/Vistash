@@ -20,7 +20,8 @@ beforeEach(() => {
   });
   statesReply = [];
   // 关联图片格位挂载即登记懒加载；全局 IntersectionObserver 处于休眠桩态不会
-  // 触发载入，这里仍备好缩略图处理器以免意外触发时落空。
+  // 触发载入，这里仍备好缩略图处理器以免意外触发时落空。多选分区的批量关联
+  // 选择器自取 catalog_snapshot 候选（任务 11.2）：本文件只测检查器自身，给空集。
   mockIPC((command) => {
     if (command === "plugin:event|listen" || command === "plugin:event|unlisten") {
       // 关联分区尝试订阅 Tauri 拖放事件：mock 环境没有真实事件流，静默应答。
@@ -28,6 +29,9 @@ beforeEach(() => {
     }
     if (command === "asset_thumbnail") return new ArrayBuffer(8);
     if (command === "linked_image_states") return statesReply;
+    if (command === "catalog_snapshot") {
+      return { assets: [], folders: [], tags: [], trash_count: 0 };
+    }
     throw new Error(`未预期的 IPC：${command}`);
   });
 });
@@ -74,6 +78,12 @@ type Handlers = {
   onImagesChanged?: () => void;
   onDeletePrompt?: (id: string) => void;
   onRestorePrompt?: (id: string) => void;
+  // 批量动作（任务 11.2）：只记录意图，写入与报告由工作区测试覆盖。
+  onBatchFolders?: (ids: string[], path: string, add: boolean) => void;
+  onBatchTags?: (ids: string[], tag: string, add: boolean) => void;
+  onBatchFavorite?: (ids: string[], favorite: boolean) => void;
+  onBatchLinkImages?: (hash: string, ids: string[]) => void;
+  onBatchDelete?: (ids: string[]) => void;
 };
 
 /**
@@ -145,6 +155,11 @@ async function setupInspector(
           trashLocation={options.trashLocation ?? false}
           onDeletePrompt={handlers.onDeletePrompt ?? (() => {})}
           onRestorePrompt={handlers.onRestorePrompt ?? (() => {})}
+          onBatchFolders={(ids, path, add) => handlers.onBatchFolders?.(ids, path, add)}
+          onBatchTags={(ids, tag, add) => handlers.onBatchTags?.(ids, tag, add)}
+          onBatchFavorite={(ids, favorite) => handlers.onBatchFavorite?.(ids, favorite)}
+          onBatchLinkImages={(hash, ids) => handlers.onBatchLinkImages?.(hash, ids)}
+          onBatchDelete={(ids) => handlers.onBatchDelete?.(ids)}
         />
       </SelectionProvider>
     );
@@ -182,6 +197,13 @@ function setInput(input: HTMLInputElement, value: string): void {
   if (descriptor?.set === undefined) throw new Error("HTMLInputElement.value setter 不存在");
   descriptor.set.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setSelect(select: HTMLSelectElement, value: string): void {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+  if (descriptor?.set === undefined) throw new Error("HTMLSelectElement.value setter 不存在");
+  descriptor.set.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 test("无活动项时呈现操作引导而不是空白", async () => {
@@ -378,7 +400,7 @@ test("多选时检查器只呈现数量摘要而不呈现单件分区", async ()
     harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
   });
 
-  expect(harness.root.textContent).toContain("已选 2 项");
+  expect(harness.root.textContent).toContain("已选 2 条");
   expect(() => harness.section("info")).toThrow();
   expect(() => harness.section("organization")).toThrow();
 });
@@ -410,4 +432,172 @@ test("正常位置的组织分区提供移入回收站入口并上报删除请�
 
   await act(async () => harness.buttonByText("移入回收站").click());
   expect(deleted).toEqual(["prompt-0"]);
+});
+
+test("多选批量组织分区按共同值呈现并携带完整选中集合上报", async () => {
+  const first = makePrompt({ tags: ["人像"] });
+  const second = makePrompt({ id: "prompt-1", body: "另一条正文", tags: ["人像"] });
+  const batch: Array<{
+    kind: string;
+    ids?: string[];
+    target?: string;
+    add?: boolean;
+  }> = [];
+  const harness = await setupInspector([first, second], {
+    onBatchFolders: (ids, path, add) =>
+      batch.push({ kind: "folders", ids, target: path, add }),
+    onBatchTags: (ids, tag, add) => batch.push({ kind: "tags", ids, target: tag, add }),
+    onBatchFavorite: (ids, favorite) => batch.push({ kind: "favorite", ids, add: favorite }),
+  });
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  // 文件夹三态：两项都没有"人像/室内"，勾选即批量加入。
+  const joinFolder = harness.root.querySelector<HTMLInputElement>(
+    '[aria-label="批量加入文件夹 人像/室内"]',
+  );
+  if (joinFolder === null) throw new Error("缺少批量加入文件夹复选框");
+  await act(async () => joinFolder.click());
+  expect(batch.at(-1)).toEqual({
+    kind: "folders",
+    ids: [first.id, second.id],
+    target: "人像/室内",
+    add: true,
+  });
+
+  // 共同标签以按下状态呈现，点击即批量移除。
+  const removeTag = harness.root.querySelector<HTMLButtonElement>(
+    '[aria-label="批量移除标签 人像"]',
+  );
+  if (removeTag === null) throw new Error("缺少批量移除标签按钮");
+  await act(async () => removeTag.click());
+  expect(batch.at(-1)).toEqual({
+    kind: "tags",
+    ids: [first.id, second.id],
+    target: "人像",
+    add: false,
+  });
+
+  // 收藏是二值字段：两项都未收藏 → 提供全部收藏出路。
+  const favoriteButton = [...harness.root.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "全部收藏",
+  );
+  if (favoriteButton === undefined) throw new Error("缺少全部收藏按钮");
+  await act(async () => favoriteButton.click());
+  expect(batch.at(-1)).toEqual({
+    kind: "favorite",
+    ids: [first.id, second.id],
+    add: true,
+  });
+});
+
+test("批量关联分区自取图片候选并在提交时上报选中集合", async () => {
+  mockIPC((command) => {
+    if (command === "plugin:event|listen" || command === "plugin:event|unlisten") {
+      return undefined;
+    }
+    if (command === "asset_thumbnail") return new ArrayBuffer(8);
+    if (command === "catalog_snapshot") {
+      return {
+        assets: [
+          {
+            hash: "a".repeat(64),
+            hash_algo: "sha256",
+            media_type: "png",
+            ext: "png",
+            byte_size: 2048,
+            width: 1920,
+            height: 1080,
+            imported_at: "2026-08-21T08:30:00Z",
+            original_filename: "窗台.png",
+            source_path: null,
+            deleted_at: null,
+            color_card_status: "ok",
+            color_card_algo_version: 1,
+            color_card_failure_reason: null,
+            color_card_sampled_pixel_count: 100,
+            note: "",
+            favorite: false,
+            tags: [],
+            folders: [],
+            colors: [],
+          },
+        ],
+        folders: [],
+        tags: [],
+        trash_count: 0,
+      };
+    }
+    throw new Error(`未预期的 IPC：${command}`);
+  });
+  const links: Array<{ hash: string; ids: string[] }> = [];
+  const first = makePrompt();
+  const second = makePrompt({ id: "prompt-1", body: "另一条正文" });
+  const harness = await setupInspector(
+    [first, second],
+    { onBatchLinkImages: (hash, ids) => links.push({ hash, ids }) },
+  );
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  const linksSection = harness.section("batch-links");
+  expect(linksSection.textContent).toContain("批量建立图片关联");
+  const select = linksSection.querySelector<HTMLSelectElement>("#batch-link-image");
+  if (select === null) throw new Error("缺少目标图片选择器");
+  await act(async () => setSelect(select, "a".repeat(64)));
+
+  const submit = [...linksSection.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "建立关联",
+  );
+  if (submit === undefined) throw new Error("缺少建立关联按钮");
+  await act(async () => submit.click());
+  expect(links).toEqual([{ hash: "a".repeat(64), ids: [first.id, second.id] }]);
+});
+
+test("回收站中的多选只提供数量摘要而不提供批量操作", async () => {
+  const first = makePrompt({ deleted_at: "2026-08-19T01:00:00Z" });
+  const second = makePrompt({
+    id: "prompt-1",
+    body: "另一条正文",
+    deleted_at: "2026-08-19T01:00:00Z",
+  });
+  const harness = await setupInspector([first, second], {}, { trashLocation: true });
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  expect(harness.root.textContent).toContain("已选 2 条");
+  expect(harness.root.textContent).toContain("回收站中的批量操作只提供还原");
+  expect(() => harness.section("batch")).toThrow();
+  expect(() => harness.section("batch-links")).toThrow();
+});
+
+test("批量移入回收站按钮把完整选中集合交给工作区确认", async () => {
+  const requests: string[][] = [];
+  const first = makePrompt();
+  const second = makePrompt({ id: "prompt-1", body: "另一条正文" });
+  const harness = await setupInspector(
+    [first, second],
+    { onBatchDelete: (ids) => requests.push(ids) },
+  );
+
+  await act(async () => harness.proxy(0).click());
+  await act(async () => {
+    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  const dangerButton = harness
+    .section("batch-danger")
+    .querySelector<HTMLButtonElement>("button.danger-button");
+  if (dangerButton === null) throw new Error("缺少批量移入回收站按钮");
+  await act(async () => dangerButton.click());
+  expect(requests).toEqual([[first.id, second.id]]);
 });

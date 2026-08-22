@@ -40,6 +40,10 @@ type SelectionContextValue = {
    * 返回是否已处理——true 时视图应 preventDefault 阻止滚动等默认行为。
    */
   handleKeyDown: (event: Keyboardish) => boolean;
+  /** 显式全选：批量工具条的"全选"按钮与 Ctrl+A 同一动作。 */
+  selectAll: () => void;
+  /** 显式清选：批量工具条的"清除选择"按钮与 Esc 同一动作（保留活动项）。 */
+  clearSelection: () => void;
 };
 
 const SelectionContext = createContext<SelectionContextValue | null>(null);
@@ -111,6 +115,12 @@ export function SelectionProvider({
           default:
             return false;
         }
+      },
+      selectAll: () => {
+        dispatch({ kind: "selectAll" });
+      },
+      clearSelection: () => {
+        dispatch({ kind: "clear" });
       },
     };
   }, [state]);

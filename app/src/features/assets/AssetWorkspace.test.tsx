@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-import type { AssetQuery, AssetRow, CatalogSnapshot } from "../../shared/types";
+import type { AssetQuery, AssetRow, BatchReport, CatalogSnapshot } from "../../shared/types";
 import { AssetWorkspace } from "./AssetWorkspace";
 
 const ASSET: AssetRow = {
@@ -54,6 +54,10 @@ const TRASH_SNAPSHOT: CatalogSnapshot = {
 let queries: AssetQuery[];
 let purgeCalls: number;
 let ipcCalls: Array<{ command: string; payload: unknown }>;
+/** 活动位置应答的覆盖：多选批量测试放入两张素材（任务 11.2）。 */
+let activeSnapshotOverride: CatalogSnapshot | null;
+/** 全部 batch_* 命令的统一应答；测试按需改写以驱动报告呈现。 */
+let batchReply: BatchReport;
 
 class DormantIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -110,6 +114,8 @@ beforeEach(() => {
   queries = [];
   purgeCalls = 0;
   ipcCalls = [];
+  activeSnapshotOverride = null;
+  batchReply = { succeeded: 0, failures: [] };
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:vistash-test"),
@@ -126,7 +132,26 @@ beforeEach(() => {
         throw new TypeError("query 不是对象");
       }
       queries.push(query);
+      if (query.location === "active" && activeSnapshotOverride !== null) {
+        return activeSnapshotOverride;
+      }
       return query.location === "trash" ? TRASH_SNAPSHOT : SNAPSHOT;
+    }
+    // 多选分区的批量关联选择器自取提示词候选：工作区测试不关心候选明细。
+    if (command === "prompt_snapshot") {
+      return { prompts: [], folders: [], tags: [], trash_count: 0 };
+    }
+    // 批量组织命令（任务 11.2）：统一 BatchReport 应答，逐项失败由报告呈现。
+    if (
+      command === "batch_add_asset_folder" ||
+      command === "batch_remove_asset_folder" ||
+      command === "batch_add_asset_tag" ||
+      command === "batch_remove_asset_tag" ||
+      command === "batch_set_asset_favorite" ||
+      command === "batch_link_to_prompt" ||
+      command === "batch_delete_assets"
+    ) {
+      return batchReply;
     }
     if (command === "asset_original") return new ArrayBuffer(8);
     if (command === "image_detail") {
@@ -606,6 +631,140 @@ test("已应用条件呈现为可移除芯片：移除文件夹保留其余条�
   expect(queries.at(-1)?.folder).toEqual({ kind: "all" });
   expect(queries.at(-1)?.favorite).toBe(true);
   expect(container.querySelectorAll(".filter-chip").length).toBe(1);
+
+  await act(async () => root.unmount());
+});
+
+test("多选呈现批量工具条与检查器批量分区，批量加入文件夹走后端批量命令", async () => {
+  const second: AssetRow = {
+    ...ASSET,
+    hash: "c".repeat(64),
+    original_filename: "另一张.png",
+  };
+  activeSnapshotOverride = { ...SNAPSHOT, assets: [ASSET, second] };
+  batchReply = { succeeded: 2, failures: [] };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+
+  // Ctrl+单击并入选择：工具条计数出现，检查器切换为多选批量分区。
+  const cards = container.querySelectorAll<HTMLButtonElement>("[data-waterfall-item]");
+  const firstCard = cards[0];
+  const secondCard = cards[1];
+  if (
+    firstCard === undefined ||
+    secondCard === undefined ||
+    firstCard.dataset.hash === undefined
+  ) {
+    throw new Error("缺少两张素材卡片");
+  }
+  await act(async () => firstCard.click());
+  await act(async () => {
+    secondCard.dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+  const toolbar = container.querySelector<HTMLElement>(".batch-toolbar");
+  if (toolbar === null) throw new Error("缺少批量工具条");
+  expect(toolbar.textContent).toContain(`已选 2 / 共 ${SNAPSHOT.assets.length + 1} 项`);
+  const batchSection = container.querySelector<HTMLElement>(
+    '[data-inspector-section="batch"]',
+  );
+  if (batchSection === null) throw new Error("缺少检查器批量分区");
+  expect(container.querySelector('[data-inspector-section="info"]')).toBeNull();
+
+  // 批量加入文件夹：意图经检查器上报，写入走统一的后端批量命令并回显报告。
+  const joinFolder = batchSection.querySelector<HTMLInputElement>(
+    '[aria-label="批量加入文件夹 参考/构图"]',
+  );
+  if (joinFolder === null) throw new Error("缺少批量加入文件夹复选框");
+  await act(async () => joinFolder.click());
+  await flush();
+
+  const call = ipcCalls.find((entry) => entry.command === "batch_add_asset_folder");
+  expect(call?.payload).toEqual(
+    expect.objectContaining({
+      hashes: [ASSET.hash, second.hash],
+      folder: "参考/构图",
+    }),
+  );
+  const status = container.querySelector<HTMLElement>(".operation-status");
+  if (status === null) throw new Error("缺少批量报告区");
+  expect(status.textContent).toContain("批量完成：成功 2 项");
+
+  await act(async () => root.unmount());
+});
+
+test("批量移入回收站经二次确认，报告逐项呈现失败与稳定错误码", async () => {
+  const second: AssetRow = {
+    ...ASSET,
+    hash: "c".repeat(64),
+    original_filename: "另一张.png",
+  };
+  activeSnapshotOverride = { ...SNAPSHOT, assets: [ASSET, second] };
+  batchReply = {
+    succeeded: 1,
+    failures: [
+      {
+        id: second.hash,
+        display_name: "另一张.png",
+        error: { code: "library.asset_metadata_write_failed", detail: "文件被占用" },
+      },
+    ],
+  };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+
+  const cards = container.querySelectorAll<HTMLButtonElement>("[data-waterfall-item]");
+  const firstCard = cards[0];
+  const secondCard = cards[1];
+  if (firstCard === undefined || secondCard === undefined) {
+    throw new Error("缺少两张素材卡片");
+  }
+  await act(async () => firstCard.click());
+  await act(async () => {
+    secondCard.dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
+  });
+
+  // 危险区入口先经工作区的二次确认对话框。
+  const dangerButton = container.querySelector<HTMLButtonElement>(
+    '[data-inspector-section="batch-danger"] button',
+  );
+  if (dangerButton === null) throw new Error("缺少批量移入回收站按钮");
+  await act(async () => dangerButton.click());
+  const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少二次确认对话框");
+  expect(dialog.textContent).toContain("选中的 2 张图片");
+
+  const confirmDelete = [...dialog.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "移入回收站",
+  );
+  if (confirmDelete === undefined) throw new Error("缺少对话框确认按钮");
+  await act(async () => confirmDelete.click());
+  await flush();
+
+  expect(ipcCalls.some((entry) => entry.command === "batch_delete_assets")).toBe(true);
+  const call = ipcCalls.find((entry) => entry.command === "batch_delete_assets");
+  expect(call?.payload).toEqual(
+    expect.objectContaining({ hashes: [ASSET.hash, second.hash] }),
+  );
+
+  // 部分失败不以全部成功冒充：失败项带文件名与稳定错误码（设计第六条）。
+  const status = container.querySelector<HTMLElement>(".operation-status");
+  if (status === null) throw new Error("缺少批量报告区");
+  expect(status.textContent).toContain("成功 1 项");
+  expect(status.textContent).toContain("失败 1 项");
+  expect(status.textContent).toContain("另一张.png");
+  expect(
+    status.querySelector('[data-error-code="library.asset_metadata_write_failed"]'),
+  ).not.toBeNull();
 
   await act(async () => root.unmount());
 });

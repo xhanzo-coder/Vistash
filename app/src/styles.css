@@ -1760,28 +1760,47 @@ button:disabled {
   padding: var(--space-2) var(--space-4);
   background: var(--surface-card);
   border-top: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-raised);
 }
 
 .batch-toolbar-count {
   margin-inline-end: auto;
-  font-size: var(--font-size-sm);
+  font-size: var(--text-size-sm);
   color: var(--text-secondary);
 }
 
 .batch-toolbar-action {
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--text-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--text-size-sm);
   cursor: pointer;
   transition: filter var(--motion-fast) var(--motion-ease-out);
 }
 
 .batch-toolbar-action:hover {
   filter: brightness(0.92);
+}
+
+/* 检查器多选分区（任务 11.2）：批量组织控件与批量关联选择器。 */
+.batch-organizer {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.batch-link-picker {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.compact-form select {
+  width: 100%;
+  padding: 0.55rem 0.62rem;
+  color: var(--text-primary);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,6 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import type { PromptRow } from "../../shared/types";
+import { asAppError } from "../../shared/errors";
+import { catalogSnapshot } from "../../shared/ipc";
+import type { AppError, AssetRow, PromptRow } from "../../shared/types";
+import { ErrorLine } from "../library/ErrorLine";
+import { BatchOrganizer } from "../workspace/BatchOrganizer";
 import { useSelection } from "../workspace/selectionContext";
 import { PromptImageLinks } from "./PromptImageLinks";
 import { PromptNoteEditor } from "./PromptNoteEditor";
@@ -28,6 +32,13 @@ type PromptInspectorProps = {
   onDeletePrompt: (id: string) => void;
   /** 从提示词回收站还原活动项；缺失文件夹警告由工作区呈现。 */
   onRestorePrompt: (id: string) => void;
+  // 批量动作（任务 11.2）：选中集合由本组件经 SelectionModel 解析后随回调上报，
+  // 写入、报告与权威刷新由工作区统一协调。
+  onBatchFolders: (ids: string[], folder: string, add: boolean) => void;
+  onBatchTags: (ids: string[], tag: string, add: boolean) => void;
+  onBatchFavorite: (ids: string[], favorite: boolean) => void;
+  onBatchLinkImages: (hash: string, ids: string[]) => void;
+  onBatchDelete: (ids: string[]) => void;
 };
 
 /**
@@ -52,19 +63,76 @@ export function PromptInspector({
   trashLocation,
   onDeletePrompt,
   onRestorePrompt,
+  onBatchFolders,
+  onBatchTags,
+  onBatchFavorite,
+  onBatchLinkImages,
+  onBatchDelete,
 }: PromptInspectorProps) {
   const { state } = useSelection();
   const [tagDraft, setTagDraft] = useState("");
   const [folderDraft, setFolderDraft] = useState("");
 
-  // 多选优先于单件分区：检查器此时只呈现数量摘要（批量操作由批量工具条接线）。
+  // 多选优先于单件分区（任务 11.2）：共同/混合摘要 + 批量组织动作。
+  // 回收站位置不提供批量组织——那里的语义是还原，逐项操作见单选检查器。
   if (state.selectedIds.size > 1) {
+    const selected = prompts.filter((prompt) => state.selectedIds.has(prompt.id));
+    const ids = selected.map((prompt) => prompt.id);
+    if (trashLocation) {
+      return (
+        <div className="inspector-multi">
+          <p className="eyebrow">MULTI SELECT</p>
+          <h3>已选 {selected.length} 条</h3>
+          <p className="muted">回收站中的批量操作只提供还原；逐项还原见单选检查器。</p>
+        </div>
+      );
+    }
     return (
-      <div className="inspector-multi">
-        <p className="eyebrow">MULTI SELECT</p>
-        <h3>已选 {state.selectedIds.size} 项</h3>
-        <p className="muted">批量组织操作将在批量工具条就绪后在此提供。</p>
-      </div>
+      <>
+        <section
+          className="inspector-section"
+          data-inspector-section="batch"
+          aria-labelledby="inspector-batch-heading"
+        >
+          <p className="eyebrow">MULTI SELECT</p>
+          <div className="inspector-heading-row">
+            <h3 id="inspector-batch-heading">已选 {selected.length} 条</h3>
+          </div>
+          <BatchOrganizer
+            items={selected}
+            folders={folders}
+            mutating={mutating}
+            onBatchFolders={(folder, add) => onBatchFolders(ids, folder, add)}
+            onBatchTags={(tag, add) => onBatchTags(ids, tag, add)}
+            onBatchFavorite={(favorite) => onBatchFavorite(ids, favorite)}
+          />
+        </section>
+
+        <section
+          className="inspector-section"
+          data-inspector-section="batch-links"
+          aria-labelledby="inspector-batch-links-heading"
+        >
+          <p className="eyebrow">LINKS</p>
+          <h3 id="inspector-batch-links-heading">批量建立图片关联</h3>
+          <BatchLinkImages
+            count={ids.length}
+            disabled={mutating}
+            onLink={(hash) => onBatchLinkImages(hash, ids)}
+          />
+        </section>
+
+        <section className="inspector-section" data-inspector-section="batch-danger">
+          <button
+            type="button"
+            className="danger-button"
+            disabled={mutating}
+            onClick={() => onBatchDelete(ids)}
+          >
+            移入回收站
+          </button>
+        </section>
+      </>
     );
   }
 
@@ -294,5 +362,83 @@ export function PromptInspector({
         <PromptImageLinks key={active.id} active={active} onChanged={onImagesChanged} />
       </section>
     </>
+  );
+}
+
+/**
+ * 批量关联的目标选择器（任务 11.2）：候选图片自取活动区快照（分区自管只读
+ * 请求，与关联分区的先例一致），写入经 onLink 上报工作区逐条建立普通关联。
+ */
+function BatchLinkImages({
+  count,
+  disabled,
+  onLink,
+}: {
+  count: number;
+  disabled: boolean;
+  onLink: (hash: string) => void;
+}) {
+  const [candidates, setCandidates] = useState<AssetRow[] | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
+  const [choice, setChoice] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snapshot = await catalogSnapshot({
+          text: "",
+          tags: [],
+          folder: { kind: "all" },
+          favorite: null,
+          location: "active",
+        });
+        if (!cancelled) {
+          setCandidates(snapshot.assets);
+          setError(null);
+        }
+      } catch (raw) {
+        if (!cancelled) setError(asAppError(raw));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div className="batch-link-picker">
+      {error !== null && <ErrorLine error={error} />}
+      {candidates === null ? (
+        <p role="status" className="muted">正在读取图片候选…</p>
+      ) : candidates.length === 0 ? (
+        <p className="muted">图片库还没有可用素材。</p>
+      ) : (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (choice !== "") onLink(choice);
+          }}
+        >
+          <label htmlFor="batch-link-image">目标图片</label>
+          <div className="compact-form">
+            <select
+              id="batch-link-image"
+              value={choice}
+              onChange={(event) => setChoice(event.target.value)}
+            >
+              <option value="" disabled>选择图片…</option>
+              {candidates.map((asset) => (
+                <option key={asset.hash} value={asset.hash}>
+                  {asset.original_filename}
+                </option>
+              ))}
+            </select>
+            <button type="submit" disabled={disabled || choice === ""}>建立关联</button>
+          </div>
+        </form>
+      )}
+      <p className="muted">将把 {count} 条提示词普通关联到该图片。</p>
+    </div>
   );
 }
