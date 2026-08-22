@@ -252,7 +252,7 @@ test("工作区组合查询并在清空回收站前二次确认", async () => {
   });
 });
 
-test("在素材详情中编辑标签并确认删除", async () => {
+test("单击只更新检查器、双击进入聚焦原图、组织编辑在检查器完成", async () => {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -261,16 +261,18 @@ test("在素材详情中编辑标签并确认删除", async () => {
   });
   await flush();
 
-  // 瀑布流语义（任务 9.1）：单击只选中，双击才进入详情。
+  // 单击只选中并把活动项交给右检查器，瀑布流不被替换（规格场景）。
   const assetButton = container.querySelector<HTMLButtonElement>("[data-waterfall-item]");
   if (assetButton === null) throw new Error("缺少素材卡片");
   await act(async () => assetButton.click());
   expect(container.querySelector(".asset-details")).toBeNull();
-  await act(async () =>
-    assetButton.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
-  );
+  expect(container.querySelector("[data-waterfall-item]")).not.toBeNull();
+  const info = container.querySelector<HTMLElement>('[data-inspector-section="info"]');
+  if (info === null) throw new Error("缺少检查器信息分区");
+  expect(info.textContent).toContain(ASSET.original_filename);
   await flush();
 
+  // 组织编辑直接发生在检查器里，不打断集合视图。
   const tagInput = container.querySelector<HTMLInputElement>("#new-tag");
   if (tagInput === null) throw new Error("缺少标签输入框");
   await act(async () => {
@@ -283,6 +285,18 @@ test("在素材详情中编辑标签并确认删除", async () => {
     payload: { hash: ASSET.hash, tags: ["人物", "夜景"] },
   });
 
+  // 双击显式进入聚焦原图，中央区被替换；退出后回到集合视图。
+  await act(async () =>
+    assetButton.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
+  );
+  await flush();
+  expect(container.querySelector(".asset-preview")).not.toBeNull();
+  expect(container.querySelector("[data-waterfall-item]")).toBeNull();
+  await act(async () => buttonWithText(container, "退出聚焦").click());
+  await flush();
+  expect(container.querySelector("[data-waterfall-item]")).not.toBeNull();
+
+  // 删除动作同样来自检查器，仍需二次确认。
   await act(async () => buttonWithText(container, "移入回收站").click());
   const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
   if (dialog === null) throw new Error("缺少删除确认对话框");
@@ -357,11 +371,10 @@ test("从回收站还原并保留缺失文件夹警告", async () => {
   if (trash === null) throw new Error("缺少回收站入口");
   await act(async () => trash.click());
   await flush();
+  // 回收站里单击即可在检查器看到还原入口（任务 9.3 后不再有整页详情）。
   const assetButton = container.querySelector<HTMLButtonElement>("[data-waterfall-item]");
   if (assetButton === null) throw new Error("缺少回收站素材卡片");
-  await act(async () =>
-    assetButton.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })),
-  );
+  await act(async () => assetButton.click());
   await flush();
   await act(async () => buttonWithText(container, "还原素材").click());
   await flush();
@@ -408,6 +421,39 @@ test("中等窗口左栏收起为抽屉，边缘入口打开且 Esc 关闭", asy
   });
   expect(document.querySelector("#catalog-rail-panel")).toBeNull();
   expect(document.querySelector(".catalog-rail")).toBeNull();
+
+  await act(async () => root.unmount());
+});
+
+test("中等窗口右检查器收起为抽屉并经边缘入口打开", async () => {
+  setWindowWidth(1000);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+
+  // 收起状态下检查器不在文档里，边缘入口声明它控制的面板。
+  expect(container.querySelector(".inspector-rail")).toBeNull();
+  const toggle = [...container.querySelectorAll<HTMLButtonElement>(".rail-toggle")].find(
+    (candidate) => candidate.getAttribute("aria-controls") === "asset-inspector-panel",
+  );
+  if (toggle === undefined) throw new Error("缺少检查器边缘入口");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+  await act(async () => toggle.click());
+  const panel = document.querySelector<HTMLElement>("#asset-inspector-panel");
+  if (panel === null) throw new Error("缺少检查器抽屉面板");
+  expect(panel.getAttribute("role")).toBe("dialog");
+  // 尚无活动项：检查器呈现操作引导占位。
+  expect(panel.querySelector(".inspector-placeholder")).not.toBeNull();
+
+  await act(async () => {
+    panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(document.querySelector("#asset-inspector-panel")).toBeNull();
 
   await act(async () => root.unmount());
 });

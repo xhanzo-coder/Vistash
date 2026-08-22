@@ -110,7 +110,15 @@ export function AssetWaterfall({
       className="asset-waterfall"
       onScroll={(event: UIEvent<HTMLDivElement>) => onScrollOffset(event.currentTarget.scrollTop)}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-        if (handleKeyDown(event)) event.preventDefault();
+        if (handleKeyDown(event)) {
+          event.preventDefault();
+          return;
+        }
+        // Enter 显式进入聚焦原图（规格：聚焦查看不得是单击的默认结果）。
+        if (event.key === "Enter" && state.activeId !== null) {
+          event.preventDefault();
+          onOpenFocused(state.activeId);
+        }
       }}
     >
       <div className="asset-waterfall-canvas" style={{ height: virtualizer.getTotalSize() }}>

@@ -6,7 +6,7 @@ import type { AppError, AssetRow } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 
 /** 角色枚举到中文的映射。取值固定为四种，因此这里可以穷举。 */
-const ROLE_TEXT: Readonly<Record<string, string>> = {
+export const ROLE_TEXT: Readonly<Record<string, string>> = {
   dominant: "主色",
   secondary: "次要色",
   accent: "强调色",
@@ -14,10 +14,7 @@ const ROLE_TEXT: Readonly<Record<string, string>> = {
 };
 
 /**
- * 单图预览：原图、色卡与 HEX 复制。
- *
- * 原图通过标准 `<img>` 渲染。规格明确写了这属于渲染而非像素读取，不构成对"界面层不读
- * 像素"那条约束的削弱。
+ * 聚焦原图模式（任务 9.3）：双击或 Enter 显式进入，占满中央区。
  */
 export function AssetPreview({
   asset,
@@ -84,7 +81,7 @@ export function AssetPreview({
   return (
     <section className="asset-preview">
       <button type="button" className="back-button" onClick={onClose}>
-        返回网格
+        退出聚焦
       </button>
 
       <h2>{asset.original_filename}</h2>

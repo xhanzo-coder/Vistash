@@ -267,6 +267,11 @@ button:disabled {
   grid-template-columns: 240px minmax(0, 1fr);
 }
 
+/* 宽屏三栏：右检查器原位常驻（with-inspector 由组件按窗口层级挂上）。 */
+.asset-workspace.with-inspector {
+  grid-template-columns: 240px minmax(0, 1fr) 300px;
+}
+
 .catalog-rail {
   display: flex;
   flex-direction: column;
@@ -800,11 +805,85 @@ button:disabled {
   color: var(--text-secondary);
 }
 
-.asset-details {
+/*
+ * 右检查器（任务 9.3）：分区可定位（信息与色卡/组织/备注），宽屏原位第三列，
+ * 中等/窄窗口经 side="end" 的 WorkspaceDrawer 覆盖。
+ */
+.inspector-rail {
+  align-self: start;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 290px;
-  gap: var(--space-5);
-  margin-top: var(--space-4);
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface-canvas);
+  border-inline-start: 1px solid var(--border-strong);
+}
+
+.inspector-section {
+  display: grid;
+  gap: var(--space-2);
+  padding-block-end: var(--space-4);
+  border-block-end: 1px solid var(--border-subtle);
+}
+
+.inspector-section:last-child {
+  border-block-end: none;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.3rem var(--space-3);
+  margin: 0;
+}
+
+.info-grid dt {
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+}
+
+.info-grid dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.color-strip {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0;
+  list-style: none;
+}
+
+.color-strip li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-size-sm);
+}
+
+.color-swatch {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.inspector-note-text {
+  margin: 0;
+  white-space: pre-line;
+}
+
+.inspector-placeholder,
+.inspector-multi {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  color: var(--text-secondary);
 }
 
 .asset-preview {
@@ -842,23 +921,12 @@ button:disabled {
   border: 1px solid var(--border-subtle);
 }
 
-.metadata-panel {
-  align-self: start;
-  position: sticky;
-  top: var(--space-4);
-  display: grid;
-  gap: var(--space-4);
-  padding: var(--space-4);
-  background: var(--surface-canvas);
-  border: 1px solid var(--border-strong);
-}
-
-.metadata-panel h3,
-.metadata-panel h4 {
+.inspector-section h3,
+.inspector-section h4 {
   margin: 0;
 }
 
-.metadata-panel fieldset {
+.inspector-section fieldset {
   max-height: 16rem;
   margin: 0;
   overflow: auto;
@@ -1023,14 +1091,6 @@ button:disabled {
   .topbar {
     gap: var(--space-2);
     padding-inline: var(--space-3);
-  }
-
-  .asset-details {
-    grid-template-columns: 1fr;
-  }
-
-  .metadata-panel {
-    position: static;
   }
 
   .query-bar,

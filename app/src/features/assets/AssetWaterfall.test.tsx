@@ -271,3 +271,27 @@ test("方向键移动活动项并把焦点交给对应卡片", async () => {
 
   harness.unmount();
 });
+
+test("Enter 把活动项显式交给聚焦原图回调，无活动项时不动", async () => {
+  stubGeometry();
+  stubScrollTop();
+  const opened: string[] = [];
+  const harness = await setupWaterfall(Array.from({ length: 10 }, (_, i) => makeAsset(i)), {
+    onOpenFocused: (hash) => opened.push(hash),
+  });
+
+  // 没有活动项时 Enter 不触发任何打开。
+  act(() => {
+    harness.scroller().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  expect(opened).toEqual([]);
+
+  // 单击建立活动项后，Enter 显式进入聚焦原图。
+  act(() => harness.item(4).click());
+  act(() => {
+    harness.scroller().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  expect(opened).toEqual([makeAsset(4).hash]);
+
+  harness.unmount();
+});

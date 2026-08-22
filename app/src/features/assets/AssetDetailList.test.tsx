@@ -278,5 +278,14 @@ test("单击选中、Ctrl 并入、Shift 范围与双击打开回调", async () 
   });
   expect(opened).toEqual([makeAsset(2).hash]);
 
+  // Enter 把活动项显式交给聚焦原图回调。jsdom 的 dblclick 不派发前置 click，
+  // 活动项仍是上一次 Shift 单击的目标（rangeTo 把活动项移到范围终点）。
+  await act(async () => {
+    harness
+      .scroller()
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  expect(opened).toEqual([makeAsset(2).hash, makeAsset(5).hash]);
+
   harness.unmount();
 });

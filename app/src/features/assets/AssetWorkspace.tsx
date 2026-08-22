@@ -33,6 +33,7 @@ import { useWindowTier } from "../workspace/breakpoints";
 import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
 import { SelectionProvider } from "../workspace/selectionContext";
 import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
+import { AssetInspector } from "./AssetInspector";
 import { AssetPreview } from "./AssetPreview";
 import { AssetWaterfall } from "./AssetWaterfall";
 import { AssetDetailList } from "./AssetDetailList";
@@ -65,7 +66,10 @@ export function AssetWorkspace({
   const [folder, setFolder] = useState<FolderFilter>({ kind: "all" });
   const [location, setLocation] = useState<"active" | "trash">("active");
   const [snapshot, setSnapshot] = useState<CatalogSnapshot | null>(null);
-  const [selectedHash, setSelectedHash] = useState<string | null>(null);
+  // 聚焦原图模式（任务 9.3）：只由双击或 Enter 显式进入；单击仅更新右检查器。
+  const [focusedHash, setFocusedHash] = useState<string | null>(null);
+  // 右检查器抽屉（中等/窄窗口）的开关；宽屏原位展开时忽略。
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<AppError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -118,11 +122,6 @@ export function AssetWorkspace({
       const next = await catalogSnapshot(query);
       setSnapshot(next);
       setError(null);
-      setSelectedHash((current) =>
-        current !== null && next.assets.some((asset) => asset.hash === current)
-          ? current
-          : null,
-      );
     } catch (raw) {
       setError(asAppError(raw));
     } finally {
@@ -139,11 +138,6 @@ export function AssetWorkspace({
         if (cancelled) return;
         setSnapshot(next);
         setError(null);
-        setSelectedHash((current) =>
-          current !== null && next.assets.some((asset) => asset.hash === current)
-            ? current
-            : null,
-        );
       } catch (raw) {
         if (!cancelled) setError(asAppError(raw));
       } finally {
@@ -157,10 +151,11 @@ export function AssetWorkspace({
     };
   }, [snapshotRequest]);
 
-  const selected =
-    selectedHash === null
+  // 聚焦原图的目标素材从当前查询解析；权威刷新把它移除后自动退回集合视图。
+  const focusAsset =
+    focusedHash === null
       ? null
-      : (snapshot?.assets.find((asset) => asset.hash === selectedHash) ?? null);
+      : (sortedAssets.find((asset) => asset.hash === focusedHash) ?? null);
 
   async function runMutation(operation: () => Promise<void>, refreshCurrentQuery: boolean) {
     if (mutating) return;
@@ -181,7 +176,6 @@ export function AssetWorkspace({
   function selectFolder(next: FolderFilter) {
     setLocation("active");
     setFolder(next);
-    setSelectedHash(null);
     setRenameValue(next.kind === "path" ? finalFolderSegment(next.path) : "");
   }
 
@@ -189,7 +183,6 @@ export function AssetWorkspace({
     setSelectedTags((current) =>
       current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
     );
-    setSelectedHash(null);
   }
 
   async function submitFolder(event: React.FormEvent<HTMLFormElement>) {
@@ -237,7 +230,6 @@ export function AssetWorkspace({
       refreshCurrentQuery: true,
       onConfirm: async () => {
         await deleteAsset(asset.hash);
-        setSelectedHash(null);
       },
     });
   }
@@ -252,7 +244,6 @@ export function AssetWorkspace({
       onConfirm: async () => {
         const report = await purgeTrash();
         setPurgeReport(report);
-        setSelectedHash(null);
       },
     });
   }
@@ -267,7 +258,9 @@ export function AssetWorkspace({
 
   return (
     <section
-      className={`asset-workspace${drawerMode === "drawer" ? " rail-drawer" : ""}`}
+      className={`asset-workspace${drawerMode === "drawer" ? " rail-drawer" : ""}${
+        drawerMode === "inline" ? " with-inspector" : ""
+      }`}
       aria-label="素材工作区"
     >
       <WorkspaceDrawer
@@ -325,7 +318,6 @@ export function AssetWorkspace({
                 setLocation("trash");
                 setFolder({ kind: "all" });
                 setSelectedTags([]);
-                setSelectedHash(null);
               }}
             >
               <span>回收站</span>
@@ -374,6 +366,11 @@ export function AssetWorkspace({
         </aside>
       </WorkspaceDrawer>
 
+      {/*
+        统一选择模型（任务 9.3）：Provider 上移到中央区与右检查器之外，
+        单击图片只更新检查器，瀑布流/详情列表不被详情页替换。
+      */}
+      <SelectionProvider ids={sortedAssets.map((asset) => asset.hash)}>
       <div className="catalog-main">
         {folderProgress !== null && (
           <p role="status" className="folder-progress">
@@ -396,6 +393,17 @@ export function AssetWorkspace({
               onClick={() => setRailOpen(true)}
             >
               分类
+            </button>
+          )}
+          {drawerMode === "drawer" && (
+            <button
+              type="button"
+              className="rail-toggle"
+              aria-expanded={inspectorOpen}
+              aria-controls="asset-inspector-panel"
+              onClick={() => setInspectorOpen(true)}
+            >
+              检查器
             </button>
           )}
           <div className="view-switch" role="group" aria-label="集合视图">
@@ -476,22 +484,84 @@ export function AssetWorkspace({
         {error !== null && <ErrorLine error={error} />}
         {loading && snapshot === null ? (
           <p role="status" className="workspace-loading">正在读取素材编目…</p>
-        ) : selected !== null ? (
-          <AssetDetails
-            asset={selected}
+        ) : focusAsset !== null ? (
+          /* 聚焦原图（双击/Enter 显式进入）：占满中央区，退出后回到集合视图。 */
+          <AssetPreview
+            key={focusAsset.hash}
+            asset={focusAsset}
+            onClose={() => setFocusedHash(null)}
+          />
+        ) : (
+          /*
+            集合视图（任务 9.1/9.2）。选择权威在统一 SelectionModel：单击只选中并
+            更新右检查器；双击或 Enter 才进入聚焦原图。瀑布流与详情列表挂在同一个
+            Provider 上，切换视图时同一批 ID 经 idsReplaced 快速路径原样返回，
+            查询、排序、选择与活动项全部保留。滚动偏移分别记在布局偏好的
+            "assets-waterfall"/"assets-list" 键下。
+          */
+          (sortedAssets.length === 0) ? (
+            <div className="empty-state">
+              <p className="eyebrow">NO ASSETS</p>
+              <h3>这里还没有匹配的素材</h3>
+              <p>调整查询条件，或把图片文件与文件夹拖进窗口导入。</p>
+            </div>
+          ) : layout.view === "list" ? (
+            <AssetDetailList
+              assets={sortedAssets}
+              scrollKey="assets-list"
+              savedOffset={layout.scrollOffsets["assets-list"] ?? 0}
+              onScrollOffset={(offset) =>
+                update({
+                  scrollOffsets: { ...layout.scrollOffsets, "assets-list": offset },
+                })
+              }
+              onOpenFocused={(hash) => setFocusedHash(hash)}
+              sort={sort}
+              onSortChange={changeSort}
+            />
+          ) : (
+            <AssetWaterfall
+              assets={sortedAssets}
+              scrollKey="assets-waterfall"
+              savedOffset={layout.scrollOffsets["assets-waterfall"] ?? 0}
+              onScrollOffset={(offset) =>
+                update({
+                  scrollOffsets: { ...layout.scrollOffsets, "assets-waterfall": offset },
+                })
+              }
+              onOpenFocused={(hash) => setFocusedHash(hash)}
+            />
+          )
+        )}
+      </div>
+
+      <WorkspaceDrawer
+        mode={drawerMode}
+        side="end"
+        label="图片检查器"
+        open={inspectorOpen}
+        onClose={() => setInspectorOpen(false)}
+        panelId="asset-inspector-panel"
+      >
+        <aside className="inspector-rail" aria-label="图片检查器">
+          <AssetInspector
+            assets={sortedAssets}
             folders={snapshot?.folders ?? []}
-            isTrash={location === "trash"}
             mutating={mutating}
-            onBack={() => setSelectedHash(null)}
-            onSetFolders={(folders) =>
-              runMutation(() => setAssetFolders(selected.hash, folders), true)
+            trashLocation={location === "trash"}
+            onSetFolders={(hash, nextFolders) =>
+              void runMutation(() => setAssetFolders(hash, nextFolders), true)
             }
-            onSetTags={(tags) => runMutation(() => setAssetTags(selected.hash, tags), true)}
-            onDelete={() => requestAssetDelete(selected)}
-            onRestore={() =>
-              runMutation(async () => {
-                const outcome = await restoreAsset(selected.hash);
-                setSelectedHash(null);
+            onSetTags={(hash, nextTags) =>
+              void runMutation(() => setAssetTags(hash, nextTags), true)
+            }
+            onDeleteAsset={(hash) => {
+              const asset = sortedAssets.find((item) => item.hash === hash);
+              if (asset !== undefined) requestAssetDelete(asset);
+            }}
+            onRestoreAsset={(hash) =>
+              void runMutation(async () => {
+                const outcome = await restoreAsset(hash);
                 if (outcome.missing_folders.length > 0) {
                   setNotice({
                     code: "trash.restore_target_folder_missing",
@@ -501,53 +571,9 @@ export function AssetWorkspace({
               }, true)
             }
           />
-        ) : (
-          /*
-            集合视图（任务 9.1/9.2）。选择权威在统一 SelectionModel：单击选中、
-            双击才进入详情（检查器落地前暂接旧详情页，任务 9.3 替换为聚焦原图）。
-            瀑布流与详情列表挂在同一个 Provider 上，切换视图时同一批 ID 经
-            idsReplaced 快速路径原样返回，查询、排序、选择与活动项全部保留。
-            滚动偏移分别记在布局偏好的 "assets-waterfall"/"assets-list" 键下。
-          */
-          (sortedAssets.length === 0) ? (
-            <div className="empty-state">
-              <p className="eyebrow">NO ASSETS</p>
-              <h3>这里还没有匹配的素材</h3>
-              <p>调整查询条件，或把图片文件与文件夹拖进窗口导入。</p>
-            </div>
-          ) : (
-            <SelectionProvider ids={sortedAssets.map((asset) => asset.hash)}>
-              {layout.view === "list" ? (
-                <AssetDetailList
-                  assets={sortedAssets}
-                  scrollKey="assets-list"
-                  savedOffset={layout.scrollOffsets["assets-list"] ?? 0}
-                  onScrollOffset={(offset) =>
-                    update({
-                      scrollOffsets: { ...layout.scrollOffsets, "assets-list": offset },
-                    })
-                  }
-                  onOpenFocused={(hash) => setSelectedHash(hash)}
-                  sort={sort}
-                  onSortChange={changeSort}
-                />
-              ) : (
-                <AssetWaterfall
-                  assets={sortedAssets}
-                  scrollKey="assets-waterfall"
-                  savedOffset={layout.scrollOffsets["assets-waterfall"] ?? 0}
-                  onScrollOffset={(offset) =>
-                    update({
-                      scrollOffsets: { ...layout.scrollOffsets, "assets-waterfall": offset },
-                    })
-                  }
-                  onOpenFocused={(hash) => setSelectedHash(hash)}
-                />
-              )}
-            </SelectionProvider>
-          )
-        )}
-      </div>
+        </aside>
+      </WorkspaceDrawer>
+      </SelectionProvider>
 
       {confirm !== null && (
         <ConfirmDialog
@@ -560,111 +586,6 @@ export function AssetWorkspace({
         />
       )}
     </section>
-  );
-}
-
-function AssetDetails({
-  asset,
-  folders,
-  isTrash,
-  mutating,
-  onBack,
-  onSetFolders,
-  onSetTags,
-  onDelete,
-  onRestore,
-}: {
-  asset: AssetRow;
-  folders: string[];
-  isTrash: boolean;
-  mutating: boolean;
-  onBack: () => void;
-  onSetFolders: (folders: string[]) => Promise<void>;
-  onSetTags: (tags: string[]) => Promise<void>;
-  onDelete: () => void;
-  onRestore: () => Promise<void>;
-}) {
-  const [tagDraft, setTagDraft] = useState("");
-
-  return (
-    <div className="asset-details">
-      <AssetPreview asset={asset} onClose={onBack} />
-      <aside className="metadata-panel" aria-label="素材组织">
-        <p className="eyebrow">ORGANIZE</p>
-        <h3>归档信息</h3>
-        {!isTrash && (
-          <>
-            <fieldset>
-              <legend>逻辑文件夹</legend>
-              {folders.length === 0 ? (
-                <p className="muted">尚未创建文件夹。</p>
-              ) : (
-                folders.map((folder) => (
-                  <label key={folder} className="check-row">
-                    <input
-                      type="checkbox"
-                      checked={asset.folders.includes(folder)}
-                      disabled={mutating}
-                      onChange={() => {
-                        const next = asset.folders.includes(folder)
-                          ? asset.folders.filter((item) => item !== folder)
-                          : [...asset.folders, folder];
-                        void onSetFolders(next);
-                      }}
-                    />
-                    <span>{folder}</span>
-                  </label>
-                ))
-              )}
-            </fieldset>
-            <div className="tag-editor">
-              <h4>标签</h4>
-              <div className="tag-list">
-                {asset.tags.map((tag) => (
-                  <button
-                    type="button"
-                    key={tag}
-                    aria-label={`移除标签 ${tag}`}
-                    onClick={() => void onSetTags(asset.tags.filter((item) => item !== tag))}
-                  >
-                    {tag} ×
-                  </button>
-                ))}
-              </div>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const next = [...asset.tags, tagDraft];
-                  setTagDraft("");
-                  void onSetTags(next);
-                }}
-              >
-                <label htmlFor="new-tag">添加标签</label>
-                <div className="compact-form">
-                  <input
-                    id="new-tag"
-                    name="new-tag"
-                    autoComplete="off"
-                    value={tagDraft}
-                    onChange={(event) => setTagDraft(event.target.value)}
-                    required
-                  />
-                  <button type="submit" disabled={mutating}>添加</button>
-                </div>
-              </form>
-            </div>
-            <button type="button" className="danger-button" onClick={onDelete}>
-              移入回收站
-            </button>
-          </>
-        )}
-        {isTrash && (
-          <button type="button" className="primary-button" onClick={() => void onRestore()}>
-            还原素材
-          </button>
-        )}
-      </aside>
-    </div>
   );
 }
 
