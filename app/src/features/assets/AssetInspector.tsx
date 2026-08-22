@@ -4,6 +4,7 @@ import type { AssetRow } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useSelection } from "../workspace/selectionContext";
 import { ROLE_TEXT } from "./AssetPreview";
+import { AssetPromptLinks } from "./AssetPromptLinks";
 
 type AssetInspectorProps = {
   /** 当前查询的有序结果：活动项在这里解析成素材。 */
@@ -221,6 +222,16 @@ export function AssetInspector({
           <p className="inspector-note-text">{active.note}</p>
         )}
         <p className="muted">备注编辑与自动保存将在保存状态机就绪后开放。</p>
+      </section>
+
+      <section
+        className="inspector-section"
+        data-inspector-section="links"
+        aria-labelledby="inspector-links-heading"
+      >
+        <p className="eyebrow">LINKS</p>
+        <h3 id="inspector-links-heading">关联提示词</h3>
+        <AssetPromptLinks key={active.hash} hash={active.hash} />
       </section>
     </>
   );

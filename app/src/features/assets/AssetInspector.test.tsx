@@ -4,6 +4,8 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
 import type { AssetRow } from "../../shared/types";
 import { AssetInspector } from "./AssetInspector";
@@ -13,9 +15,15 @@ beforeEach(() => {
     configurable: true,
     value: true,
   });
+  // 关联提示词分区挂载即拉取 image_detail：本文件只测检查器自身，关联给空集。
+  mockIPC((command) => {
+    if (command === "image_detail") return { asset: {}, linked_prompts: [] };
+    throw new Error(`未预期的 IPC：${command}`);
+  });
 });
 
 afterEach(() => {
+  clearMocks();
   vi.restoreAllMocks();
   document.body.replaceChildren();
 });
@@ -267,6 +275,17 @@ test("备注分区只读呈现并显式标注编辑尚未接入", async () => {
   // 任务 9.4 前不提供任何编辑控件。
   expect(note.querySelector("textarea")).toBeNull();
   expect(note.querySelector("input")).toBeNull();
+});
+
+test("活动项下四个规格分区全部可定位", async () => {
+  const harness = await setupInspector([makeAsset()]);
+  await act(async () => harness.proxy(0).click());
+
+  expect(harness.section("info")).not.toBeNull();
+  expect(harness.section("organization")).not.toBeNull();
+  expect(harness.section("note")).not.toBeNull();
+  // 关联提示词分区（任务 9.3 第二循环）由 AssetPromptLinks 提供内容。
+  expect(harness.section("links").textContent).toContain("关联提示词");
 });
 
 test("多选时检查器只呈现数量摘要而不呈现单件分区", async () => {

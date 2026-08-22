@@ -886,6 +886,61 @@ button:disabled {
   color: var(--text-secondary);
 }
 
+/* 关联提示词分区：列表、回收站标记与候选选择器。 */
+.asset-prompt-links {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.links-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.links-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-size-sm);
+}
+
+.link-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deleted-badge {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-size-xs, 0.72rem);
+}
+
+.link-picker {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+}
+
+.link-candidates {
+  max-height: 12rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
 .asset-preview {
   min-width: 0;
   padding: var(--space-4);

@@ -129,6 +129,9 @@ beforeEach(() => {
       return query.location === "trash" ? TRASH_SNAPSHOT : SNAPSHOT;
     }
     if (command === "asset_original") return new ArrayBuffer(8);
+    if (command === "image_detail") {
+      return { asset: {}, linked_prompts: [] };
+    }
     if (command === "set_asset_tags" || command === "delete_asset") return undefined;
     if (command === "restore_asset") return { missing_folders: ["已删除的文件夹"] };
     if (command === "purge_trash") {
