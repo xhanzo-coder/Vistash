@@ -577,6 +577,156 @@ button:disabled {
   object-fit: cover;
 }
 
+/*
+ * 虚拟化详情列表（任务 9.2）。表头与行共用同一组栅格列；表头吸顶，
+ * 行为绝对定位按钮，位置来自内联样式。
+ */
+.asset-detail-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin-top: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.detail-head,
+.detail-row {
+  display: grid;
+  grid-template-columns:
+    4.5rem minmax(10rem, 1.5fr) minmax(7rem, 1fr) minmax(7rem, 1fr)
+    6.5rem 3.8rem 6.5rem minmax(9rem, 1.6fr);
+  gap: var(--space-3);
+  align-items: center;
+  padding-inline: 0.6rem;
+  text-align: left;
+}
+
+.detail-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--surface-rail);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.detail-head [role="columnheader"] {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-size-xs);
+  white-space: nowrap;
+}
+
+.detail-head button {
+  padding: 0.55rem 0;
+  color: inherit;
+  font-weight: 700;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.detail-head button:hover {
+  color: var(--accent-strong);
+}
+
+.asset-detail-canvas {
+  position: relative;
+  width: 100%;
+}
+
+.detail-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding-block: 0.25rem;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-size-xs);
+  background: var(--surface-card);
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.detail-row:hover {
+  background: var(--surface-input);
+}
+
+.detail-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.detail-row.is-selected {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.detail-row.is-active {
+  background: var(--surface-sunken);
+}
+
+/* 列表行内的缩略图固定为小格位：aspect-ratio 在宽高都确定时不生效。 */
+.detail-thumb {
+  width: 4rem;
+  height: 2.75rem;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+.detail-thumb .thumbnail-frame {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+
+.detail-thumb .thumbnail-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.detail-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-name {
+  font-weight: 700;
+  font-size: inherit;
+}
+
+.detail-mono {
+  font-family: var(--font-mono);
+}
+
+.view-switch {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.view-switch button {
+  padding: 0.45rem var(--space-3);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.view-switch button + button {
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.view-switch button[aria-pressed="true"] {
+  color: var(--text-on-accent);
+  background: var(--accent);
+}
+
 .thumbnail-frame {
   display: grid;
   place-items: center;

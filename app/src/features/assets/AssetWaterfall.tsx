@@ -1,8 +1,17 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef, useState, type KeyboardEvent, type UIEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type UIEvent,
+} from "react";
 
 import { estimatedTileHeight, waterfallMetrics } from "./waterfallMetrics";
 import { Thumbnail } from "./Thumbnail";
+import { useRovingFocus } from "../workspace/rovingFocus";
+import { useScrollRestore } from "../workspace/scrollRestore";
 import { useSelection } from "../workspace/selectionContext";
 import type { AssetRow } from "../../shared/types";
 
@@ -72,37 +81,28 @@ export function AssetWaterfall({
     getItemKey: (index) => assets[index]?.hash ?? String(index),
   });
 
-  // 滚动恢复每个滚动键只执行一次：之后滚动位置归使用者掌控，布局偏好的新值
-  // 不再把视口拽走。
-  const restoredKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (restoredKeyRef.current === scrollKey) return;
-    restoredKeyRef.current = scrollKey;
-    const el = scrollRef.current;
-    if (el === null || !(savedOffset > 0)) return;
-    el.scrollTop = savedOffset;
-  }, [scrollKey, savedOffset]);
+  useScrollRestore(scrollRef, scrollKey, savedOffset);
 
-  // 键盘导航后把活动项滚进窗口并把焦点交给对应卡片（roving focus）；
-  // 焦点本就不在瀑布流内时不抢焦点。
-  useEffect(() => {
-    const container = scrollRef.current;
-    const focusedId = state.focusedId;
-    if (container === null || focusedId === null) return undefined;
-    if (!container.contains(document.activeElement)) return undefined;
-    const index = assets.findIndex((asset) => asset.hash === focusedId);
-    if (index === -1) return undefined;
-    virtualizer.scrollToIndex(index, { align: "auto" });
-    const focusTarget = () => {
-      container
-        .querySelector<HTMLElement>(`[data-waterfall-item][data-hash="${focusedId}"]`)
-        ?.focus();
-    };
-    focusTarget();
-    // scrollToIndex 触发的重渲染可能尚未落出目标卡片，下一帧再补一次。
-    const frame = requestAnimationFrame(focusTarget);
-    return () => cancelAnimationFrame(frame);
-  }, [state.focusedId, assets, virtualizer]);
+  // 键盘导航后把活动项滚进窗口并把焦点交给对应卡片；回调随资产数组与虚拟化
+  // 实例保持稳定，避免无关渲染反复触发聚焦。
+  const findById = useCallback(
+    (id: string) => assets.findIndex((asset) => asset.hash === id),
+    [assets],
+  );
+  const scrollToIndex = useCallback(
+    (index: number) => {
+      virtualizer.scrollToIndex(index, { align: "auto" });
+    },
+    [virtualizer],
+  );
+  const findItem = useCallback(
+    (id: string) =>
+      scrollRef.current?.querySelector<HTMLElement>(
+        `[data-waterfall-item][data-hash="${id}"]`,
+      ) ?? null,
+    [],
+  );
+  useRovingFocus(scrollRef, state.focusedId, findById, scrollToIndex, findItem);
 
   return (
     <div

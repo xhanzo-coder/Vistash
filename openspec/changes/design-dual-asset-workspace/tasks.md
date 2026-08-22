@@ -387,7 +387,8 @@
 
 - [x] 9.1 实现虚拟化原画幅瀑布流，只渲染视口/过扫项并保留密度、多选、焦点和滚动恢复
   - 2026-08-21 落地：`waterfallMetrics.ts` 纯几何（列数=容器宽/期望瓦片宽，瓦片高按编目画幅换算，非法画幅回退正方形）；`AssetWaterfall.tsx` 用锁定的 @tanstack/react-virtual@3.14.10（lanes 多列窗口化、getItemKey=hash、overscan 6），位置与可见项归 TanStack，选择/键盘/框选语义全部走统一 SelectionModel；点击显式聚焦卡片（Safari 不产生原生按钮聚焦，键盘巡游依赖它）；滚动偏移经分库布局偏好 `scrollOffsets["assets-waterfall"]` 恢复与防抖持久化，恢复每个滚动键只执行一次；双击暂接旧详情页（9.3 替换为聚焦原图）。测试：万条查询 DOM ≤80 项且深处滚动保持有界、恢复/上报、单击/Ctrl/Shift/双击、方向键巡游+Ctrl+A。旧 AssetGrid 删除，空态迁至 AssetWorkspace。
-- [ ] 9.2 实现虚拟化图片详情列表、可排序信息列、备注摘要与瀑布流视图等价切换
+- [x] 9.2 实现虚拟化图片详情列表、可排序信息列、备注摘要与瀑布流视图等价切换
+  - 2026-08-22 落地：`AssetDetailList` 单车道虚拟化（固定行高 56px），八列按规格齐备（缩略图/文件名/文件夹/标签/尺寸/格式/导入时间/备注摘要）；文件名、尺寸（面积并列回退宽度）、格式、导入时间四列可排序并带 aria-sort 与方向箭头，多值列不排序；`assetSort.ts` 客户端稳定排序（不改输入数组，穷尽 switch 保护）；`noteSummary.ts` 取首个非空行折叠空白截断加省略号。两视图挂在同一个 SelectionProvider 上，视图切换经 `layout.view` 持久化且查询不重发、选择与活动项保留（集成测试断言 IPC 次数不变）；滚动偏移独立记在 `scrollOffsets["assets-list"]`。共享行为抽为 `useScrollRestore`/`useRovingFocus` 钩子，瀑布流同步重构复用。
 - [ ] 9.3 实现图片检查器信息/色卡、组织、备注、关联提示词分区和双击/Enter 聚焦原图模式
 - [ ] 9.4 实现图片 note 延迟/失焦/`Ctrl+Enter` 自动保存状态机、favorite 快捷操作与保存失败草稿保留
 - [ ] 9.5 实现图片回收站、还原缺失文件夹警告、逐项 purge 结果与取消默认焦点二次确认

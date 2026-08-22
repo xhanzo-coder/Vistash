@@ -294,6 +294,56 @@ test("在素材详情中编辑标签并确认删除", async () => {
   await act(async () => root.unmount());
 });
 
+test("切换详情列表保留查询、选择集合与排序共享", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+  const queriesAtStart = queries.length;
+
+  // 瀑布流里单击选中第一项。
+  const item = container.querySelector<HTMLButtonElement>("[data-waterfall-item]");
+  if (item === null) throw new Error("缺少瀑布流项");
+  const selectedHash = item.dataset.hash ?? "";
+  await act(async () => item.click());
+  expect(item.getAttribute("aria-selected")).toBe("true");
+
+  // 切到详情列表：同一素材仍处于选中集合，且查询没有重新发出。
+  await act(async () => buttonWithText(container, "详情列表").click());
+  await flush();
+  const row = container.querySelector<HTMLElement>("[data-list-item]");
+  if (row === null) throw new Error("切换后缺少详情列表行");
+  expect(row.dataset.hash).toBe(selectedHash);
+  expect(row.getAttribute("aria-selected")).toBe("true");
+  expect(container.querySelector('[role="columnheader"]')).not.toBeNull();
+  expect(queries.length).toBe(queriesAtStart);
+
+  // 排序由表头驱动且同样不重新查询（顺序变化由 assetSort 纯模块的测试覆盖）。
+  await act(async () =>
+    row.closest(".asset-detail-list")
+      ?.querySelector<HTMLButtonElement>(".detail-col-dimensions button")
+      ?.click(),
+  );
+  expect(queries.length).toBe(queriesAtStart);
+
+  // 切回瀑布流：选择集合继续保留。
+  await act(async () => buttonWithText(container, "瀑布流").click());
+  await flush();
+  const again = container.querySelector<HTMLButtonElement>(
+    `[data-waterfall-item][data-hash="${selectedHash}"]`,
+  );
+  if (again === null) throw new Error("切回后缺少原瀑布流项");
+  expect(again.getAttribute("aria-selected")).toBe("true");
+  expect(queries.length).toBe(queriesAtStart);
+
+  await act(async () => {
+    root.unmount();
+  });
+});
+
 test("从回收站还原并保留缺失文件夹警告", async () => {
   const container = document.createElement("div");
   document.body.append(container);

@@ -30,11 +30,18 @@ import type {
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
-import { useLibraryLayout } from "../workspace/libraryLayout";
+import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
 import { SelectionProvider } from "../workspace/selectionContext";
 import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
 import { AssetPreview } from "./AssetPreview";
 import { AssetWaterfall } from "./AssetWaterfall";
+import { AssetDetailList } from "./AssetDetailList";
+import {
+  DEFAULT_SORT,
+  sortAssets,
+  type AssetSort,
+  type AssetSortColumn,
+} from "./assetSort";
 
 type ConfirmState = {
   title: string;
@@ -68,6 +75,9 @@ export function AssetWorkspace({
   const [newFolderName, setNewFolderName] = useState("");
   const [renameValue, setRenameValue] = useState("");
   const [folderProgress, setFolderProgress] = useState<FolderMutationProgress | null>(null);
+  // 信息列排序（任务 9.2）：瀑布流与详情列表共用同一顺序；不进布局偏好，
+  // 设计定义的持久化形状只有视图/筛选/滚动。
+  const [sort, setSort] = useState<AssetSort>({ ...DEFAULT_SORT });
 
   // 中等/窄窗口左栏收起为抽屉（任务 8.6）：宽屏原位展开，其余层级默认收起、
   // 经边缘入口打开。窄屏自动收起不写任何宽屏宽度偏好。
@@ -84,6 +94,24 @@ export function AssetWorkspace({
     () => ({ query, refreshVersion }),
     [query, refreshVersion],
   );
+
+  // 两种视图共用同一顺序（规格：切换视图不清空查询、排序、选择与活动项）。
+  const sortedAssets = useMemo(
+    () => sortAssets(snapshot?.assets ?? [], sort),
+    [snapshot, sort],
+  );
+
+  function changeSort(column: AssetSortColumn) {
+    setSort((current) =>
+      current.column === column
+        ? { column, direction: current.direction === "asc" ? "desc" : "asc" }
+        : { column, direction: "asc" },
+    );
+  }
+
+  function switchView(view: WorkspaceView) {
+    if (view !== layout.view) update({ view });
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -370,6 +398,22 @@ export function AssetWorkspace({
               分类
             </button>
           )}
+          <div className="view-switch" role="group" aria-label="集合视图">
+            <button
+              type="button"
+              aria-pressed={layout.view === "waterfall"}
+              onClick={() => switchView("waterfall")}
+            >
+              瀑布流
+            </button>
+            <button
+              type="button"
+              aria-pressed={layout.view === "list"}
+              onClick={() => switchView("list")}
+            >
+              详情列表
+            </button>
+          </div>
           <label className="search-field">
             <span>文件名</span>
             <input
@@ -459,29 +503,47 @@ export function AssetWorkspace({
           />
         ) : (
           /*
-            瀑布流（任务 9.1）。选择权威在统一 SelectionModel：单击选中、双击才进入
-            详情（检查器落地前暂接旧详情页，任务 9.3 替换为聚焦原图模式）。滚动偏移
-            记在分库布局偏好的 "assets-waterfall" 键下，换库或重启后回到原处。
+            集合视图（任务 9.1/9.2）。选择权威在统一 SelectionModel：单击选中、
+            双击才进入详情（检查器落地前暂接旧详情页，任务 9.3 替换为聚焦原图）。
+            瀑布流与详情列表挂在同一个 Provider 上，切换视图时同一批 ID 经
+            idsReplaced 快速路径原样返回，查询、排序、选择与活动项全部保留。
+            滚动偏移分别记在布局偏好的 "assets-waterfall"/"assets-list" 键下。
           */
-          (snapshot?.assets.length ?? 0) === 0 ? (
+          (sortedAssets.length === 0) ? (
             <div className="empty-state">
               <p className="eyebrow">NO ASSETS</p>
               <h3>这里还没有匹配的素材</h3>
               <p>调整查询条件，或把图片文件与文件夹拖进窗口导入。</p>
             </div>
           ) : (
-            <SelectionProvider ids={(snapshot?.assets ?? []).map((asset) => asset.hash)}>
-              <AssetWaterfall
-                assets={snapshot?.assets ?? []}
-                scrollKey="assets-waterfall"
-                savedOffset={layout.scrollOffsets["assets-waterfall"] ?? 0}
-                onScrollOffset={(offset) =>
-                  update({
-                    scrollOffsets: { ...layout.scrollOffsets, "assets-waterfall": offset },
-                  })
-                }
-                onOpenFocused={(hash) => setSelectedHash(hash)}
-              />
+            <SelectionProvider ids={sortedAssets.map((asset) => asset.hash)}>
+              {layout.view === "list" ? (
+                <AssetDetailList
+                  assets={sortedAssets}
+                  scrollKey="assets-list"
+                  savedOffset={layout.scrollOffsets["assets-list"] ?? 0}
+                  onScrollOffset={(offset) =>
+                    update({
+                      scrollOffsets: { ...layout.scrollOffsets, "assets-list": offset },
+                    })
+                  }
+                  onOpenFocused={(hash) => setSelectedHash(hash)}
+                  sort={sort}
+                  onSortChange={changeSort}
+                />
+              ) : (
+                <AssetWaterfall
+                  assets={sortedAssets}
+                  scrollKey="assets-waterfall"
+                  savedOffset={layout.scrollOffsets["assets-waterfall"] ?? 0}
+                  onScrollOffset={(offset) =>
+                    update({
+                      scrollOffsets: { ...layout.scrollOffsets, "assets-waterfall": offset },
+                    })
+                  }
+                  onOpenFocused={(hash) => setSelectedHash(hash)}
+                />
+              )}
             </SelectionProvider>
           )
         )}
