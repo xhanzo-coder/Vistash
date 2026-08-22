@@ -62,6 +62,7 @@ pub fn run() {
             commands::set_prompt_cover,
             commands::import_and_link,
             commands::image_detail,
+            commands::linked_image_states,
             commands::set_asset_note,
             commands::set_asset_favorite,
             commands::batch_add_asset_folder,

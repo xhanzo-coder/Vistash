@@ -7,6 +7,7 @@
 use crate::error::Result;
 use crate::hashing::ContentHash;
 use crate::index::{AssetRow, FolderSelection, Index, PromptRow};
+use crate::prompt::PromptId;
 use serde::Serialize;
 
 use super::image_metadata::{FolderPath, Tag};
@@ -113,6 +114,18 @@ pub struct ImageDetail {
     pub asset: AssetRow,
     /// 关联这张图的全部提示词（含回收站提示词），经派生反查回答。
     pub linked_prompts: Vec<PromptRow>,
+}
+
+/// 提示词检查器里一张关联图片的状态。
+///
+/// 与 [`ImageDetail`] 的反查互为镜像：图片侧回答"关联了哪些提示词"，这里回答
+/// "这条提示词关联了哪些图片"。关联一方进入回收站时关联必须保留且显式标记
+/// （规格），因此这里回答"是否已删除"而不是把条目从列表里剔除。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LinkedImageState {
+    pub hash: String,
+    /// 该图片当前是否在图片库回收站里。还原后自动回到 `false`，无需重新关联。
+    pub deleted: bool,
 }
 
 impl Catalog {
@@ -224,6 +237,25 @@ impl Catalog {
             asset: index.asset_row(hash.as_str())?,
             linked_prompts: index.prompts_for_image(hash.as_str())?,
         })
+    }
+
+    /// 提示词检查器的按需关联状态：与权威文件同序的哈希加各自回收站标记。
+    ///
+    /// 顺序来自索引行（`ordinal` 升序），默认封面"取第一张正常关联图片"的判定
+    /// 也依赖这个顺序。哈希在资产表里缺失属于不变量被破坏（永久删除会连带解除
+    /// 关联），如实以错误传播而不是静默跳过。
+    pub fn linked_image_states(&self, prompt_id: &PromptId) -> Result<Vec<LinkedImageState>> {
+        let index = self.index()?;
+        let row = index.prompt_row(prompt_id.as_str())?;
+        row.linked_image_hashes
+            .iter()
+            .map(|hash| {
+                Ok(LinkedImageState {
+                    hash: hash.clone(),
+                    deleted: index.asset_is_deleted(hash)?,
+                })
+            })
+            .collect()
     }
 }
 

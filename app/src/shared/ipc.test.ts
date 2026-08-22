@@ -19,6 +19,7 @@ import {
   importAndLink,
   importPaths,
   linkImages,
+  linkedImageStates,
   migrateLibrary,
   promptDetail,
   promptSnapshot,
@@ -362,10 +363,15 @@ test("普通关联、封面与图片 note/favorite IPC 使用固定 command 和�
     ],
   };
   const detail: ImageDetail = { asset: sampleAssetRow(), linked_prompts: [] };
+  const states = [
+    { hash: HASH, deleted: false },
+    { hash: "f".repeat(64), deleted: true },
+  ];
   mockIPC((command) => {
     calls.push({ command, payload: undefined });
     if (command === "import_and_link") return report;
     if (command === "image_detail") return detail;
+    if (command === "linked_image_states") return states;
     return null;
   });
 
@@ -375,6 +381,7 @@ test("普通关联、封面与图片 note/favorite IPC 使用固定 command 和�
   await setPromptCover(PROMPT_ID, null);
   await importAndLink(PROMPT_ID, ["E:\\素材\\逆光.png"]);
   await imageDetail(HASH);
+  await linkedImageStates(PROMPT_ID);
   await setAssetNote(HASH, "构图参考");
   await setAssetFavorite(HASH, true);
 
@@ -385,6 +392,7 @@ test("普通关联、封面与图片 note/favorite IPC 使用固定 command 和�
     "set_prompt_cover",
     "import_and_link",
     "image_detail",
+    "linked_image_states",
     "set_asset_note",
     "set_asset_favorite",
   ]);
@@ -403,10 +411,12 @@ test("关联与导入命令携带完整参数形状", async () => {
   await linkImages(PROMPT_ID, [HASH]);
   await setPromptCover(PROMPT_ID, null);
   await importAndLink(PROMPT_ID, ["E:\\素材\\逆光.png"]);
+  await linkedImageStates(PROMPT_ID);
 
   expect(seen.link_images).toEqual({ promptId: PROMPT_ID, hashes: [HASH] });
   expect(seen.set_prompt_cover).toEqual({ promptId: PROMPT_ID, cover: null });
   expect(seen.import_and_link).toEqual({ promptId: PROMPT_ID, sources: ["E:\\素材\\逆光.png"] });
+  expect(seen.linked_image_states).toEqual({ promptId: PROMPT_ID });
 });
 
 test("批量命令转交逐项进度并返回统一报告", async () => {

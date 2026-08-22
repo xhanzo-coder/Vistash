@@ -259,6 +259,13 @@ export type ImageDetail = {
   linked_prompts: PromptRow[];
 };
 
+/** `vistash_core::catalog::LinkedImageState`：提示词有序关联里一张图片的状态。 */
+export type LinkedImageState = {
+  hash: string;
+  /** 该图片当前是否在图片库回收站里；关联本身保留，还原后自动回到正常。 */
+  deleted: boolean;
+};
+
 /** `vistash_core::catalog::BatchFailure`：单个目标的批量失败。 */
 export type BatchFailure = {
   id: string;

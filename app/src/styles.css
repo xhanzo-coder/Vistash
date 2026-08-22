@@ -1058,6 +1058,74 @@ button:disabled {
   object-fit: cover;
 }
 
+/*
+ * 提示词关联图片分区（任务 10.5）：格位纵向堆叠徽标、缩略图与操作；
+ * 拖入目标用虚线边界表达"可以放这里"，悬停命中时以进行中色实线确认。
+ */
+.prompt-image-links {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.link-drop-zone {
+  padding: var(--space-3);
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.link-drop-zone p {
+  margin: 0;
+}
+
+.link-drop-zone.is-hover {
+  background: var(--positive-bg);
+  border-color: var(--positive-edge);
+  border-style: solid;
+}
+
+.linked-thumbs li {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+}
+
+.linked-thumbs li.is-deleted .linked-thumb {
+  opacity: 0.55;
+}
+
+.thumb-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.cover-badge {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  color: var(--positive-text);
+  background: var(--positive-bg);
+  border: 1px solid var(--positive-edge);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-size-xs, 0.72rem);
+}
+
+.import-report {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: var(--space-2);
+  list-style: none;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--text-size-sm);
+}
+
+.import-report li {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .view-switch {
   display: flex;
   gap: 0;

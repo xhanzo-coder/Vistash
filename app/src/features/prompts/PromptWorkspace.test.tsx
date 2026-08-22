@@ -137,6 +137,14 @@ beforeEach(() => {
       return { format_version: 2, ...makePrompt(2) };
     }
     if (command === "asset_thumbnail") return new ArrayBuffer(8);
+    if (command === "plugin:event|listen" || command === "plugin:event|unlisten") {
+      // 关联图片分区尝试订阅 Tauri 拖放事件：mock 环境没有真实事件流，静默应答。
+      return undefined;
+    }
+    if (command === "linked_image_states") {
+      // 工作区测试不关心关联明细：给空列表让分区呈现空态即可。
+      return [];
+    }
     throw new Error(`未预期的 IPC：${command}`);
   });
 });

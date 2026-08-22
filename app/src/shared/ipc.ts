@@ -25,6 +25,7 @@ import type {
   ImportOutcome,
   ImportProgress,
   LibraryStatus,
+  LinkedImageState,
   MigrationProgress,
   NewPromptInput,
   PromptAsset,
@@ -68,6 +69,27 @@ export async function pickLibraryDirectory(): Promise<string | null> {
 /** 打开选中的目录；该目录还不是库时创建一个。 */
 export function openLibrary(path: string): Promise<LibraryStatus> {
   return call<LibraryStatus>("open_library", { path });
+}
+
+/**
+ * 弹出多选图片文件对话框；取消时返回空数组。
+ *
+ * 扩展名清单与核心导入层支持的格式一致——对话框放行的类型后端不会再拒第二遍，
+ * 两份清单必须同步修改。
+ */
+export async function pickImageFiles(): Promise<string[]> {
+  try {
+    const picked = await openDialog({
+      multiple: true,
+      title: "选择要导入并关联的图片",
+      filters: [
+        { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] },
+      ],
+    });
+    return picked ?? [];
+  } catch (raw) {
+    throw new IpcError(asAppError(raw));
+  }
 }
 
 /** 对旧版本格式的库执行一次性迁移，成功后该库成为当前库。 */
@@ -188,6 +210,44 @@ export async function onPathsDropped(
   return unlisten;
 }
 
+/**
+ * 窗口级文件拖放的完整事件流（任务 10.5）。
+ *
+ * `onPathsDropped` 只回答"放下了什么"，而关联图片区还需要"悬停在哪里"才能呈现
+ * 命中高亮并在落点上与整库导入分流。位置是物理像素，逻辑像素换算由消费方按
+ * `devicePixelRatio` 自行完成。
+ */
+export type FileDragEvent =
+  | { type: "enter"; paths: string[]; x: number; y: number }
+  | { type: "move"; paths: string[]; x: number; y: number }
+  | { type: "leave" }
+  | { type: "drop"; paths: string[]; x: number; y: number };
+
+export async function onFileDragEvent(
+  handler: (event: FileDragEvent) => void,
+): Promise<() => void> {
+  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+    const payload = event.payload;
+    if (payload.type === "leave") {
+      handler({ type: "leave" });
+      return;
+    }
+    // Tauri 把"拖动经过"报作 over 且不带路径；本应用的语义是 move，命中
+    // 判定只需要坐标，路径以空列表占位。
+    if (payload.type === "over") {
+      handler({ type: "move", paths: [], x: payload.position.x, y: payload.position.y });
+      return;
+    }
+    handler({
+      type: payload.type,
+      paths: payload.paths,
+      x: payload.position.x,
+      y: payload.position.y,
+    });
+  });
+  return unlisten;
+}
+
 // ---------------------------------------------------------------------------
 // 提示词素材：CRUD、组织、回收站、普通关联与封面。
 // ---------------------------------------------------------------------------
@@ -269,6 +329,11 @@ export function importAndLink(
 /** 图片检查器的按需详情：轻量行加关联提示词反查。 */
 export function imageDetail(hash: string): Promise<ImageDetail> {
   return call<ImageDetail>("image_detail", { hash });
+}
+
+/** 提示词检查器的按需关联状态：与权威文件同序的哈希加各自回收站标记。 */
+export function linkedImageStates(promptId: string): Promise<LinkedImageState[]> {
+  return call<LinkedImageState[]>("linked_image_states", { promptId });
 }
 
 /** 图片备注与收藏（与提示词侧同一语义）。 */

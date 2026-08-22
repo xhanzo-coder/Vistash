@@ -406,6 +406,7 @@ export function PromptWorkspace({
         panelId="prompt-inspector-panel"
       >
         <aside className="inspector-rail" aria-label="提示词检查器">
+          {/* 关联变更的忙碌与错误已由分区自管：这里只负责权威刷新。 */}
           <PromptInspector
             prompts={sortedPrompts}
             folders={snapshot?.folders ?? []}
@@ -427,6 +428,7 @@ export function PromptWorkspace({
               setBodyFocusEdit(true);
               setBodyFocusId(id);
             }}
+            onImagesChanged={() => void refresh()}
           />
         </aside>
       </WorkspaceDrawer>

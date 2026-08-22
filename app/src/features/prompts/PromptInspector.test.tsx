@@ -10,15 +10,24 @@ import type { PromptRow } from "../../shared/types";
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
 import { PromptInspector } from "./PromptInspector";
 
+/** linked_image_states 的应答；检查关联图片分区的测试按需设定。 */
+let statesReply: Array<{ hash: string; deleted: boolean }> = [];
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
     configurable: true,
     value: true,
   });
+  statesReply = [];
   // 关联图片格位挂载即登记懒加载；全局 IntersectionObserver 处于休眠桩态不会
   // 触发载入，这里仍备好缩略图处理器以免意外触发时落空。
   mockIPC((command) => {
+    if (command === "plugin:event|listen" || command === "plugin:event|unlisten") {
+      // 关联分区尝试订阅 Tauri 拖放事件：mock 环境没有真实事件流，静默应答。
+      return undefined;
+    }
     if (command === "asset_thumbnail") return new ArrayBuffer(8);
+    if (command === "linked_image_states") return statesReply;
     throw new Error(`未预期的 IPC：${command}`);
   });
 });
@@ -28,6 +37,12 @@ afterEach(() => {
   vi.restoreAllMocks();
   document.body.replaceChildren();
 });
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+}
 
 /** 合成一条最小 PromptRow，与瀑布流测试同构。 */
 function makePrompt(overrides: Partial<PromptRow> = {}): PromptRow {
@@ -56,6 +71,7 @@ type Handlers = {
   onToggleFavorite?: (id: string, favorite: boolean) => void;
   onOpenBodyFocus?: (id: string) => void;
   onEditBodyFocus?: (id: string) => void;
+  onImagesChanged?: () => void;
 };
 
 /**
@@ -122,6 +138,7 @@ async function setupInspector(
           }}
           onOpenBodyFocus={handlers.onOpenBodyFocus ?? (() => {})}
           onEditBodyFocus={handlers.onEditBodyFocus ?? (() => {})}
+          onImagesChanged={handlers.onImagesChanged ?? (() => {})}
         />
       </SelectionProvider>
     );
@@ -291,15 +308,23 @@ test("信息分区提供聚焦阅读与编辑主字段两个显式入口", async
 test("无关联图片时给出建立关联的出路文案", async () => {
   const harness = await setupInspector([makePrompt()]);
   await act(async () => harness.proxy(0).click());
+  // 关联状态按需读取：先冲刷加载，再断言空态出路。
+  await flush();
   expect(harness.section("images").textContent).toContain("还没有关联图片");
+  expect(harness.section("images").textContent).toContain("从图片库选择");
 });
 
-test("带关联图片的活动项按哈希列出格位并标注总数", async () => {
+test("带关联图片的活动项按权威顺序列出格位并标注总数", async () => {
   const hashes = ["a".repeat(64), "b".repeat(64)];
+  statesReply = [
+    { hash: hashes[0] ?? "", deleted: false },
+    { hash: hashes[1] ?? "", deleted: false },
+  ];
   const harness = await setupInspector([makePrompt({ linked_image_hashes: [...hashes] })]);
   await act(async () => harness.proxy(0).click());
+  await flush();
 
-  const list = harness.section("images").querySelector("ul");
+  const list = harness.section("images").querySelector("ul.linked-thumbs");
   if (list === null) throw new Error("缺少关联图片列表");
   expect(list.getAttribute("aria-label")).toBe("关联 2 张图片");
   expect(
@@ -307,6 +332,19 @@ test("带关联图片的活动项按哈希列出格位并标注总数", async ()
       (li) => li.dataset.linkedHash,
     ),
   ).toEqual(hashes);
+});
+
+test("回收站里的关联图片显式标记已删除而不是消失", async () => {
+  statesReply = [{ hash: "a".repeat(64), deleted: true }];
+  const harness = await setupInspector([
+    makePrompt({ linked_image_hashes: ["a".repeat(64)] }),
+  ]);
+  await act(async () => harness.proxy(0).click());
+  await flush();
+
+  const item = harness.section("images").querySelector<HTMLElement>("[data-linked-hash]");
+  if (item === null) throw new Error("缺少关联格位");
+  expect(item.querySelector(".deleted-badge")?.textContent).toBe("已删除");
 });
 
 test("收藏开关报告目标状态且初始与提示词一致", async () => {

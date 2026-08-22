@@ -958,4 +958,61 @@ mod tests {
             "关联失败的那张不得出现在关联列表里"
         );
     }
+
+    #[test]
+    fn linked_image_states_report_trash_state_in_order() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
+        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let owner = prompt(&mut fixture.catalog, "关联状态");
+        fixture
+            .catalog
+            .link_images(&owner.id, &[image_a.hash.clone(), image_b.hash.clone()])
+            .expect("建立关联");
+
+        // 全部在正常库：顺序与权威文件一致，状态全部未删除。
+        let states = fixture
+            .catalog
+            .linked_image_states(&owner.id)
+            .expect("读取关联状态");
+        assert_eq!(states.len(), 2);
+        assert_eq!(states[0].hash, image_a.hash.as_str());
+        assert!(!states[0].deleted);
+        assert_eq!(states[1].hash, image_b.hash.as_str());
+        assert!(!states[1].deleted);
+
+        // 第一张进入回收站：关联保留、显式标记已删除、顺序不变（规格）。
+        fixture
+            .catalog
+            .delete_asset(&image_a.hash)
+            .expect("移入图片回收站");
+        let states = fixture
+            .catalog
+            .linked_image_states(&owner.id)
+            .expect("回收站后读取关联状态");
+        assert!(states[0].deleted, "回收站关联必须显式标记而不是剔除");
+        assert_eq!(states[1].hash, image_b.hash.as_str());
+        assert!(!states[1].deleted);
+
+        // 还原后自动回到正常状态：无需重新关联（规格）。
+        fixture
+            .catalog
+            .restore_asset(&image_a.hash)
+            .expect("还原图片");
+        let states = fixture
+            .catalog
+            .linked_image_states(&owner.id)
+            .expect("还原后读取关联状态");
+        assert!(!states[0].deleted);
+
+        // 不存在的提示词如实报错，不返回空列表冒充"没有关联"。
+        let missing = PromptId::parse("018f3c9e-6c00-7000-8000-00000000ffff").expect("合法 ID");
+        let error = fixture
+            .catalog
+            .linked_image_states(&missing)
+            .expect_err("缺失提示词应报错");
+        assert_eq!(error.code, Code::PromptNotFound);
+    }
 }

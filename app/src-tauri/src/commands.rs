@@ -19,8 +19,8 @@ use tauri::ipc::Channel;
 use vistash_core::catalog::{
     AssetLocation, AssetQuery, BatchProgress, BatchReport, Catalog, CatalogSnapshot, FolderFilter,
     FolderMutationProgress, FolderName, FolderPath, GlobalSearchResult, ImageDetail,
-    ImportAndLinkReport, NewPrompt, PromptEdit, PromptLocation, PromptQuery, PromptPurgeReport,
-    PromptRestoreOutcome, PromptSnapshot, PurgeReport, RestoreOutcome, Tag,
+    ImportAndLinkReport, LinkedImageState, NewPrompt, PromptEdit, PromptLocation, PromptQuery,
+    PromptPurgeReport, PromptRestoreOutcome, PromptSnapshot, PurgeReport, RestoreOutcome, Tag,
 };
 use vistash_core::error::{AppError, Code, Result};
 use vistash_core::hashing::ContentHash;
@@ -909,6 +909,19 @@ pub async fn image_detail(
 ) -> Result<ImageDetail> {
     let hash = ContentHash::parse(&hash)?;
     with_catalog(state, move |catalog| catalog.image_detail(&hash)).await
+}
+
+/// 提示词检查器的按需关联状态：与权威文件同序的哈希加各自回收站标记。
+#[tauri::command]
+pub async fn linked_image_states(
+    prompt_id: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<Vec<LinkedImageState>> {
+    let prompt_id = PromptId::parse(&prompt_id)?;
+    with_catalog(state, move |catalog| {
+        catalog.linked_image_states(&prompt_id)
+    })
+    .await
 }
 
 #[tauri::command]

@@ -1,9 +1,8 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 
 import type { PromptRow } from "../../shared/types";
-import { ErrorLine } from "../library/ErrorLine";
 import { useSelection } from "../workspace/selectionContext";
-import { useLazyThumbnailUrl } from "../workspace/thumbnailUrl";
+import { PromptImageLinks } from "./PromptImageLinks";
 import { PromptNoteEditor } from "./PromptNoteEditor";
 import { promptDisplayTitle } from "./promptDisplay";
 
@@ -21,33 +20,9 @@ type PromptInspectorProps = {
   onOpenBodyFocus: (id: string) => void;
   /** 请求进入聚焦编辑器并直接落在主字段编辑状态（任务 10.4）。 */
   onEditBodyFocus: (id: string) => void;
+  /** 关联图片发生任何变更后刷新权威快照（任务 10.5）。 */
+  onImagesChanged: () => void;
 };
-
-/**
- * 关联图片的一格缩略图（任务 10.3）。
- *
- * 检查器手里只有哈希没有素材行，因此不复用吃 AssetRow 的 Thumbnail，而是共用
- * 同一套懒加载生命周期；格位固定方形，超出部分裁剪。加载失败必须显式呈现原因，
- * 不留一个与"空关联"无法区分的空白。
- */
-function LinkedThumb({ hash }: { hash: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const { started, url, error } = useLazyThumbnailUrl(containerRef, hash);
-
-  return (
-    <div ref={containerRef} className="linked-thumb" aria-busy={started && url === null && error === null}>
-      {error !== null ? (
-        <ErrorLine error={error} />
-      ) : url !== null ? (
-        <img src={url} alt="" loading="lazy" />
-      ) : started ? (
-        <p>正在载入…</p>
-      ) : (
-        <p>等待载入…</p>
-      )}
-    </div>
-  );
-}
 
 /**
  * 右侧固定提示词检查器（任务 10.3）。
@@ -56,7 +31,7 @@ function LinkedThumb({ hash }: { hash: string }) {
  * 分区按规格可定位：当前正文与元数据（info）、组织（organization）、备注
  * （note）与全部关联图片（images）。选择权威在统一 SelectionModel——本组件
  * 只是活动项与多选摘要的呈现端。备注的独立自动保存与主字段显式保存在任务
- * 10.4 接入。
+ * 10.4 接入，关联图片的完整管理在任务 10.5 由 PromptImageLinks 承担。
  */
 export function PromptInspector({
   prompts,
@@ -67,6 +42,7 @@ export function PromptInspector({
   onToggleFavorite,
   onOpenBodyFocus,
   onEditBodyFocus,
+  onImagesChanged,
 }: PromptInspectorProps) {
   const { state } = useSelection();
   const [tagDraft, setTagDraft] = useState("");
@@ -275,17 +251,12 @@ export function PromptInspector({
       >
         <p className="eyebrow">IMAGES</p>
         <h3 id="prompt-inspector-images-heading">关联图片</h3>
-        {active.linked_image_hashes.length === 0 ? (
-          <p className="muted">还没有关联图片。可在图片侧建立普通关联，或从本检查器导入。</p>
-        ) : (
-          <ul className="linked-thumbs" aria-label={`关联 ${active.linked_image_hashes.length} 张图片`}>
-            {active.linked_image_hashes.map((hash) => (
-              <li key={hash} data-linked-hash={hash}>
-                <LinkedThumb hash={hash} />
-              </li>
-            ))}
-          </ul>
-        )}
+        {/*
+          关联的建立/解除/封面/回收站标记全部由 PromptImageLinks 承担（任务 10.5）：
+          它自取关联状态并在变更后经 onImagesChanged 触发工作区权威刷新。以活动
+          项 id 作 key，换活动项即重新挂载。
+        */}
+        <PromptImageLinks key={active.id} active={active} onChanged={onImagesChanged} />
       </section>
     </>
   );

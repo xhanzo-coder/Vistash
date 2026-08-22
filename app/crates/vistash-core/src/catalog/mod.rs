@@ -37,7 +37,7 @@ pub use linking::{ImportAndLinkItem, ImportAndLinkOutcome, ImportAndLinkReport};
 pub use prompt_metadata::{NewPrompt, PromptEdit};
 pub use query::{
     AssetLocation, AssetQuery, CatalogSnapshot, FolderFilter, GlobalSearchResult, ImageDetail,
-    PromptLocation, PromptQuery, PromptSnapshot, TagUsage,
+    LinkedImageState, PromptLocation, PromptQuery, PromptSnapshot, TagUsage,
 };
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AssetWorkspace } from "./features/assets/AssetWorkspace";
 import { ErrorLine } from "./features/library/ErrorLine";
 import { blockIfPromptDraftDirty } from "./features/prompts/draftGuard";
+import { promptDropClaimsLatestPoint } from "./features/prompts/promptDropZone";
 import { PromptWorkspace } from "./features/prompts/PromptWorkspace";
 import { LibraryPicker } from "./features/library/LibraryPicker";
 import {
@@ -77,7 +78,13 @@ export function App() {
 
     const listen = async () => {
       try {
-        const fn = await onPathsDropped((paths) => void runImport(paths));
+        const fn = await onPathsDropped((paths) => {
+          // 落点被提示词关联图片区认领时让路（任务 10.5）：那次拖放的语义是
+          // "导入并关联到当前提示词"，不是整库导入。判定只读共享的落点快照，
+          // 与两个监听者的触发顺序无关。
+          if (promptDropClaimsLatestPoint()) return;
+          void runImport(paths);
+        });
         if (cancelled) {
           fn();
           return;
