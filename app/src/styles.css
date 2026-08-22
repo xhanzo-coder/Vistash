@@ -817,6 +817,56 @@ button:disabled {
   width: 100%;
 }
 
+/*
+ * 提示词详情列表（任务 10.2）。表头与行复用图片侧的通用 detail-* 类，只在
+ * 这里替换栅格列：标题/正文摘要、文件夹、标签、关联图片数、模型、收藏、更新
+ * 时间共七列。首格为标题加正文摘要两行。
+ */
+.prompt-detail-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin-top: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.prompt-detail-list .detail-head,
+.prompt-detail-list .detail-row {
+  display: grid;
+  grid-template-columns:
+    minmax(12rem, 2fr) minmax(6rem, 1fr) minmax(6rem, 1fr)
+    4rem minmax(7rem, 1fr) 5rem 5.5rem;
+  gap: var(--space-3);
+  align-items: center;
+  padding-inline: 0.6rem;
+  text-align: left;
+}
+
+.prompt-title-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.prompt-title-line {
+  overflow: hidden;
+  font-weight: 600;
+  font-size: var(--text-size-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.prompt-summary-line {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-size-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .detail-row {
   position: absolute;
   top: 0;
