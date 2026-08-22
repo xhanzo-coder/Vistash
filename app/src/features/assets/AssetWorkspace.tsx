@@ -15,6 +15,7 @@ import {
   purgeTrash,
   renameFolder,
   restoreAsset,
+  setAssetFavorite,
   setAssetFolders,
   setAssetTags,
 } from "../../shared/ipc";
@@ -64,6 +65,8 @@ export function AssetWorkspace({
   const deferredText = useDeferredValue(text);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [folder, setFolder] = useState<FolderFilter>({ kind: "all" });
+  // 收藏筛选（任务 9.4）：null=不限，true=只看收藏；规格里收藏是二值状态。
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [location, setLocation] = useState<"active" | "trash">("active");
   const [snapshot, setSnapshot] = useState<CatalogSnapshot | null>(null);
   // 聚焦原图模式（任务 9.3）：只由双击或 Enter 显式进入；单击仅更新右检查器。
@@ -90,9 +93,14 @@ export function AssetWorkspace({
   const [railOpen, setRailOpen] = useState(false);
 
   const query = useMemo<AssetQuery>(
-    // 收藏筛选属于第 9 章的检查器与筛选条；在它落地前恒为"不限"。
-    () => ({ text: deferredText, tags: selectedTags, folder, favorite: null, location }),
-    [deferredText, folder, location, selectedTags],
+    () => ({
+      text: deferredText,
+      tags: selectedTags,
+      folder,
+      favorite: favoriteOnly ? true : null,
+      location,
+    }),
+    [deferredText, favoriteOnly, folder, location, selectedTags],
   );
   const snapshotRequest = useMemo(
     () => ({ query, refreshVersion }),
@@ -434,6 +442,15 @@ export function AssetWorkspace({
               onChange={(event) => setText(event.target.value)}
             />
           </label>
+          {/* 收藏筛选入口：中央视图只返回 favorite=true 的正常图片。 */}
+          <button
+            type="button"
+            className={`favorite-filter${favoriteOnly ? " is-on" : ""}`}
+            aria-pressed={favoriteOnly}
+            onClick={() => setFavoriteOnly((current) => !current)}
+          >
+            ★ 只看收藏
+          </button>
           <span className="result-count">{snapshot?.assets.length ?? 0} 项</span>
         </header>
 
@@ -569,6 +586,9 @@ export function AssetWorkspace({
                   });
                 }
               }, true)
+            }
+            onToggleFavorite={(hash, favorite) =>
+              void runMutation(() => setAssetFavorite(hash, favorite), true)
             }
           />
         </aside>

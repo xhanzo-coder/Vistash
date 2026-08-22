@@ -62,6 +62,7 @@ type Handlers = {
   onSetTags?: (hash: string, tags: string[]) => void;
   onDeleteAsset?: (hash: string) => void;
   onRestoreAsset?: (hash: string) => void;
+  onToggleFavorite?: (hash: string, favorite: boolean) => void;
 };
 
 /**
@@ -128,6 +129,7 @@ async function setupInspector(
           }}
           onDeleteAsset={handlers.onDeleteAsset ?? (() => {})}
           onRestoreAsset={handlers.onRestoreAsset ?? (() => {})}
+          onToggleFavorite={handlers.onToggleFavorite ?? (() => {})}
         />
       </SelectionProvider>
     );
@@ -265,16 +267,33 @@ test("回收站位置的检查器以还原入口替代组织编辑", async () =>
   );
 });
 
-test("备注分区只读呈现并显式标注编辑尚未接入", async () => {
+test("备注分区提供自动保存编辑框并预填权威值", async () => {
   const harness = await setupInspector([makeAsset()]);
   await act(async () => harness.proxy(0).click());
 
   const note = harness.section("note");
-  expect(note.textContent).toContain("构图说明第一行");
-  expect(note.textContent).toContain("自动保存");
-  // 任务 9.4 前不提供任何编辑控件。
-  expect(note.querySelector("textarea")).toBeNull();
-  expect(note.querySelector("input")).toBeNull();
+  const textarea = note.querySelector<HTMLTextAreaElement>('textarea[aria-label="图片备注"]');
+  if (textarea === null) throw new Error("缺少备注编辑框");
+  expect(textarea.value).toBe("构图说明第一行\n第二行");
+  // 保存状态区存在（保存中/已保存/失败由 AssetNoteEditor 自身测试覆盖）。
+  expect(note.querySelector(".note-status")).not.toBeNull();
+});
+
+test("收藏快捷开关报告目标状态且初始与素材一致", async () => {
+  const toggles: Array<{ hash: string; favorite: boolean }> = [];
+  const asset = makeAsset({ favorite: false });
+  const harness = await setupInspector(
+    [asset],
+    { onToggleFavorite: (hash, favorite) => toggles.push({ hash, favorite }) },
+  );
+  await act(async () => harness.proxy(0).click());
+
+  const button = harness.root.querySelector<HTMLButtonElement>(".favorite-toggle");
+  if (button === null) throw new Error("缺少收藏开关");
+  expect(button.getAttribute("aria-pressed")).toBe("false");
+
+  await act(async () => button.click());
+  expect(toggles).toEqual([{ hash: asset.hash, favorite: true }]);
 });
 
 test("活动项下四个规格分区全部可定位", async () => {

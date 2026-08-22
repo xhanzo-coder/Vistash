@@ -133,6 +133,7 @@ beforeEach(() => {
       return { asset: {}, linked_prompts: [] };
     }
     if (command === "set_asset_tags" || command === "delete_asset") return undefined;
+    if (command === "set_asset_note" || command === "set_asset_favorite") return undefined;
     if (command === "restore_asset") return { missing_folders: ["已删除的文件夹"] };
     if (command === "purge_trash") {
       purgeCalls += 1;
@@ -221,6 +222,15 @@ test("工作区组合查询并在清空回收站前二次确认", async () => {
   await act(async () => tag.click());
   await flush();
   expect(queries.at(-1)?.tags).toEqual(["人物"]);
+
+  // 收藏筛选（任务 9.4）：开启后查询只取 favorite=true 的正常图片。
+  const favorite = container.querySelector<HTMLButtonElement>(".favorite-filter");
+  if (favorite === null) throw new Error("缺少收藏筛选按钮");
+  expect(favorite.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => favorite.click());
+  await flush();
+  expect(queries.at(-1)?.favorite).toBe(true);
+  expect(favorite.getAttribute("aria-pressed")).toBe("true");
 
   const trash = container.querySelector<HTMLButtonElement>('[aria-label="回收站"]');
   if (trash === null) throw new Error("缺少回收站入口");

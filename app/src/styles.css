@@ -941,6 +941,52 @@ button:disabled {
   list-style: none;
 }
 
+/* 备注编辑器与收藏快捷开关（任务 9.4）。 */
+.note-editor {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.note-editor textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.note-status {
+  margin: 0;
+  min-height: 1.2em;
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+}
+
+.inspector-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.inspector-heading-row h3 {
+  margin: 0;
+}
+
+.favorite-toggle,
+.favorite-filter {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--text-size-sm);
+}
+
+.favorite-toggle.is-on,
+.favorite-filter.is-on {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
 .asset-preview {
   min-width: 0;
   padding: var(--space-4);

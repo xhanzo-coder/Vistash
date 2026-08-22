@@ -4,6 +4,7 @@ import type { AssetRow } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useSelection } from "../workspace/selectionContext";
 import { ROLE_TEXT } from "./AssetPreview";
+import { AssetNoteEditor } from "./AssetNoteEditor";
 import { AssetPromptLinks } from "./AssetPromptLinks";
 
 type AssetInspectorProps = {
@@ -18,6 +19,8 @@ type AssetInspectorProps = {
   onSetTags: (hash: string, tags: string[]) => void;
   onDeleteAsset: (hash: string) => void;
   onRestoreAsset: (hash: string) => void;
+  /** 收藏快捷开关（任务 9.4）：只表示二值状态，不扩展为评级。 */
+  onToggleFavorite: (hash: string, favorite: boolean) => void;
 };
 
 /**
@@ -36,6 +39,7 @@ export function AssetInspector({
   onSetTags,
   onDeleteAsset,
   onRestoreAsset,
+  onToggleFavorite,
 }: AssetInspectorProps) {
   const { state } = useSelection();
   const [tagDraft, setTagDraft] = useState("");
@@ -74,7 +78,19 @@ export function AssetInspector({
         aria-labelledby="inspector-info-heading"
       >
         <p className="eyebrow">INFO</p>
-        <h3 id="inspector-info-heading">信息与色卡</h3>
+        <div className="inspector-heading-row">
+          <h3 id="inspector-info-heading">信息与色卡</h3>
+          {/* 二值收藏（规格：不扩展为星级/旗标/颜色评级）。 */}
+          <button
+            type="button"
+            className={`favorite-toggle${active.favorite ? " is-on" : ""}`}
+            aria-pressed={active.favorite}
+            disabled={mutating}
+            onClick={() => onToggleFavorite(active.hash, !active.favorite)}
+          >
+            {active.favorite ? "★ 已收藏" : "☆ 收藏"}
+          </button>
+        </div>
         <dl className="info-grid">
           <dt>文件名</dt>
           <dd>{active.original_filename}</dd>
@@ -208,7 +224,7 @@ export function AssetInspector({
         )}
       </section>
 
-      {/* 任务 9.4 将把这里的只读展示替换为自动保存状态机驱动的编辑框。 */}
+      {/* 任务 9.4：延迟/失焦/Ctrl+Enter 自动保存；失败时草稿留在编辑框。 */}
       <section
         className="inspector-section"
         data-inspector-section="note"
@@ -216,12 +232,7 @@ export function AssetInspector({
       >
         <p className="eyebrow">NOTE</p>
         <h3 id="inspector-note-heading">备注</h3>
-        {active.note.trim() === "" ? (
-          <p className="muted">未填写备注。</p>
-        ) : (
-          <p className="inspector-note-text">{active.note}</p>
-        )}
-        <p className="muted">备注编辑与自动保存将在保存状态机就绪后开放。</p>
+        <AssetNoteEditor key={active.hash} hash={active.hash} note={active.note} />
       </section>
 
       <section
