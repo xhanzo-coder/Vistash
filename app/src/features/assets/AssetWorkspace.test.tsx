@@ -517,3 +517,95 @@ test("中等窗口右检查器收起为抽屉并经边缘入口打开", async ()
 
   await act(async () => root.unmount());
 });
+
+test("Ctrl+F 聚焦本库文件名搜索框", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+
+  // 无条件时不渲染条件芯片；Ctrl+F 把焦点送进本库搜索框并全选既有内容。
+  expect(container.querySelector('[aria-label="已应用的搜索条件"]')).toBeNull();
+  const search = container.querySelector<HTMLInputElement>('[aria-label="按文件名搜索"]');
+  if (search === null) throw new Error("缺少文件名搜索框");
+  await act(async () => setInput(search, "人物"));
+  await act(async () => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }),
+    );
+  });
+  expect(document.activeElement).toBe(search);
+  expect(search.selectionStart).toBe(0);
+  expect(search.selectionEnd).toBe(search.value.length);
+
+  await act(async () => root.unmount());
+});
+
+test("全局定位：查询重置到回收站并选中目标素材，nonce 防重复消费", async () => {
+  const request = { section: "assets" as const, id: ASSET.hash, inTrash: true, nonce: 1 };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (locate: typeof request | null) => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} locate={locate} />);
+  };
+  await act(async () => {
+    render(request);
+  });
+  await flush();
+
+  // 回收站归属驱动位置切换，其余条件回到默认。
+  expect(queries.at(-1)?.location).toBe("trash");
+  expect(queries.at(-1)?.text).toBe("");
+  // 目标素材经统一选择模型进入检查器信息分区。
+  const info = container.querySelector<HTMLElement>('[data-inspector-section="info"]');
+  if (info === null) throw new Error("缺少检查器信息分区");
+  expect(info.textContent).toContain("人物参考.png");
+
+  const before = queries.length;
+  await act(async () => {
+    render({ ...request });
+  });
+  await flush();
+  expect(queries.length).toBe(before);
+
+  await act(async () => root.unmount());
+});
+
+test("已应用条件呈现为可移除芯片：移除文件夹保留其余条件", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+
+  const folder = container.querySelector<HTMLButtonElement>('[data-folder="参考"]');
+  if (folder === null) throw new Error("缺少参考文件夹");
+  await act(async () => folder.click());
+  await flush();
+  const favorite = container.querySelector<HTMLButtonElement>(".favorite-filter");
+  if (favorite === null) throw new Error("缺少收藏筛选按钮");
+  await act(async () => favorite.click());
+  await flush();
+
+  const chips = container.querySelector<HTMLElement>('[aria-label="已应用的搜索条件"]');
+  if (chips === null) throw new Error("缺少已应用条件区");
+  expect(chips.textContent).toContain("文件夹：参考");
+  expect(chips.textContent).toContain("只看收藏");
+
+  const removeFolder = chips.querySelector<HTMLButtonElement>('[aria-label="移除文件夹条件 参考"]');
+  if (removeFolder === null) throw new Error("缺少文件夹条件移除按钮");
+  await act(async () => removeFolder.click());
+  await flush();
+  await flush();
+  expect(queries.at(-1)?.folder).toEqual({ kind: "all" });
+  expect(queries.at(-1)?.favorite).toBe(true);
+  expect(container.querySelectorAll(".filter-chip").length).toBe(1);
+
+  await act(async () => root.unmount());
+});

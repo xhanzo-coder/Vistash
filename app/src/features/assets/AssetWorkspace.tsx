@@ -3,6 +3,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -30,9 +31,11 @@ import type {
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
+import { AppliedFilterChips, type AppliedFilterChip } from "../workspace/AppliedFilterChips";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
-import { SelectionProvider } from "../workspace/selectionContext";
+import { SelectionProvider, useSelection } from "../workspace/selectionContext";
+import type { GlobalLocateRequest } from "../workspace/GlobalSearch";
 import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
 import { AssetInspector } from "./AssetInspector";
 import { AssetPreview } from "./AssetPreview";
@@ -56,9 +59,12 @@ type ConfirmState = {
 export function AssetWorkspace({
   refreshVersion,
   libraryId,
+  locate = null,
 }: {
   refreshVersion: number;
   libraryId: string | null;
+  /** 全局搜索发来的定位请求（任务 11.1）；由 App 保证只发给本库。 */
+  locate?: (GlobalLocateRequest & { nonce: number }) | null;
 }) {
   const { layout, update } = useLibraryLayout(libraryId);
   const [text, setText] = useState("");
@@ -85,6 +91,11 @@ export function AssetWorkspace({
   // 信息列排序（任务 9.2）：瀑布流与详情列表共用同一顺序；不进布局偏好，
   // 设计定义的持久化形状只有视图/筛选/滚动。
   const [sort, setSort] = useState<AssetSort>({ ...DEFAULT_SORT });
+  // 全局搜索定位（任务 11.1）：请求先重置查询到能看见目标项的位置，再由
+  // SelectionProvider 内的桥组件触发选中。nonce 保证同一次请求只消费一次。
+  const [activation, setActivation] = useState<{ id: string; nonce: number } | null>(null);
+  const handledLocateNonce = useRef(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // 中等/窄窗口左栏收起为抽屉（任务 8.6）：宽屏原位展开，其余层级默认收起、
   // 经边缘入口打开。窄屏自动收起不写任何宽屏宽度偏好。
@@ -158,6 +169,84 @@ export function AssetWorkspace({
       cancelled = true;
     };
   }, [snapshotRequest]);
+
+  // 全局搜索定位（任务 11.1）：回收站归属驱动位置切换（global_search 跨两个
+  // 位置），其余条件全部回到默认，保证目标项一定出现在结果里。快照刷新是异步
+  // 的，选中先落进选择模型，条目到达后检查器随即显示它。
+  useEffect(() => {
+    if (locate === null) return;
+    if (handledLocateNonce.current === locate.nonce) return;
+    handledLocateNonce.current = locate.nonce;
+    setLocation(locate.inTrash ? "trash" : "active");
+    setFolder({ kind: "all" });
+    setSelectedTags([]);
+    setFavoriteOnly(false);
+    setText("");
+    setActivation({ id: locate.id, nonce: locate.nonce });
+  }, [locate]);
+
+  // Ctrl+F 聚焦本库搜索（规格）。监听挂在工作区内：同一时刻只挂载一个库，
+  // 快捷键天然只作用于当前库，不会泄漏进另一库。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // 已应用条件（任务 11.1）：每条都可单独移除，移除即回到该维度的默认查询。
+  const chips = useMemo<AppliedFilterChip[]>(() => {
+    const list: AppliedFilterChip[] = [];
+    if (text.trim() !== "") {
+      list.push({
+        key: "text",
+        label: `搜索：${text.trim()}`,
+        removeLabel: `移除搜索条件 ${text.trim()}`,
+        onRemove: () => setText(""),
+      });
+    }
+    for (const tag of selectedTags) {
+      list.push({
+        key: `tag:${tag}`,
+        label: `标签：${tag}`,
+        removeLabel: `移除标签条件 ${tag}`,
+        onRemove: () => setSelectedTags((current) => current.filter((item) => item !== tag)),
+      });
+    }
+    if (favoriteOnly) {
+      list.push({
+        key: "favorite",
+        label: "只看收藏",
+        removeLabel: "移除收藏条件",
+        onRemove: () => setFavoriteOnly(false),
+      });
+    }
+    if (folder.kind === "path") {
+      list.push({
+        key: "folder",
+        label: `文件夹：${folder.path}`,
+        removeLabel: `移除文件夹条件 ${folder.path}`,
+        onRemove: () => setFolder({ kind: "all" }),
+      });
+    }
+    if (location === "trash") {
+      list.push({
+        key: "location",
+        label: "位置：回收站",
+        removeLabel: "移除回收站位置条件",
+        onRemove: () => {
+          setLocation("active");
+          setFolder({ kind: "all" });
+        },
+      });
+    }
+    return list;
+  }, [text, selectedTags, favoriteOnly, folder, location]);
 
   // 聚焦原图的目标素材从当前查询解析；权威刷新把它移除后自动退回集合视图。
   const focusAsset =
@@ -379,6 +468,9 @@ export function AssetWorkspace({
         单击图片只更新检查器，瀑布流/详情列表不被详情页替换。
       */}
       <SelectionProvider ids={sortedAssets.map((asset) => asset.hash)}>
+      {/* 定位桥（任务 11.1）：点击入口在 Provider 内部，定位请求由外壳驱动，
+          这里用普通单击语义把目标项落进统一选择模型。 */}
+      <ExternalActivation request={activation} />
       <div className="catalog-main">
         {folderProgress !== null && (
           <p role="status" className="folder-progress">
@@ -433,6 +525,7 @@ export function AssetWorkspace({
           <label className="search-field">
             <span>文件名</span>
             <input
+              ref={searchInputRef}
               type="search"
               name="asset-search"
               autoComplete="off"
@@ -453,6 +546,9 @@ export function AssetWorkspace({
           </button>
           <span className="result-count">{snapshot?.assets.length ?? 0} 项</span>
         </header>
+
+        {/* 已应用条件的可移除呈现（任务 11.1）：无条件时不渲染任何东西。 */}
+        <AppliedFilterChips chips={chips} />
 
         {location === "active" && (snapshot?.tags.length ?? 0) > 0 && (
           <div className="tag-filter" aria-label="标签筛选">
@@ -613,6 +709,27 @@ function titleForFolder(folder: FolderFilter): string {
   if (folder.kind === "root") return "根文件夹";
   if (folder.kind === "path") return folder.path;
   return "全部素材";
+}
+
+/**
+ * 全局搜索定位的选中桥（任务 11.1）：点击入口只在 SelectionProvider 内部可得，
+ * 而定位请求由外壳状态驱动，这里以普通单击语义分派目标项。
+ *
+ * nonce 记账保证同一次请求只分派一次——分派会推进选择状态并换出新的
+ * onItemClick 引用，不记账的话 effect 会因依赖变化重跑而自我无限分派。
+ * 目标项尚未进入当前查询域（回收站快照还在刷新）时先等它到达再选中，
+ * 否则 selectOne 的域守卫会把这次分派静默丢弃。
+ */
+function ExternalActivation({ request }: { request: { id: string; nonce: number } | null }) {
+  const { state, onItemClick } = useSelection();
+  const firedNonce = useRef(-1);
+  useEffect(() => {
+    if (request === null || firedNonce.current === request.nonce) return;
+    if (!state.orderedIds.includes(request.id)) return;
+    firedNonce.current = request.nonce;
+    onItemClick(request.id, new MouseEvent("click"));
+  }, [request, state, onItemClick]);
+  return null;
 }
 
 function finalFolderSegment(path: string): string {

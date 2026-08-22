@@ -6,6 +6,7 @@ import { blockIfPromptDraftDirty } from "./features/prompts/draftGuard";
 import { promptDropClaimsLatestPoint } from "./features/prompts/promptDropZone";
 import { PromptWorkspace } from "./features/prompts/PromptWorkspace";
 import { LibraryPicker } from "./features/library/LibraryPicker";
+import { GlobalSearchPanel, type GlobalLocateRequest } from "./features/workspace/GlobalSearch";
 import {
   WorkspaceTopBar,
   type WorkspaceSection,
@@ -35,6 +36,9 @@ export function App() {
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [catalogVersion, setCatalogVersion] = useState(0);
   const importingRef = useRef(false);
+  // 全局搜索的定位请求（任务 11.1）：nonce 单调递增，同一目标重复进入也能再次生效。
+  const [locate, setLocate] = useState<(GlobalLocateRequest & { nonce: number }) | null>(null);
+  const locateNonce = useRef(0);
 
   useEffect(() => {
     const load = async () => {
@@ -131,13 +135,24 @@ export function App() {
     };
   }, []);
 
-  /** 一级入口切换：提示词侧有未保存草稿时先要三选一，不放行切换。 */
+  /** 一级入口切换：提示词侧有未保存草稿时先要三选一，不放行切换。返回是否已切换。 */
   const handleSectionChange = useCallback(
     (next: WorkspaceSection) => {
-      if (next !== section && blockIfPromptDraftDirty()) return;
+      if (next !== section && blockIfPromptDraftDirty()) return false;
       setSection(next);
+      return true;
     },
     [section],
+  );
+
+  /** 全局搜索结果的定位（任务 11.1）：切到目标库并把查询重置到能看见该项的位置。 */
+  const handleGlobalLocate = useCallback(
+    (request: GlobalLocateRequest) => {
+      if (!handleSectionChange(request.section)) return;
+      locateNonce.current += 1;
+      setLocate({ ...request, nonce: locateNonce.current });
+    },
+    [handleSectionChange],
   );
 
   if (statusError !== null) {
@@ -186,6 +201,7 @@ export function App() {
         section={section}
         onSectionChange={handleSectionChange}
         libraryPath={status.path}
+        actions={<GlobalSearchPanel onLocate={handleGlobalLocate} />}
       />
 
       {importing && (
@@ -209,9 +225,17 @@ export function App() {
             图片侧共享同一 catalogVersion——任一侧的结构性变更都推进它，两个工作区
             各自按需刷新自己的快照。
           */
-          <PromptWorkspace refreshVersion={catalogVersion} libraryId={status.library_id} />
+          <PromptWorkspace
+            refreshVersion={catalogVersion}
+            libraryId={status.library_id}
+            locate={locate?.section === "prompts" ? locate : null}
+          />
         ) : (
-          <AssetWorkspace refreshVersion={catalogVersion} libraryId={status.library_id} />
+          <AssetWorkspace
+            refreshVersion={catalogVersion}
+            libraryId={status.library_id}
+            locate={locate?.section === "assets" ? locate : null}
+          />
         )}
       </main>
     </div>

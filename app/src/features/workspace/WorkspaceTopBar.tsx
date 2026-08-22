@@ -14,6 +14,8 @@ type Props = {
   onSectionChange: (next: WorkspaceSection) => void;
   /** 当前库根路径；始终完整呈现（截断交给 CSS），供使用者确认操作对象。 */
   libraryPath: string;
+  /** 顶栏动作区：全局搜索面板等跨库工具插在导航与库路径之间。 */
+  actions?: React.ReactNode;
 };
 
 const SECTIONS: Array<{ id: WorkspaceSection; label: string }> = [
@@ -21,7 +23,7 @@ const SECTIONS: Array<{ id: WorkspaceSection; label: string }> = [
   { id: "prompts", label: "提示词库" },
 ];
 
-export function WorkspaceTopBar({ section, onSectionChange, libraryPath }: Props) {
+export function WorkspaceTopBar({ section, onSectionChange, libraryPath, actions }: Props) {
   return (
     <header className="topbar">
       <h1 className="topbar-brand">Vistash</h1>
@@ -37,6 +39,7 @@ export function WorkspaceTopBar({ section, onSectionChange, libraryPath }: Props
           </button>
         ))}
       </nav>
+      {actions}
       <p className="topbar-library" title={libraryPath}>
         当前库：{libraryPath}
       </p>

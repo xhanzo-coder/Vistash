@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
+import type { GlobalLocateRequest } from "../workspace/GlobalSearch";
 import type { PromptQuery, PromptRow, PromptSnapshot } from "../../shared/types";
 import { PromptWorkspace } from "./PromptWorkspace";
 
@@ -225,19 +226,29 @@ function isPromptQuery(value: unknown): value is PromptQuery {
   );
 }
 
-async function setupWorkspace(): Promise<{
+async function setupWorkspace(
+  locate: (GlobalLocateRequest & { nonce: number }) | null = null,
+): Promise<{
   container: HTMLElement;
+  rerender: (next: (GlobalLocateRequest & { nonce: number }) | null) => Promise<void>;
   unmount: () => Promise<void>;
 }> {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  const render = (next: (GlobalLocateRequest & { nonce: number }) | null) => {
+    root.render(<PromptWorkspace refreshVersion={0} libraryId={null} locate={next} />);
+  };
   await act(async () => {
-    root.render(<PromptWorkspace refreshVersion={0} libraryId={null} />);
+    render(locate);
   });
   await flush();
   return {
     container,
+    rerender: (next) =>
+      act(async () => {
+        render(next);
+      }),
     unmount: () =>
       act(async () => {
         root.unmount();
@@ -563,3 +574,83 @@ function buttonWithTextExists(scope: ParentNode, text: string): boolean {
     (candidate) => candidate.textContent?.trim() === text,
   );
 }
+
+test("Ctrl+F 聚焦本库搜索框且无条件时不渲染条件芯片", async () => {
+  const harness = await setupWorkspace();
+  expect(harness.container.querySelector('[aria-label="已应用的搜索条件"]')).toBeNull();
+
+  const search = harness.container.querySelector<HTMLInputElement>(
+    '[aria-label="按标题或正文搜索"]',
+  );
+  if (search === null) throw new Error("缺少提示词搜索框");
+  await act(async () => setInput(search, "人像"));
+  await act(async () => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }),
+    );
+  });
+  expect(document.activeElement).toBe(search);
+  expect(search.selectionStart).toBe(0);
+  expect(search.selectionEnd).toBe(search.value.length);
+
+  await harness.unmount();
+});
+
+test("全局定位：查询重置到回收站并选中目标提示词，同一次请求不重复消费", async () => {
+  trashPrompts = [makePrompt(4)];
+  const request: GlobalLocateRequest & { nonce: number } = {
+    section: "prompts",
+    id: "prompt-4",
+    inTrash: true,
+    nonce: 1,
+  };
+  const harness = await setupWorkspace(request);
+  await flush();
+
+  // 定位把位置切到回收站、其余条件回到默认（global_search 跨两个位置）。
+  expect(queries.at(-1)?.location).toBe("trash");
+  expect(queries.at(-1)?.text).toBe("");
+  // 目标项经统一选择模型进入检查器。
+  const info = harness.container.querySelector<HTMLElement>('[data-inspector-section="info"]');
+  if (info === null) throw new Error("缺少检查器信息分区");
+  expect(info.querySelector("h3")?.textContent).toContain("显式标题 4");
+
+  const before = queries.length;
+  await harness.rerender({ ...request });
+  await flush();
+  // nonce 未变：同一请求不再触发新的消费与快照请求。
+  expect(queries.length).toBe(before);
+
+  await harness.unmount();
+});
+
+test("已应用条件呈现为可移除芯片：移除搜索保留其余条件", async () => {
+  const harness = await setupWorkspace();
+
+  const search = harness.container.querySelector<HTMLInputElement>(
+    '[aria-label="按标题或正文搜索"]',
+  );
+  if (search === null) throw new Error("缺少提示词搜索框");
+  await act(async () => setInput(search, "人像"));
+  await flush();
+  const favorite = harness.container.querySelector<HTMLButtonElement>(".favorite-filter");
+  if (favorite === null) throw new Error("缺少收藏筛选按钮");
+  await act(async () => favorite.click());
+  await flush();
+
+  const chips = harness.container.querySelector<HTMLElement>('[aria-label="已应用的搜索条件"]');
+  if (chips === null) throw new Error("缺少已应用条件区");
+  expect(chips.textContent).toContain("搜索：人像");
+  expect(chips.textContent).toContain("只看收藏");
+
+  const removeSearch = chips.querySelector<HTMLButtonElement>('[aria-label="移除搜索条件 人像"]');
+  if (removeSearch === null) throw new Error("缺少搜索条件移除按钮");
+  await act(async () => removeSearch.click());
+  await flush();
+  await flush();
+  expect(queries.at(-1)?.text).toBe("");
+  expect(queries.at(-1)?.favorite).toBe(true);
+  expect(harness.container.querySelectorAll(".filter-chip").length).toBe(1);
+
+  await harness.unmount();
+});

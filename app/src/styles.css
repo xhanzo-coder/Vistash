@@ -249,6 +249,88 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* 顶栏全局搜索（任务 11.1）：输入嵌在暗色顶栏里，结果面板是浮出的亮色卡片；
+   分组标题带数量，行可进入对应素材库。面板锚定输入框，不把顶栏撑高。 */
+.global-search {
+  position: relative;
+}
+
+.global-search input {
+  width: 15rem;
+  padding: 0.42rem var(--space-3);
+  color: var(--text-primary);
+  background: var(--surface-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.global-search input::placeholder {
+  color: var(--text-secondary);
+}
+
+.global-search-panel {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  inset-inline-end: 0;
+  z-index: var(--z-drawer);
+  display: grid;
+  gap: var(--space-3);
+  width: min(26rem, 80vw);
+  max-height: min(60vh, 30rem);
+  padding: var(--space-4);
+  overflow-y: auto;
+  color: var(--text-primary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-panel);
+}
+
+.search-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 0.35rem;
+  color: var(--text-secondary);
+  font-size: var(--text-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.search-group ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-group li button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  color: var(--text-primary);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.search-group li button:hover {
+  background: var(--surface-raised);
+  border-color: var(--border-subtle);
+}
+
+.search-group li button span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app-main {
   flex: 1;
   display: flex;
@@ -477,6 +559,41 @@ button:disabled {
   color: inherit;
   font-family: var(--font-mono);
   font-size: var(--text-size-xs);
+}
+
+/* 已应用搜索条件（任务 11.1）：每条是一枚可单独移除的芯片，把当前查询
+   呈现为显式状态；无条件时组件不渲染，这里只负责外观。 */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-block: var(--space-3) 0;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.3rem 0.28rem 0.62rem;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-size-sm);
+}
+
+.filter-chip button {
+  display: grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  color: var(--text-danger);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-size-md);
+  line-height: 1;
 }
 
 .trash-toolbar {
