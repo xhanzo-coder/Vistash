@@ -413,7 +413,8 @@
 
 ## 11. 搜索、可访问性、性能与收尾
 
-- [ ] 11.1 实现 `Ctrl+K` 全局搜索面板、图片/提示词分组计数、类型定位与 `Ctrl+F` 分库搜索/可移除条件
+- [x] 11.1 实现 `Ctrl+K` 全局搜索面板、图片/提示词分组计数、类型定位与 `Ctrl+F` 分库搜索/可移除条件
+  - 2026-08-22 落地：新建 `workspace/GlobalSearch.tsx` 挂在顶栏新开的 actions 插槽——`Ctrl+K` 聚焦并全选输入框，查询经 useDeferredValue 进 global_search；结果按 图片素材/提示词 两组呈现、组标题带各自数量（规格：绝不合并为无类型瀑布流），回收站条目带"已删除"徽章；点击结果上报 `GlobalLocateRequest{section,id,inTrash}` 并收起面板。定位链路：App 持 nonce 单调递增的 locate 状态，handleGlobalLocate 先过未保存草稿拦截（handleSectionChange 改为返回布尔）再发请求；工作区消费时把位置切到 inTrash 对应区、文件夹/标签/收藏/文本全部回默认（global_search 跨两个位置，整体重置保证目标一定出现在结果里）。选中经 SelectionProvider 内的 ExternalActivation 桥以普通单击语义分派，踩掉两个坑：selectOne 分派推进选择状态后 context 换出新的 onItemClick 引用，桥 effect 依赖它重跑会自我无限分派（vitest worker 曾被推到 4GB 内存），用 nonce 记账保证同一次请求只分派一次；目标项尚未进入当前查询域（回收站快照仍在刷新）时 selectOne 的域守卫会把分派静默丢弃，桥改为等待 state.orderedIds 包含目标后再分派。`Ctrl+F` 监听挂在各工作区内——同一时刻只挂载一个库，快捷键天然只作用于当前库不泄漏。新建 `AppliedFilterChips`：搜索/标签×N/只看收藏/文件夹/回收站位置每条一枚可移除芯片，移除即回到该维度默认查询，无条件时不渲染。测试新增 9 项：分组计数与已删除标记、定位上报载荷、错误码原样呈现、清空查询清结果、Ctrl+K/Ctrl+F 聚焦全选、定位重置+检查器命中+nonce 防重复消费、芯片移除保留其余条件。四道门禁通过（前端 lint/typecheck/190 测试全绿、Rust 283 测试零失败、clippy -D warnings 干净）。
 - [ ] 11.2 在公开 Workspace/Inspector seam 建立组件测试，覆盖双库布局恢复、四视图、单/多选、批量操作、草稿、关联、搜索、两类回收站与错误码
 - [ ] 11.3 完成 ARIA grid/listbox 键盘模式、roving focus、方向键/Home/End、焦点圈、对话框焦点陷阱/Esc/触发器归还与高对比/缩放验收
 - [ ] 11.4 记录 10,000 图片瀑布流、10,000 图片列表、10,000 长提示词卡片/列表的 DOM 峰值、首屏、快速滚动、内存与视图切换 release 基线
