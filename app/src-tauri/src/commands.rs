@@ -770,6 +770,49 @@ pub async fn prompt_snapshot(
 }
 
 #[tauri::command]
+pub async fn create_prompt_folder(
+    parent: Option<String>,
+    name: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let parent = parent.as_deref().map(FolderPath::parse).transpose()?;
+    let name = FolderName::parse(&name)?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .create_prompt_folder(parent.as_ref(), &name)?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn rename_prompt_folder(
+    path: String,
+    new_name: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let path = FolderPath::parse(&path)?;
+    let new_name = FolderName::parse(&new_name)?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .rename_prompt_folder(&path, &new_name)?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_prompt_folder(
+    path: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let path = FolderPath::parse(&path)?;
+    with_catalog(state, move |catalog| catalog.delete_prompt_folder(&path)).await
+}
+
+#[tauri::command]
 pub async fn set_prompt_note(
     id: String,
     note: String,

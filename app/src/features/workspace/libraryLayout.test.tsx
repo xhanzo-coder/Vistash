@@ -6,7 +6,12 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-import { DEFAULT_LAYOUT, normalizeLayout, useLibraryLayout } from "./libraryLayout";
+import {
+  DEFAULT_LIBRARY_LAYOUT,
+  DEFAULT_LAYOUT,
+  normalizeLayout,
+  useLibraryLayout,
+} from "./libraryLayout";
 
 const LIBRARY_A = "018f3c9e-6c00-7000-8000-00000000000a";
 const LIBRARY_B = "018f3c9e-6c00-7000-8000-00000000000b";
@@ -26,6 +31,14 @@ afterEach(() => {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 /**
@@ -59,8 +72,8 @@ function setupHook() {
   const root = createRoot(container);
   // 渲染期不写外部变量：hook 值在 effect 里记录，act 之后必然已完成。
   const latest: { hook?: LayoutHook } = {};
-  function Probe({ id }: { id: string | null }) {
-    const value = useLibraryLayout(id);
+  function Probe({ id, section }: { id: string | null; section: "assets" | "prompts" }) {
+    const value = useLibraryLayout(id, section);
     useEffect(() => {
       latest.hook = value;
     });
@@ -71,9 +84,9 @@ function setupHook() {
       if (latest.hook === undefined) throw new Error("探针尚未完成首次渲染");
       return latest.hook;
     },
-    render: (id: string | null) =>
+    render: (id: string | null, section: "assets" | "prompts" = "assets") =>
       act(async () => {
-        root.render(<Probe id={id} />);
+        root.render(<Probe id={id} section={section} />);
       }),
     unmount: () =>
       act(() => {
@@ -111,10 +124,7 @@ test("normalizeLayout 把任意保存值安全合并到默认值上", () => {
       scrollOffsets: { a: "高", b: -1, c: Number.POSITIVE_INFINITY, d: 8 },
     }),
   ).toEqual({
-    view: "waterfall",
-    folder: { kind: "all" },
-    tags: [],
-    favorite: null,
+    ...DEFAULT_LAYOUT,
     scrollOffsets: { d: 8 },
   });
 
@@ -126,6 +136,93 @@ test("normalizeLayout 把任意保存值安全合并到默认值上", () => {
     folder: { kind: "root" },
     favorite: true,
   });
+});
+
+test("持久化布局为图片与提示词保存彼此独立的完整状态", () => {
+  expect(DEFAULT_LIBRARY_LAYOUT).toEqual({
+    assets: DEFAULT_LAYOUT,
+    prompts: DEFAULT_LAYOUT,
+  });
+});
+
+test("每个工作台 section 保存查询、栏宽与折叠状态", () => {
+  expect(DEFAULT_LAYOUT).toMatchObject({
+    text: "",
+    location: "active",
+    railWidth: 240,
+    inspectorWidth: 300,
+    railCollapsed: false,
+    inspectorCollapsed: false,
+  });
+});
+
+test("同一库按素材 section 读取各自的视图与筛选", async () => {
+  const store = fakeStore();
+  store.saved.set(LIBRARY_A, {
+    assets: { ...DEFAULT_LAYOUT, view: "list", tags: ["图片"] },
+    prompts: { ...DEFAULT_LAYOUT, folder: { kind: "path", path: "人像" }, tags: ["提示词"] },
+  });
+  const hook = setupHook();
+  await hook.render(LIBRARY_A, "prompts");
+
+  expect(hook.current().layout).toEqual({
+    ...DEFAULT_LAYOUT,
+    folder: { kind: "path", path: "人像" },
+    tags: ["提示词"],
+  });
+  hook.unmount();
+});
+
+test("快速切换 section 会等待前一份整表写入并保留两侧最新状态", async () => {
+  vi.useFakeTimers();
+  let stored: unknown = {
+    assets: DEFAULT_LAYOUT,
+    prompts: DEFAULT_LAYOUT,
+  };
+  const firstWrite = deferred<void>();
+  const writes: unknown[] = [];
+  let writeCount = 0;
+  mockIPC((command, args) => {
+    if (!isRecord(args)) throw new TypeError(`${command} 的参数不是对象`);
+    if (command === "read_layout") return stored;
+    if (command === "write_layout") {
+      writeCount += 1;
+      const value = args.layout;
+      writes.push(value);
+      if (writeCount === 1) {
+        return firstWrite.promise.then(() => {
+          stored = value;
+          return undefined;
+        });
+      }
+      stored = value;
+      return undefined;
+    }
+    throw new Error(`意外命令 ${command}`);
+  });
+
+  const assets = setupHook();
+  await assets.render(LIBRARY_A, "assets");
+  act(() => assets.current().update({ view: "list" }));
+  assets.unmount();
+
+  const prompts = setupHook();
+  await prompts.render(LIBRARY_A, "prompts");
+  expect(prompts.current().ready).toBe(false);
+  act(() => prompts.current().update({ tags: ["提示词"] }));
+  await act(async () => vi.advanceTimersByTime(300));
+
+  firstWrite.resolve();
+  await act(async () => Promise.resolve());
+  expect(prompts.current().ready).toBe(true);
+
+  const latest = writes.at(-1);
+  if (!isRecord(latest) || !isRecord(latest.assets) || !isRecord(latest.prompts)) {
+    throw new TypeError("布局写入缺少双 section");
+  }
+  expect(latest.assets.view).toBe("list");
+  expect(latest.prompts.tags).toEqual(["提示词"]);
+  prompts.unmount();
 });
 
 test("从未保存过的库读取后得到默认布局", async () => {
@@ -157,7 +254,10 @@ test("update 防抖合并：连续多次调整只写最后一次的完整 JSON",
   expect(store.writes).toEqual([
     {
       libraryId: LIBRARY_A,
-      layout: { ...DEFAULT_LAYOUT, view: "list", tags: ["夜景"] },
+      layout: {
+        assets: { ...DEFAULT_LAYOUT, view: "list", tags: ["夜景"] },
+        prompts: DEFAULT_LAYOUT,
+      },
     },
   ]);
   hook.unmount();
@@ -178,7 +278,8 @@ test("切换库时旧库的待写先落盘，新库读到自己的偏好", async
       (write) =>
         write.libraryId === LIBRARY_A &&
         isRecord(write.layout) &&
-        write.layout.favorite === true,
+        isRecord(write.layout.assets) &&
+        write.layout.assets.favorite === true,
     ),
   ).toBe(true);
   // B 是另一个库：读不到 A 的收藏偏好，也不该把 A 的值写进 B。

@@ -23,7 +23,7 @@ export function PromptCoverImage({ coverHash }: { coverHash: string }) {
       {error !== null ? (
         <ErrorLine error={error} />
       ) : url !== null ? (
-        <img src={url} alt="" loading="lazy" />
+        <img src={url} alt="" width={3} height={2} loading="lazy" />
       ) : started ? (
         <p>正在载入封面…</p>
       ) : (

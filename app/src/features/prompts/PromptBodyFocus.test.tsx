@@ -24,6 +24,7 @@ function makePrompt(overrides: Partial<PromptRow> = {}): PromptRow {
     tags: [],
     linked_image_hashes: [],
     cover_image_hash: null,
+    resolved_cover_hash: null,
     created_at: "2026-08-20T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
     deleted_at: null,
@@ -323,16 +324,56 @@ function pressTab(shift: boolean): void {
 test("全局脏探针：干净放行、脏时请求解决并要求拦截", async () => {
   const harness = await setupFocus(makePrompt(), {}, true);
 
-  expect(blockIfPromptDraftDirty()).toBe(false);
+  expect(blockIfPromptDraftDirty(() => undefined)).toBe(false);
   await act(async () => setInputValue(harness.bodyArea(), "探针看到的草稿"));
   // requestResolve 在探针调用里拉起对话框：状态更新需在 act 内冲刷。
   await act(async () => {
-    expect(blockIfPromptDraftDirty()).toBe(true);
+    expect(blockIfPromptDraftDirty(() => undefined)).toBe(true);
   });
   // App 层据此不放行一级入口切换/窗口关闭。
   expect(harness.root.querySelector('[role="dialog"]')).not.toBeNull();
 
   // 卸载后探针注销，恢复放行。
   await harness.unmount();
-  expect(blockIfPromptDraftDirty()).toBe(false);
+  expect(blockIfPromptDraftDirty(() => undefined)).toBe(false);
+});
+
+test("全局草稿守卫在放弃修改后继续最初被拦截的动作", async () => {
+  const continued: string[] = [];
+  const closed: string[] = [];
+  const harness = await setupFocus(
+    makePrompt(),
+    { onClose: () => closed.push("local-close") },
+    true,
+  );
+  await act(async () => setInputValue(harness.bodyArea(), "切换库前的草稿"));
+  await act(async () => {
+    expect(blockIfPromptDraftDirty(() => continued.push("switch-library"))).toBe(true);
+  });
+
+  await act(async () => harness.buttonByText("放弃修改").click());
+
+  expect(continued).toEqual(["switch-library"]);
+  expect(closed).toEqual([]);
+  await harness.unmount();
+});
+
+test("全局草稿守卫在保存成功后继续最初被拦截的动作", async () => {
+  const continued: string[] = [];
+  const closed: string[] = [];
+  const harness = await setupFocus(
+    makePrompt(),
+    { onClose: () => closed.push("local-close") },
+    true,
+  );
+  await act(async () => setInputValue(harness.bodyArea(), "保存后切换库"));
+  await act(async () => {
+    expect(blockIfPromptDraftDirty(() => continued.push("switch-library"))).toBe(true);
+  });
+
+  await act(async () => harness.buttonByText("保存并离开").click());
+
+  expect(continued).toEqual(["switch-library"]);
+  expect(closed).toEqual([]);
+  await harness.unmount();
 });

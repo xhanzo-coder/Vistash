@@ -34,12 +34,9 @@ type PromptCardWaterfallProps = {
   targetTileWidth?: number;
 };
 
-/** 显式封面；缺省时回落到第一张关联图（后端约定），仍取不到才退化为纯文本卡片。 */
+/** 后端已经排除回收站图片并解析出唯一有效封面；界面层不重复推导删除状态。 */
 function coverHashOf(prompt: PromptRow): string | null {
-  if (prompt.cover_image_hash !== null && prompt.linked_image_hashes.includes(prompt.cover_image_hash)) {
-    return prompt.cover_image_hash;
-  }
-  return prompt.linked_image_hashes[0] ?? null;
+  return prompt.resolved_cover_hash;
 }
 
 /**

@@ -71,7 +71,6 @@ export function PromptInspector({
 }: PromptInspectorProps) {
   const { state } = useSelection();
   const [tagDraft, setTagDraft] = useState("");
-  const [folderDraft, setFolderDraft] = useState("");
 
   // 多选优先于单件分区（任务 11.2）：共同/混合摘要 + 批量组织动作。
   // 回收站位置不提供批量组织——那里的语义是还原，逐项操作见单选检查器。
@@ -150,15 +149,6 @@ export function PromptInspector({
       </div>
     );
   }
-
-  // 用 const 箭头函数而不是提升的函数声明：active 的非空收窄只对声明点之后的
-  // 闭包生效，函数声明会被视为可能在前置检查之前调用。
-  const submitNewFolder = () => {
-    const path = folderDraft.trim();
-    if (path === "" || active.folders.includes(path)) return;
-    onSetFolders(active.id, [...active.folders, path]);
-    setFolderDraft("");
-  };
 
   return (
     <>
@@ -266,26 +256,6 @@ export function PromptInspector({
                   </label>
                 ))
               )}
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  submitNewFolder();
-                }}
-              >
-                <label htmlFor="new-prompt-folder">新建文件夹路径</label>
-                <div className="compact-form">
-                  <input
-                    id="new-prompt-folder"
-                    name="new-prompt-folder"
-                    autoComplete="off"
-                    placeholder="如 人像/室内"
-                    value={folderDraft}
-                    onChange={(event) => setFolderDraft(event.target.value)}
-                    required
-                  />
-                  <button type="submit" disabled={mutating}>添加</button>
-                </div>
-              </form>
             </fieldset>
             <div className="tag-editor">
               <h4>共享标签</h4>

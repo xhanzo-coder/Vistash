@@ -62,6 +62,7 @@ function makePrompt(overrides: Partial<PromptRow> = {}): PromptRow {
     tags: [],
     linked_image_hashes: [],
     cover_image_hash: null,
+    resolved_cover_hash: null,
     created_at: "2026-08-20T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
     deleted_at: null,
@@ -239,7 +240,7 @@ test("信息分区呈现元数据、完整当前正文与聚焦阅读入口", as
   expect(focusRequest).toBe("prompt-0");
 });
 
-test("组织分区的文件夹勾选与新建路径表单触发归属回调", async () => {
+test("组织分区只从已存在的提示词文件夹中变更归属", async () => {
   const calls: Array<{ kind: string; folders?: string[] }> = [];
   const harness = await setupInspector([makePrompt()], {
     onSetFolders: (_id, folders) => calls.push({ kind: "folders", folders }),
@@ -254,17 +255,8 @@ test("组织分区的文件夹勾选与新建路径表单触发归属回调", as
   await act(async () => checkbox.click());
   expect(calls.at(-1)).toEqual({ kind: "folders", folders: ["人像/室内"] });
 
-  // 新路径表单提交后并入归属数组（后端按需建立路径）。
-  const newPathInput = harness.root.querySelector<HTMLInputElement>("#new-prompt-folder");
-  if (newPathInput === null) throw new Error("缺少新路径输入框");
-  const form = newPathInput.closest("form");
-  if (form === null) throw new Error("缺少新路径表单");
-  await act(async () => {
-    setInput(newPathInput, "抽象/光影");
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  });
-  // 新路径并入既有归属（上一步勾选的人像/室内仍在）。
-  expect(calls.at(-1)).toEqual({ kind: "folders", folders: ["人像/室内", "抽象/光影"] });
+  // 文件夹生命周期属于左分类栏；检查器不能把任意字符串冒充已存在路径。
+  expect(harness.root.querySelector("#new-prompt-folder")).toBeNull();
 
   // 回路刷新后既有路径呈勾选态，可再次取消。
   const checked = harness.section("organization").querySelector<HTMLInputElement>(
@@ -272,7 +264,7 @@ test("组织分区的文件夹勾选与新建路径表单触发归属回调", as
   );
   if (checked === null) throw new Error("勾选回路未生效");
   await act(async () => checked.click());
-  expect(calls.at(-1)).toEqual({ kind: "folders", folders: ["抽象/光影"] });
+  expect(calls.at(-1)).toEqual({ kind: "folders", folders: [] });
 });
 
 test("标签的添加与移除经共享标签回调", async () => {

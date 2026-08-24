@@ -1,6 +1,4 @@
 import {
-  useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -29,24 +27,29 @@ import {
 import { asAppError } from "../../shared/errors";
 import type {
   AppError,
-  AssetQuery,
   AssetRow,
   BatchProgress,
   BatchReport,
-  CatalogSnapshot,
   FolderFilter,
   FolderMutationProgress,
   PurgeReport,
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
-import { AppliedFilterChips, type AppliedFilterChip } from "../workspace/AppliedFilterChips";
+import { AppliedFilterChips } from "../workspace/AppliedFilterChips";
 import { BatchToolbar } from "../workspace/batchToolbar";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
-import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
+import {
+  useWorkspaceQueryController,
+  useWorkspaceSnapshot,
+} from "../workspace/useWorkspaceCollection";
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
 import type { GlobalLocateRequest } from "../workspace/GlobalSearch";
-import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
+import {
+  WorkspacePaneExpandButtons,
+  WorkspacePaneFrame,
+  workspacePanePresentation,
+} from "../workspace/workspacePaneLayout";
 import { AssetInspector } from "./AssetInspector";
 import { AssetPreview } from "./AssetPreview";
 import { AssetWaterfall } from "./AssetWaterfall";
@@ -70,28 +73,40 @@ export function AssetWorkspace({
   refreshVersion,
   libraryId,
   locate = null,
+  onLocateHandled,
 }: {
   refreshVersion: number;
   libraryId: string | null;
   /** 全局搜索发来的定位请求（任务 11.1）；由 App 保证只发给本库。 */
   locate?: (GlobalLocateRequest & { nonce: number }) | null;
+  onLocateHandled?: (nonce: number) => void;
 }) {
-  const { layout, update } = useLibraryLayout(libraryId);
-  const [text, setText] = useState("");
-  const deferredText = useDeferredValue(text);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [folder, setFolder] = useState<FolderFilter>({ kind: "all" });
-  // 收藏筛选（任务 9.4）：null=不限，true=只看收藏；规格里收藏是二值状态。
-  const [favoriteOnly, setFavoriteOnly] = useState(false);
-  const [location, setLocation] = useState<"active" | "trash">("active");
-  const [snapshot, setSnapshot] = useState<CatalogSnapshot | null>(null);
+  const {
+    layout,
+    ready,
+    update,
+    text,
+    setText,
+    selectedTags,
+    setSelectedTags,
+    folder,
+    setFolder,
+    favoriteOnly,
+    setFavoriteOnly,
+    location,
+    setLocation,
+    view,
+    setView,
+    query,
+    activation,
+    searchInputRef,
+    chips,
+  } = useWorkspaceQueryController(libraryId, "assets", locate);
   // 聚焦原图模式（任务 9.3）：只由双击或 Enter 显式进入；单击仅更新右检查器。
   const [focusedHash, setFocusedHash] = useState<string | null>(null);
   // 右检查器抽屉（中等/窄窗口）的开关；宽屏原位展开时忽略。
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [error, setError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<AppError | null>(null);
-  const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [purgeReport, setPurgeReport] = useState<PurgeReport | null>(null);
@@ -104,11 +119,6 @@ export function AssetWorkspace({
   // 信息列排序（任务 9.2）：瀑布流与详情列表共用同一顺序；不进布局偏好，
   // 设计定义的持久化形状只有视图/筛选/滚动。
   const [sort, setSort] = useState<AssetSort>({ ...DEFAULT_SORT });
-  // 全局搜索定位（任务 11.1）：请求先重置查询到能看见目标项的位置，再由
-  // SelectionProvider 内的桥组件触发选中。nonce 保证同一次请求只消费一次。
-  const [activation, setActivation] = useState<{ id: string; nonce: number } | null>(null);
-  const handledLocateNonce = useRef(-1);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // 中等/窄窗口左栏收起为抽屉（任务 8.6）：宽屏原位展开，其余层级默认收起、
   // 经边缘入口打开。窄屏自动收起不写任何宽屏宽度偏好。
@@ -116,19 +126,10 @@ export function AssetWorkspace({
   const drawerMode = tier === "wide" ? "inline" : "drawer";
   const [railOpen, setRailOpen] = useState(false);
 
-  const query = useMemo<AssetQuery>(
-    () => ({
-      text: deferredText,
-      tags: selectedTags,
-      folder,
-      favorite: favoriteOnly ? true : null,
-      location,
-    }),
-    [deferredText, favoriteOnly, folder, location, selectedTags],
-  );
-  const snapshotRequest = useMemo(
-    () => ({ query, refreshVersion }),
-    [query, refreshVersion],
+  const { snapshot, loading, error, setError, refresh } = useWorkspaceSnapshot(
+    query,
+    refreshVersion,
+    catalogSnapshot,
   );
 
   // 两种视图共用同一顺序（规格：切换视图不清空查询、排序、选择与活动项）。
@@ -145,121 +146,6 @@ export function AssetWorkspace({
     );
   }
 
-  function switchView(view: WorkspaceView) {
-    if (view !== layout.view) update({ view });
-  }
-
-  const refresh = useCallback(async () => {
-    try {
-      const next = await catalogSnapshot(query);
-      setSnapshot(next);
-      setError(null);
-    } catch (raw) {
-      setError(asAppError(raw));
-    } finally {
-      setLoading(false);
-    }
-  }, [query]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadSnapshot() {
-      try {
-        const next = await catalogSnapshot(snapshotRequest.query);
-        if (cancelled) return;
-        setSnapshot(next);
-        setError(null);
-      } catch (raw) {
-        if (!cancelled) setError(asAppError(raw));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    void loadSnapshot();
-    return () => {
-      cancelled = true;
-    };
-  }, [snapshotRequest]);
-
-  // 全局搜索定位（任务 11.1）：回收站归属驱动位置切换（global_search 跨两个
-  // 位置），其余条件全部回到默认，保证目标项一定出现在结果里。快照刷新是异步
-  // 的，选中先落进选择模型，条目到达后检查器随即显示它。
-  useEffect(() => {
-    if (locate === null) return;
-    if (handledLocateNonce.current === locate.nonce) return;
-    handledLocateNonce.current = locate.nonce;
-    setLocation(locate.inTrash ? "trash" : "active");
-    setFolder({ kind: "all" });
-    setSelectedTags([]);
-    setFavoriteOnly(false);
-    setText("");
-    setActivation({ id: locate.id, nonce: locate.nonce });
-  }, [locate]);
-
-  // Ctrl+F 聚焦本库搜索（规格）。监听挂在工作区内：同一时刻只挂载一个库，
-  // 快捷键天然只作用于当前库，不会泄漏进另一库。
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // 已应用条件（任务 11.1）：每条都可单独移除，移除即回到该维度的默认查询。
-  const chips = useMemo<AppliedFilterChip[]>(() => {
-    const list: AppliedFilterChip[] = [];
-    if (text.trim() !== "") {
-      list.push({
-        key: "text",
-        label: `搜索：${text.trim()}`,
-        removeLabel: `移除搜索条件 ${text.trim()}`,
-        onRemove: () => setText(""),
-      });
-    }
-    for (const tag of selectedTags) {
-      list.push({
-        key: `tag:${tag}`,
-        label: `标签：${tag}`,
-        removeLabel: `移除标签条件 ${tag}`,
-        onRemove: () => setSelectedTags((current) => current.filter((item) => item !== tag)),
-      });
-    }
-    if (favoriteOnly) {
-      list.push({
-        key: "favorite",
-        label: "只看收藏",
-        removeLabel: "移除收藏条件",
-        onRemove: () => setFavoriteOnly(false),
-      });
-    }
-    if (folder.kind === "path") {
-      list.push({
-        key: "folder",
-        label: `文件夹：${folder.path}`,
-        removeLabel: `移除文件夹条件 ${folder.path}`,
-        onRemove: () => setFolder({ kind: "all" }),
-      });
-    }
-    if (location === "trash") {
-      list.push({
-        key: "location",
-        label: "位置：回收站",
-        removeLabel: "移除回收站位置条件",
-        onRemove: () => {
-          setLocation("active");
-          setFolder({ kind: "all" });
-        },
-      });
-    }
-    return list;
-  }, [text, selectedTags, favoriteOnly, folder, location]);
 
   // 聚焦原图的目标素材从当前查询解析；权威刷新把它移除后自动退回集合视图。
   const focusAsset =
@@ -394,22 +280,39 @@ export function AssetWorkspace({
     await runMutation(operation, refreshCurrentQuery);
   }
 
+  if (libraryId !== null && !ready) {
+    return (
+      <section className="workspace-layout-loading" aria-label="素材工作区">
+        <p role="status">正在恢复工作台布局…</p>
+      </section>
+    );
+  }
+
+  const panePresentation = workspacePanePresentation("asset-workspace", drawerMode, layout);
+
   return (
     <section
-      className={`asset-workspace${drawerMode === "drawer" ? " rail-drawer" : ""}${
-        drawerMode === "inline" ? " with-inspector" : ""
-      }`}
+      className={panePresentation.className}
+      style={panePresentation.style}
       aria-label="素材工作区"
     >
-      <WorkspaceDrawer
+      <WorkspacePaneFrame
         mode={drawerMode}
         side="start"
         label="素材分类"
         open={railOpen}
         onClose={() => setRailOpen(false)}
         panelId="catalog-rail-panel"
+        asideClassName="catalog-rail"
+        collapsed={layout.railCollapsed}
+        width={layout.railWidth}
+        minWidth={180}
+        maxWidth={420}
+        resizeLabel="调整图片分类栏宽度"
+        collapseLabel="折叠分类栏"
+        onCollapse={() => update({ railCollapsed: true })}
+        onResize={(railWidth) => update({ railWidth })}
       >
-        <aside className="catalog-rail">
           <div className="rail-heading">
             <p className="eyebrow">CATALOG</p>
             <h2>素材档案</h2>
@@ -501,8 +404,7 @@ export function AssetWorkspace({
               )}
             </div>
           )}
-        </aside>
-      </WorkspaceDrawer>
+      </WorkspacePaneFrame>
 
       {/*
         统一选择模型（任务 9.3）：Provider 上移到中央区与右检查器之外，
@@ -511,7 +413,7 @@ export function AssetWorkspace({
       <SelectionProvider ids={sortedAssets.map((asset) => asset.hash)}>
       {/* 定位桥（任务 11.1）：点击入口在 Provider 内部，定位请求由外壳驱动，
           这里用普通单击语义把目标项落进统一选择模型。 */}
-      <ExternalActivation request={activation} />
+      <ExternalActivation request={activation} onHandled={onLocateHandled} />
       <div className="catalog-main">
         {folderProgress !== null && (
           <p role="status" className="folder-progress">
@@ -547,18 +449,24 @@ export function AssetWorkspace({
               检查器
             </button>
           )}
+          <WorkspacePaneExpandButtons
+            mode={drawerMode}
+            layout={layout}
+            onExpandRail={() => update({ railCollapsed: false })}
+            onExpandInspector={() => update({ inspectorCollapsed: false })}
+          />
           <div className="view-switch" role="group" aria-label="集合视图">
             <button
               type="button"
-              aria-pressed={layout.view === "waterfall"}
-              onClick={() => switchView("waterfall")}
+              aria-pressed={view === "waterfall"}
+              onClick={() => setView("waterfall")}
             >
               瀑布流
             </button>
             <button
               type="button"
-              aria-pressed={layout.view === "list"}
-              onClick={() => switchView("list")}
+              aria-pressed={view === "list"}
+              onClick={() => setView("list")}
             >
               详情列表
             </button>
@@ -679,7 +587,7 @@ export function AssetWorkspace({
               <h3>这里还没有匹配的素材</h3>
               <p>调整查询条件，或把图片文件与文件夹拖进窗口导入。</p>
             </div>
-          ) : layout.view === "list" ? (
+          ) : view === "list" ? (
             <AssetDetailList
               /* 集合视图按库重挂载（任务 11.2）：换库即全新 DOM，滚动恢复等该库
                  自己的读取返回后进行，上一库的滚动位置不会残留。 */
@@ -717,15 +625,23 @@ export function AssetWorkspace({
         <BatchBar total={sortedAssets.length} />
       </div>
 
-      <WorkspaceDrawer
+      <WorkspacePaneFrame
         mode={drawerMode}
         side="end"
         label="图片检查器"
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         panelId="asset-inspector-panel"
+        asideClassName="inspector-rail"
+        collapsed={layout.inspectorCollapsed}
+        width={layout.inspectorWidth}
+        minWidth={240}
+        maxWidth={560}
+        resizeLabel="调整图片检查器宽度"
+        collapseLabel="折叠检查器"
+        onCollapse={() => update({ inspectorCollapsed: true })}
+        onResize={(inspectorWidth) => update({ inspectorWidth })}
       >
-        <aside className="inspector-rail" aria-label="图片检查器">
           <AssetInspector
             assets={sortedAssets}
             folders={snapshot?.folders ?? []}
@@ -781,8 +697,7 @@ export function AssetWorkspace({
             }
             onBatchDelete={requestBatchDelete}
           />
-        </aside>
-      </WorkspaceDrawer>
+      </WorkspacePaneFrame>
       </SelectionProvider>
 
       {confirm !== null && (
@@ -814,7 +729,13 @@ function titleForFolder(folder: FolderFilter): string {
  * 目标项尚未进入当前查询域（回收站快照还在刷新）时先等它到达再选中，
  * 否则 selectOne 的域守卫会把这次分派静默丢弃。
  */
-function ExternalActivation({ request }: { request: { id: string; nonce: number } | null }) {
+function ExternalActivation({
+  request,
+  onHandled,
+}: {
+  request: { id: string; nonce: number } | null;
+  onHandled: ((nonce: number) => void) | undefined;
+}) {
   const { state, onItemClick } = useSelection();
   const firedNonce = useRef(-1);
   useEffect(() => {
@@ -822,7 +743,8 @@ function ExternalActivation({ request }: { request: { id: string; nonce: number 
     if (!state.orderedIds.includes(request.id)) return;
     firedNonce.current = request.nonce;
     onItemClick(request.id, new MouseEvent("click"));
-  }, [request, state, onItemClick]);
+    onHandled?.(request.nonce);
+  }, [request, state, onHandled, onItemClick]);
   return null;
 }
 

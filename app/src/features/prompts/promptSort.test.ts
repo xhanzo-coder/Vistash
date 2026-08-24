@@ -16,6 +16,7 @@ function makePrompt(id: string, overrides: Partial<PromptRow> = {}): PromptRow {
     tags: [],
     linked_image_hashes: [],
     cover_image_hash: null,
+    resolved_cover_hash: null,
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
     deleted_at: null,

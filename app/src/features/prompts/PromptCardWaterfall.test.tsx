@@ -10,12 +10,14 @@ import { SelectionProvider, useSelection } from "../workspace/selectionContext";
 import type { PromptRow } from "../../shared/types";
 import { PromptCardWaterfall } from "./PromptCardWaterfall";
 
+let thumbnailCalls: string[];
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
     configurable: true,
     value: true,
   });
-  const thumbnailCalls: string[] = [];
+  thumbnailCalls = [];
   mockIPC((command, payload) => {
     if (command === "asset_thumbnail") {
       if (typeof payload !== "object" || payload === null || !("hash" in payload)) {
@@ -54,6 +56,7 @@ function makePrompt(index: number): PromptRow {
     tags: [],
     linked_image_hashes: linked,
     cover_image_hash: linked.length > 0 ? linked[2] ?? null : null,
+    resolved_cover_hash: linked.length > 0 ? linked[2] ?? null : null,
     created_at: "2026-08-20T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
     deleted_at: null,
@@ -207,6 +210,53 @@ test("五张关联图与显式封面只展示该封面与 +4 计数", async () =
   expect(covers).toHaveLength(1);
   expect(card.querySelector(".prompt-card-count")?.textContent).toBe("+4");
 
+  await harness.unmount();
+});
+
+test("卡片只加载后端解析出的第一张正常关联图片", async () => {
+  stubGeometry();
+  stubScrollTop();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "";
+      readonly scrollMargin = "";
+      readonly thresholds = [0];
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element): void {
+        queueMicrotask(() => {
+          const bounds = target.getBoundingClientRect();
+          const entry: IntersectionObserverEntry = {
+            boundingClientRect: bounds,
+            intersectionRatio: 1,
+            intersectionRect: bounds,
+            isIntersecting: true,
+            rootBounds: null,
+            target,
+            time: performance.now(),
+          };
+          this.callback([entry], this);
+        });
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+    },
+  );
+  const prompt = {
+    ...makePrompt(1),
+    cover_image_hash: null,
+    resolved_cover_hash: "b".repeat(64),
+  };
+  const harness = await setupWaterfall([prompt]);
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+
+  expect(thumbnailCalls).toEqual(["b".repeat(64)]);
   await harness.unmount();
 });
 

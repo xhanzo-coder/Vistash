@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import type { AssetQuery, AssetRow, BatchReport, CatalogSnapshot } from "../../shared/types";
+import { DEFAULT_LAYOUT } from "../workspace/libraryLayout";
 import { AssetWorkspace } from "./AssetWorkspace";
 
 const ASSET: AssetRow = {
@@ -58,6 +59,9 @@ let ipcCalls: Array<{ command: string; payload: unknown }>;
 let activeSnapshotOverride: CatalogSnapshot | null;
 /** 全部 batch_* 命令的统一应答；测试按需改写以驱动报告呈现。 */
 let batchReply: BatchReport;
+let savedLayout: unknown;
+let delayedActiveSnapshot: Promise<CatalogSnapshot> | null;
+let delayedLayoutRead: Promise<unknown> | null;
 
 class DormantIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -116,6 +120,9 @@ beforeEach(() => {
   ipcCalls = [];
   activeSnapshotOverride = null;
   batchReply = { succeeded: 0, failures: [] };
+  savedLayout = null;
+  delayedActiveSnapshot = null;
+  delayedLayoutRead = null;
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:vistash-test"),
@@ -135,8 +142,13 @@ beforeEach(() => {
       if (query.location === "active" && activeSnapshotOverride !== null) {
         return activeSnapshotOverride;
       }
+      if (query.location === "active" && delayedActiveSnapshot !== null) {
+        return delayedActiveSnapshot;
+      }
       return query.location === "trash" ? TRASH_SNAPSHOT : SNAPSHOT;
     }
+    if (command === "read_layout") return delayedLayoutRead ?? savedLayout;
+    if (command === "write_layout") return undefined;
     // 多选分区的批量关联选择器自取提示词候选：工作区测试不关心候选明细。
     if (command === "prompt_snapshot") {
       return { prompts: [], folders: [], tags: [], trash_count: 0 };
@@ -179,6 +191,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearMocks();
+  vi.useRealTimers();
   Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -190,6 +203,14 @@ async function flush(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
 }
 
 function setInput(input: HTMLInputElement, value: string): void {
@@ -766,5 +787,136 @@ test("批量移入回收站经二次确认，报告逐项呈现失败与稳定�
     status.querySelector('[data-error-code="library.asset_metadata_write_failed"]'),
   ).not.toBeNull();
 
+  await act(async () => root.unmount());
+});
+
+test("宽屏图片工作台恢复自身栏位折叠状态并允许分别展开", async () => {
+  savedLayout = {
+    assets: {
+      ...DEFAULT_LAYOUT,
+      railCollapsed: true,
+      inspectorCollapsed: true,
+    },
+    prompts: DEFAULT_LAYOUT,
+  };
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <AssetWorkspace
+        refreshVersion={0}
+        libraryId="018f3c9e-6c00-7000-8000-00000000000e"
+      />,
+    );
+  });
+  await flush();
+
+  expect(container.querySelector(".catalog-rail")).toBeNull();
+  expect(container.querySelector(".inspector-rail")).toBeNull();
+  await act(async () => buttonWithText(container, "展开分类栏").click());
+  await act(async () => buttonWithText(container, "展开检查器").click());
+  expect(container.querySelector(".catalog-rail")).not.toBeNull();
+  expect(container.querySelector(".inspector-rail")).not.toBeNull();
+  await act(async () => root.unmount());
+});
+
+test("冷启动布局读取完成前阻止工作台交互", async () => {
+  savedLayout = {
+    assets: { ...DEFAULT_LAYOUT, view: "list" },
+    prompts: { ...DEFAULT_LAYOUT, tags: ["提示词偏好"] },
+  };
+  const delayed = deferred<unknown>();
+  delayedLayoutRead = delayed.promise;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <AssetWorkspace
+        refreshVersion={0}
+        libraryId="018f3c9e-6c00-7000-8000-00000000000f"
+      />,
+    );
+  });
+
+  expect(container.textContent).toContain("正在恢复工作台布局…");
+  expect(container.querySelector('[aria-label="集合视图"]')).toBeNull();
+
+  await act(async () => delayed.resolve(savedLayout));
+  await flush();
+  expect(buttonWithText(container, "详情列表").getAttribute("aria-pressed")).toBe("true");
+  await act(async () => root.unmount());
+});
+
+test("冷启动布局读取期间延迟全局定位且消费后确认 nonce", async () => {
+  vi.useFakeTimers();
+  savedLayout = {
+    assets: { ...DEFAULT_LAYOUT, view: "list", tags: ["图片偏好"] },
+    prompts: { ...DEFAULT_LAYOUT, tags: ["提示词偏好"] },
+  };
+  const delayed = deferred<unknown>();
+  delayedLayoutRead = delayed.promise;
+  const handled: number[] = [];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <AssetWorkspace
+        refreshVersion={0}
+        libraryId="018f3c9e-6c00-7000-8000-000000000010"
+        locate={{ section: "assets", id: ASSET.hash, inTrash: true, nonce: 7 }}
+        onLocateHandled={(nonce) => handled.push(nonce)}
+      />,
+    );
+  });
+  await act(async () => vi.advanceTimersByTime(300));
+  expect(ipcCalls.some((call) => call.command === "write_layout")).toBe(false);
+  expect(handled).toEqual([]);
+
+  await act(async () => {
+    delayed.resolve(savedLayout);
+    await Promise.resolve();
+  });
+  expect(handled).toEqual([7]);
+  await act(async () => root.unmount());
+});
+
+test("迟到的正常库刷新不得覆盖已经切换到的回收站快照", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(<AssetWorkspace refreshVersion={0} libraryId={null} />);
+  });
+  await flush();
+
+  const delayed = deferred<CatalogSnapshot>();
+  delayedActiveSnapshot = delayed.promise;
+
+  const card = container.querySelector<HTMLButtonElement>("[data-waterfall-item]");
+  if (card === null) throw new Error("缺少正常库素材卡片");
+  await act(async () => card.click());
+  await act(async () => buttonWithText(container, "移入回收站").click());
+  const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少删除确认对话框");
+  await act(async () => buttonWithText(dialog, "移入回收站").click());
+
+  const trash = container.querySelector<HTMLButtonElement>('button[aria-label="回收站"]');
+  if (trash === null) throw new Error("缺少回收站入口");
+  await act(async () => trash.click());
+  await flush();
+  expect(container.querySelector(".result-count")?.textContent).toBe("1 项");
+
+  const staleActive: CatalogSnapshot = {
+    ...SNAPSHOT,
+    assets: [ASSET, { ...ASSET, hash: "b".repeat(64), original_filename: "迟到.png" }],
+  };
+  await act(async () => delayed.resolve(staleActive));
+  await flush();
+
+  expect(container.querySelector(".query-bar h2")?.textContent).toBe("回收站");
+  expect(container.querySelector(".result-count")?.textContent).toBe("1 项");
   await act(async () => root.unmount());
 });

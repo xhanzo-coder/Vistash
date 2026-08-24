@@ -1,6 +1,4 @@
 import {
-  useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -15,10 +13,13 @@ import {
   batchRemovePromptFolder,
   batchRemovePromptTag,
   batchSetPromptFavorite,
+  createPromptFolder,
   deletePrompt,
+  deletePromptFolder,
   linkImages,
   promptSnapshot,
   purgePromptTrash,
+  renamePromptFolder,
   restorePrompt,
   setPromptFavorite,
   setPromptFolders,
@@ -30,19 +31,24 @@ import type {
   BatchReport,
   FolderFilter,
   PromptPurgeReport,
-  PromptQuery,
   PromptRow,
-  PromptSnapshot,
 } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
 import { useWindowTier } from "../workspace/breakpoints";
 import { BatchToolbar } from "../workspace/batchToolbar";
-import { AppliedFilterChips, type AppliedFilterChip } from "../workspace/AppliedFilterChips";
+import { AppliedFilterChips } from "../workspace/AppliedFilterChips";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
-import { useLibraryLayout, type WorkspaceView } from "../workspace/libraryLayout";
+import {
+  useWorkspaceQueryController,
+  useWorkspaceSnapshot,
+} from "../workspace/useWorkspaceCollection";
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
 import type { GlobalLocateRequest } from "../workspace/GlobalSearch";
-import { WorkspaceDrawer } from "../workspace/workspaceDrawer";
+import {
+  WorkspacePaneExpandButtons,
+  WorkspacePaneFrame,
+  workspacePanePresentation,
+} from "../workspace/workspacePaneLayout";
 import { PromptBodyFocus } from "./PromptBodyFocus";
 import { promptDisplayTitle } from "./promptDisplay";
 import { PromptCardWaterfall } from "./PromptCardWaterfall";
@@ -69,37 +75,50 @@ type ConfirmRequest = {
  * 与图片侧 AssetWorkspace 同构：左分类、中央集合、右检查器三栏；查询状态、
  * 快照刷新与变更协调都在这里，中央视图与检查器只是呈现端。
  *
- * 布局偏好只消费滚动偏移（"prompts-waterfall"/"prompts-list" 键），视图、筛选
- * 与排序用组件内状态：useLibraryLayout 的顶层 view/folder/tags/favorite 字段
- * 归图片侧所有，提示词侧写它们会互相覆盖；滚动键由消费方命名，天然隔离。
+ * 布局偏好按 `prompts` section 独立保存视图、查询、栏位与滚动偏移，图片侧消费
+ * 同一库记录中的 `assets` section；两者不会因一级入口切换而覆盖彼此。
  */
 export function PromptWorkspace({
   refreshVersion,
   libraryId,
   locate = null,
+  onLocateHandled,
 }: {
   refreshVersion: number;
   libraryId: string | null;
   /** 全局搜索发来的定位请求（任务 11.1）；由 App 保证只发给本库。 */
   locate?: (GlobalLocateRequest & { nonce: number }) | null;
+  onLocateHandled?: (nonce: number) => void;
 }) {
-  const { layout, update } = useLibraryLayout(libraryId);
-  const [text, setText] = useState("");
-  const deferredText = useDeferredValue(text);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [folder, setFolder] = useState<FolderFilter>({ kind: "all" });
-  // 收藏筛选：null=不限，true=只看收藏；规格里收藏是二值状态。
-  const [favoriteOnly, setFavoriteOnly] = useState(false);
-  const [location, setLocation] = useState<"active" | "trash">("active");
-  const [snapshot, setSnapshot] = useState<PromptSnapshot | null>(null);
+  const {
+    layout,
+    ready,
+    update,
+    text,
+    setText,
+    selectedTags,
+    setSelectedTags,
+    folder,
+    setFolder,
+    favoriteOnly,
+    setFavoriteOnly,
+    location,
+    setLocation,
+    view,
+    setView,
+    query,
+    activation,
+    searchInputRef,
+    chips,
+  } = useWorkspaceQueryController(libraryId, "prompts", locate);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [renameValue, setRenameValue] = useState("");
   // 聚焦阅读：只由检查器的显式按钮进入；单击仅更新右检查器。
   // bodyFocusEdit 区分"聚焦阅读"与"编辑主字段"两种进入方式（任务 10.4）。
   const [bodyFocusId, setBodyFocusId] = useState<string | null>(null);
   const [bodyFocusEdit, setBodyFocusEdit] = useState(false);
   // 右检查器抽屉（中等/窄窗口）的开关；宽屏原位展开时忽略。
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [error, setError] = useState<AppError | null>(null);
-  const [loading, setLoading] = useState(true);
   const [mutating, setMutating] = useState(false);
   // 回收站（任务 10.6）：还原缺失文件夹的非阻断警告、清空回收站二次确认与逐项结果。
   const [notice, setNotice] = useState<AppError | null>(null);
@@ -108,33 +127,18 @@ export function PromptWorkspace({
   // 批量操作（任务 11.2）：进度按项转交呈现，报告按项列出失败（设计第六条）。
   const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
-  // 视图与排序不进布局偏好（见组件头注释）；两视图共用同一顺序。
-  const [view, setView] = useState<WorkspaceView>("waterfall");
+  // 两视图共用同一顺序；view 由提示词自己的持久化 section 提供。
   const [sort, setSort] = useState<PromptSort>({ ...DEFAULT_PROMPT_SORT });
-  // 全局搜索定位（任务 11.1）：请求先重置查询到能看见目标项的位置，再由
-  // SelectionProvider 内的桥组件触发选中。nonce 保证同一次请求只消费一次。
-  const [activation, setActivation] = useState<{ id: string; nonce: number } | null>(null);
-  const handledLocateNonce = useRef(-1);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // 中等/窄窗口左栏收起为抽屉：宽屏原位展开，其余层级默认收起、经边缘入口打开。
   const tier = useWindowTier();
   const drawerMode = tier === "wide" ? "inline" : "drawer";
   const [railOpen, setRailOpen] = useState(false);
 
-  const query = useMemo<PromptQuery>(
-    () => ({
-      text: deferredText,
-      tags: selectedTags,
-      folder,
-      favorite: favoriteOnly ? true : null,
-      location,
-    }),
-    [deferredText, favoriteOnly, folder, location, selectedTags],
-  );
-  const snapshotRequest = useMemo(
-    () => ({ query, refreshVersion }),
-    [query, refreshVersion],
+  const { snapshot, loading, error, setError, refresh } = useWorkspaceSnapshot(
+    query,
+    refreshVersion,
+    promptSnapshot,
   );
 
   // 两种视图共用同一顺序（规格：切换视图不清空查询、排序、选择与活动项）。
@@ -151,117 +155,6 @@ export function PromptWorkspace({
     );
   }
 
-  const refresh = useCallback(async () => {
-    try {
-      const next = await promptSnapshot(query);
-      setSnapshot(next);
-      setError(null);
-    } catch (raw) {
-      setError(asAppError(raw));
-    } finally {
-      setLoading(false);
-    }
-  }, [query]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadSnapshot() {
-      try {
-        const next = await promptSnapshot(snapshotRequest.query);
-        if (cancelled) return;
-        setSnapshot(next);
-        setError(null);
-      } catch (raw) {
-        if (!cancelled) setError(asAppError(raw));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    void loadSnapshot();
-    return () => {
-      cancelled = true;
-    };
-  }, [snapshotRequest]);
-
-  // 全局搜索定位（任务 11.1）：回收站归属驱动位置切换（global_search 跨两个
-  // 位置），其余条件全部回到默认，保证目标项一定出现在结果里。快照刷新是异步
-  // 的，选中先落进选择模型，条目到达后检查器随即显示它。
-  useEffect(() => {
-    if (locate === null) return;
-    if (handledLocateNonce.current === locate.nonce) return;
-    handledLocateNonce.current = locate.nonce;
-    setLocation(locate.inTrash ? "trash" : "active");
-    setFolder({ kind: "all" });
-    setSelectedTags([]);
-    setFavoriteOnly(false);
-    setText("");
-    setActivation({ id: locate.id, nonce: locate.nonce });
-  }, [locate]);
-
-  // Ctrl+F 聚焦本库搜索（规格）。监听挂在工作区内：同一时刻只挂载一个库，
-  // 快捷键天然只作用于当前库，不会泄漏进另一库。
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // 已应用条件（任务 11.1）：每条都可单独移除，移除即回到该维度的默认查询。
-  const chips = useMemo<AppliedFilterChip[]>(() => {
-    const list: AppliedFilterChip[] = [];
-    if (text.trim() !== "") {
-      list.push({
-        key: "text",
-        label: `搜索：${text.trim()}`,
-        removeLabel: `移除搜索条件 ${text.trim()}`,
-        onRemove: () => setText(""),
-      });
-    }
-    for (const tag of selectedTags) {
-      list.push({
-        key: `tag:${tag}`,
-        label: `标签：${tag}`,
-        removeLabel: `移除标签条件 ${tag}`,
-        onRemove: () => setSelectedTags((current) => current.filter((item) => item !== tag)),
-      });
-    }
-    if (favoriteOnly) {
-      list.push({
-        key: "favorite",
-        label: "只看收藏",
-        removeLabel: "移除收藏条件",
-        onRemove: () => setFavoriteOnly(false),
-      });
-    }
-    if (folder.kind === "path") {
-      list.push({
-        key: "folder",
-        label: `文件夹：${folder.path}`,
-        removeLabel: `移除文件夹条件 ${folder.path}`,
-        onRemove: () => setFolder({ kind: "all" }),
-      });
-    }
-    if (location === "trash") {
-      list.push({
-        key: "location",
-        label: "位置：回收站",
-        removeLabel: "移除回收站位置条件",
-        onRemove: () => {
-          setLocation("active");
-          setFolder({ kind: "all" });
-        },
-      });
-    }
-    return list;
-  }, [text, selectedTags, favoriteOnly, folder, location]);
 
   // 聚焦阅读的目标从当前查询解析；权威刷新把它移除后自动退回集合视图。
   const bodyFocus =
@@ -395,6 +288,42 @@ export function PromptWorkspace({
   function selectFolder(next: FolderFilter) {
     setLocation("active");
     setFolder(next);
+    setRenameValue(next.kind === "path" ? next.path.split("/").at(-1) ?? "" : "");
+  }
+
+  async function submitFolder(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const parent = folder.kind === "path" ? folder.path : null;
+    const name = newFolderName;
+    await runMutation(async () => {
+      const created = await createPromptFolder(parent, name);
+      setNewFolderName("");
+      selectFolder({ kind: "path", path: created });
+    }, true);
+  }
+
+  function requestFolderRename() {
+    if (folder.kind !== "path") return;
+    const path = folder.path;
+    const name = renameValue;
+    void runMutation(async () => {
+      const renamed = await renamePromptFolder(path, name);
+      selectFolder({ kind: "path", path: renamed });
+    }, true);
+  }
+
+  function requestFolderDelete() {
+    if (folder.kind !== "path") return;
+    const path = folder.path;
+    setConfirm({
+      title: "删除提示词文件夹？",
+      body: `“${path}”及其子文件夹会被删除，但提示词素材不会删除；没有其他归属的提示词将回到根文件夹。`,
+      confirmLabel: "删除文件夹",
+      onConfirm: async () => {
+        await deletePromptFolder(path);
+        selectFolder({ kind: "all" });
+      },
+    });
   }
 
   function toggleTag(tag: string) {
@@ -403,22 +332,39 @@ export function PromptWorkspace({
     );
   }
 
+  if (libraryId !== null && !ready) {
+    return (
+      <section className="workspace-layout-loading" aria-label="提示词工作区">
+        <p role="status">正在恢复工作台布局…</p>
+      </section>
+    );
+  }
+
+  const panePresentation = workspacePanePresentation("prompt-workspace", drawerMode, layout);
+
   return (
     <section
-      className={`prompt-workspace${drawerMode === "drawer" ? " rail-drawer" : ""}${
-        drawerMode === "inline" ? " with-inspector" : ""
-      }`}
+      className={panePresentation.className}
+      style={panePresentation.style}
       aria-label="提示词工作区"
     >
-      <WorkspaceDrawer
+      <WorkspacePaneFrame
         mode={drawerMode}
         side="start"
         label="提示词分类"
         open={railOpen}
         onClose={() => setRailOpen(false)}
         panelId="prompt-rail-panel"
+        asideClassName="catalog-rail"
+        collapsed={layout.railCollapsed}
+        width={layout.railWidth}
+        minWidth={180}
+        maxWidth={420}
+        resizeLabel="调整提示词分类栏宽度"
+        collapseLabel="折叠分类栏"
+        onCollapse={() => update({ railCollapsed: true })}
+        onResize={(railWidth) => update({ railWidth })}
       >
-        <aside className="catalog-rail">
           <div className="rail-heading">
             <p className="eyebrow">PROMPTS</p>
             <h2>提示词档案</h2>
@@ -473,14 +419,59 @@ export function PromptWorkspace({
               <span>{snapshot?.trash_count ?? 0}</span>
             </button>
           </nav>
-        </aside>
-      </WorkspaceDrawer>
+
+          {location === "active" && (
+            <div className="folder-actions">
+              <form onSubmit={(event) => void submitFolder(event)}>
+                <label htmlFor="new-prompt-folder">
+                  {folder.kind === "path" ? "新建提示词子文件夹" : "新建提示词文件夹"}
+                </label>
+                <div className="compact-form">
+                  <input
+                    id="new-prompt-folder"
+                    name="new-prompt-folder"
+                    autoComplete="off"
+                    value={newFolderName}
+                    onChange={(event) => setNewFolderName(event.target.value)}
+                    required
+                  />
+                  <button type="submit" disabled={mutating}>新增</button>
+                </div>
+              </form>
+              {folder.kind === "path" && (
+                <div className="folder-edit">
+                  <label htmlFor="rename-prompt-folder">重命名当前提示词文件夹</label>
+                  <input
+                    id="rename-prompt-folder"
+                    name="rename-prompt-folder"
+                    autoComplete="off"
+                    value={renameValue}
+                    onChange={(event) => setRenameValue(event.target.value)}
+                  />
+                  <div className="button-row">
+                    <button type="button" onClick={requestFolderRename} disabled={mutating}>
+                      保存名称
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-ghost"
+                      onClick={requestFolderDelete}
+                      disabled={mutating}
+                    >
+                      删除文件夹
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+      </WorkspacePaneFrame>
 
       {/* 统一选择模型：Provider 上移到中央区与右检查器之外，视图等价切换共享选择。 */}
       <SelectionProvider ids={sortedPrompts.map((prompt) => prompt.id)}>
       {/* 定位桥（任务 11.1）：点击入口在 Provider 内部，定位请求由外壳驱动，
           这里用普通单击语义把目标项落进统一选择模型。 */}
-      <ExternalActivation request={activation} />
+      <ExternalActivation request={activation} onHandled={onLocateHandled} />
       <div className="catalog-main">
         <header className="query-bar">
           <div>
@@ -517,6 +508,12 @@ export function PromptWorkspace({
               检查器
             </button>
           )}
+          <WorkspacePaneExpandButtons
+            mode={drawerMode}
+            layout={layout}
+            onExpandRail={() => update({ railCollapsed: false })}
+            onExpandInspector={() => update({ inspectorCollapsed: false })}
+          />
           <div className="view-switch" role="group" aria-label="集合视图">
             <button
               type="button"
@@ -693,15 +690,23 @@ export function PromptWorkspace({
         <BatchBar total={sortedPrompts.length} />
       </div>
 
-      <WorkspaceDrawer
+      <WorkspacePaneFrame
         mode={drawerMode}
         side="end"
         label="提示词检查器"
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         panelId="prompt-inspector-panel"
+        asideClassName="inspector-rail"
+        collapsed={layout.inspectorCollapsed}
+        width={layout.inspectorWidth}
+        minWidth={240}
+        maxWidth={560}
+        resizeLabel="调整提示词检查器宽度"
+        collapseLabel="折叠检查器"
+        onCollapse={() => update({ inspectorCollapsed: true })}
+        onResize={(inspectorWidth) => update({ inspectorWidth })}
       >
-        <aside className="inspector-rail" aria-label="提示词检查器">
           {/* 关联变更的忙碌与错误已由分区自管：这里只负责权威刷新。 */}
           <PromptInspector
             prompts={sortedPrompts}
@@ -755,8 +760,7 @@ export function PromptWorkspace({
             onBatchLinkImages={(hash, ids) => batchLinkImagesTo(hash, ids)}
             onBatchDelete={(ids) => requestBatchDelete(ids)}
           />
-        </aside>
-      </WorkspaceDrawer>
+      </WorkspacePaneFrame>
       </SelectionProvider>
 
       {confirm !== null && (
@@ -782,7 +786,13 @@ export function PromptWorkspace({
  * 目标项尚未进入当前查询域（回收站快照还在刷新）时先等它到达再选中，
  * 否则 selectOne 的域守卫会把这次分派静默丢弃。
  */
-function ExternalActivation({ request }: { request: { id: string; nonce: number } | null }) {
+function ExternalActivation({
+  request,
+  onHandled,
+}: {
+  request: { id: string; nonce: number } | null;
+  onHandled: ((nonce: number) => void) | undefined;
+}) {
   const { state, onItemClick } = useSelection();
   const firedNonce = useRef(-1);
   useEffect(() => {
@@ -790,7 +800,8 @@ function ExternalActivation({ request }: { request: { id: string; nonce: number 
     if (!state.orderedIds.includes(request.id)) return;
     firedNonce.current = request.nonce;
     onItemClick(request.id, new MouseEvent("click"));
-  }, [request, state, onItemClick]);
+    onHandled?.(request.nonce);
+  }, [request, state, onHandled, onItemClick]);
   return null;
 }
 

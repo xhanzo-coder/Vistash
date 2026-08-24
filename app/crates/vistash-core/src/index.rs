@@ -208,19 +208,18 @@ pub struct PromptRow {
     /// 因此顺序属于查询语义而不是展示细节。
     pub linked_image_hashes: Vec<String>,
     pub cover_image_hash: Option<String>,
+    /// 由派生索引解析出的有效封面：显式正常封面优先，否则取第一张正常关联图。
+    pub resolved_cover_hash: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub deleted_at: Option<String>,
 }
 
 impl PromptRow {
-    /// 卡片封面的单一权威解析：显式封面优先，缺省取第一张关联图片；
-    /// 无关联时为纯文本卡片。规则只写这一处——瀑布流、详情列表与检查器
-    /// 都从这里取，不复制任何图片字节（只携带哈希引用）。
+    /// 卡片封面的单一权威解析。删除状态只存在派生索引，因此调用方直接消费
+    /// 查询阶段解析出的正常图片哈希，不在界面层重新猜测。
     pub fn resolved_cover(&self) -> Option<&str> {
-        self.cover_image_hash
-            .as_deref()
-            .or(self.linked_image_hashes.first().map(String::as_str))
+        self.resolved_cover_hash.as_deref()
     }
 }
 
@@ -702,7 +701,7 @@ impl Index {
 
     /// 按 ID 取单个提示词行（含回收站），供批量组织读当前值与显示名。
     pub fn prompt_row(&self, id: &str) -> Result<PromptRow> {
-        let mut rows = self.load_prompts("p WHERE p.id = ?1", &[id.to_owned()])?;
+        let mut rows = self.load_prompts("WHERE p.id = ?1", &[id.to_owned()])?;
         rows.pop().ok_or_else(|| {
             AppError::detailed(Code::PromptNotFound, format!("索引中没有这条提示词：{id}"))
         })
@@ -715,7 +714,7 @@ impl Index {
     /// 计数，完整正文经按需详情读取。
     pub fn prompts_for_image(&self, hash: &str) -> Result<Vec<PromptRow>> {
         self.load_prompts(
-            "p JOIN prompt_images pi ON pi.prompt_id = p.id \
+            "JOIN prompt_images pi ON pi.prompt_id = p.id \
              WHERE pi.image_hash = ?1 ORDER BY p.id",
             &[hash.to_owned()],
         )
@@ -808,7 +807,7 @@ impl Index {
             clauses.push(format!("p.favorite = {}", if favorite { "1" } else { "0" }));
         }
         let tail = format!(
-            "p WHERE {} ORDER BY p.created_at DESC, p.id DESC",
+            "WHERE {} ORDER BY p.created_at DESC, p.id DESC",
             clauses.join(" AND ")
         );
         let mut prompts = self.load_prompts(&tail, &values)?;
@@ -1005,9 +1004,25 @@ impl Index {
     /// 按给定的 ORDER 尾句与绑定参数加载提示词，并填充文件夹、标签与关联。
     fn load_prompts(&self, tail: &str, values: &[String]) -> Result<Vec<PromptRow>> {
         let sql = format!(
-            "SELECT id, body, title, model, parameters, note, favorite,
-                    created_at, updated_at, deleted_at, cover_image_hash
-             FROM prompts {tail}"
+            "SELECT p.id, p.body, p.title, p.model, p.parameters, p.note, p.favorite,
+                    p.created_at, p.updated_at, p.deleted_at, p.cover_image_hash,
+                    CASE
+                      WHEN p.cover_image_hash IS NOT NULL
+                       AND EXISTS (
+                         SELECT 1 FROM assets cover
+                         WHERE cover.hash = p.cover_image_hash AND cover.deleted_at IS NULL
+                       )
+                      THEN p.cover_image_hash
+                      ELSE (
+                        SELECT pi.image_hash
+                        FROM prompt_images pi
+                        JOIN assets a ON a.hash = pi.image_hash
+                        WHERE pi.prompt_id = p.id AND a.deleted_at IS NULL
+                        ORDER BY pi.ordinal
+                        LIMIT 1
+                      )
+                    END
+             FROM prompts p {tail}"
         );
         let mut stmt = self
             .conn
@@ -1027,6 +1042,7 @@ impl Index {
                     updated_at: r.get(8)?,
                     deleted_at: r.get(9)?,
                     cover_image_hash: r.get(10)?,
+                    resolved_cover_hash: r.get(11)?,
                     folders: Vec::new(),
                     tags: Vec::new(),
                     linked_image_hashes: Vec::new(),
@@ -1166,6 +1182,9 @@ mod tests {
             tags: Vec::new(),
             linked_image_hashes: links.iter().map(|s| (*s).to_owned()).collect(),
             cover_image_hash: cover.map(str::to_owned),
+            resolved_cover_hash: cover
+                .or_else(|| links.first().copied())
+                .map(str::to_owned),
             created_at: String::new(),
             updated_at: String::new(),
             deleted_at: None,

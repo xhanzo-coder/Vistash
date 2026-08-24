@@ -7,6 +7,47 @@ import { ErrorLine } from "../library/ErrorLine";
 /** 停止输入到自动保存的间隔（ms）。设计只约定"延迟自动保存"，未定数值。 */
 const DEBOUNCE_MS = 800;
 
+type RetainedDraft = {
+  text: string;
+  error: AppError | null;
+  revision: number;
+};
+
+/** 未落盘备注按素材身份保留，跨检查器卸载恢复；成功写入后立即移除。 */
+const retainedDrafts = new Map<string, RetainedDraft>();
+let nextDraftRevision = 0;
+
+function retainDraft(draftKey: string, text: string, error: AppError | null): RetainedDraft {
+  nextDraftRevision += 1;
+  const retained = { text, error, revision: nextDraftRevision };
+  retainedDrafts.set(draftKey, retained);
+  return retained;
+}
+
+function claimRetainedRevision(
+  draftKey: string,
+  text: string,
+  ownedRevision: number | null,
+): number | null {
+  const retained = retainedDrafts.get(draftKey);
+  if (retained === undefined) return retainDraft(draftKey, text, null).revision;
+  return retained.revision === ownedRevision ? retained.revision : null;
+}
+
+function deleteRetainedRevision(draftKey: string, revision: number): boolean {
+  const retained = retainedDrafts.get(draftKey);
+  if (retained === undefined || retained.revision !== revision) return false;
+  retainedDrafts.delete(draftKey);
+  return true;
+}
+
+function failRetainedRevision(draftKey: string, revision: number, error: AppError): boolean {
+  const retained = retainedDrafts.get(draftKey);
+  if (retained === undefined || retained.revision !== revision) return false;
+  retainedDrafts.set(draftKey, { ...retained, error });
+  return true;
+}
+
 type SaveStatus =
   | { kind: "idle" }
   | { kind: "editing" }
@@ -26,10 +67,13 @@ type SaveStatus =
  * 重新开始。
  */
 export function NoteAutoSaveEditor({
+  draftKey,
   label,
   initial,
   save,
 }: {
+  /** 图片 hash 或提示词 ID；两类包装必须加领域前缀避免碰撞。 */
+  draftKey: string;
   /** 编辑框的 aria-label，由各侧包装提供（如"图片备注"）。 */
   label: string;
   /** 权威备注初值；仅在挂载时读取。 */
@@ -37,15 +81,25 @@ export function NoteAutoSaveEditor({
   /** 权威写入路径；失败抛错由本组件转为稳定错误呈现，草稿不动。 */
   save: (text: string) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState(initial);
-  const [status, setStatus] = useState<SaveStatus>({ kind: "idle" });
+  const retained = retainedDrafts.get(draftKey);
+  const revisionRef = useRef<number | null>(retained?.revision ?? null);
+  const [draft, setDraft] = useState(() => retained?.text ?? initial);
+  const [status, setStatus] = useState<SaveStatus>(() =>
+    retained?.error === undefined || retained.error === null
+      ? retained === undefined
+        ? { kind: "idle" }
+        : { kind: "editing" }
+      : { kind: "failed", error: retained.error },
+  );
 
   // 写入路径只读 ref：防抖回调、失焦、快捷键共享同一份最新值，无闭包过期问题；
   // 卸载补写的 effect 因此可以只挂载一次。
   const draftRef = useRef(draft);
-  const dirtyRef = useRef(false);
+  const dirtyRef = useRef(retained !== undefined);
   const saveRef = useRef(save);
   saveRef.current = save;
+  const mountedRef = useRef(true);
+  const inFlightRef = useRef<Promise<void> | null>(null);
   /** 待触发的防抖计时器；null 表示没有排队的自动保存。 */
   const timerRef = useRef<number | null>(null);
 
@@ -64,34 +118,61 @@ export function NoteAutoSaveEditor({
       timerRef.current = null;
     }
     const text = draftRef.current;
-    setStatus({ kind: "saving" });
+    const revision = claimRetainedRevision(draftKey, text, revisionRef.current);
+    if (revision === null) return;
+    revisionRef.current = revision;
+    if (mountedRef.current) setStatus({ kind: "saving" });
+    const write = saveRef.current(text);
+    inFlightRef.current = write;
     try {
-      await saveRef.current(text);
+      await write;
       if (draftRef.current === text) {
         // 保存期间没有新输入：权威值已等于草稿。
-        dirtyRef.current = false;
-        setStatus({ kind: "saved" });
+        if (deleteRetainedRevision(draftKey, revision)) {
+          dirtyRef.current = false;
+          revisionRef.current = null;
+          if (mountedRef.current) setStatus({ kind: "saved" });
+        }
       } else {
         // 保存期间又有输入：保持编辑态并重新排队。
-        setStatus({ kind: "editing" });
+        if (mountedRef.current) setStatus({ kind: "editing" });
         scheduleSave();
       }
     } catch (raw) {
       // 失败不动草稿：dirty 保持 true，下一次输入/失焦/快捷键都会重试。
-      setStatus({ kind: "failed", error: asAppError(raw) });
+      const error = asAppError(raw);
+      if (failRetainedRevision(draftKey, revision, error) && mountedRef.current) {
+        setStatus({ kind: "failed", error });
+      }
+    } finally {
+      if (inFlightRef.current === write) inFlightRef.current = null;
     }
   }
 
-  // 卸载时还有未落盘的草稿（例如使用者直接点了另一项）：尽力补一次写入。
-  // 失败静默——下次回到该条目时编辑框会从权威值重建，不会显示过期成功。
+  // 卸载时还有未落盘草稿：保留草稿并补写。失败进入注册表，返回同一素材时
+  // 恢复原文与稳定错误；成功才删除，绝不静默丢弃。
   useEffect(
     () => () => {
+      mountedRef.current = false;
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-      if (dirtyRef.current) {
-        void saveRef.current(draftRef.current).catch(() => {});
+      if (dirtyRef.current && inFlightRef.current === null) {
+        const text = draftRef.current;
+        const revision = claimRetainedRevision(draftKey, text, revisionRef.current);
+        if (revision === null) return;
+        revisionRef.current = revision;
+        void saveRef.current(text).then(
+          () => {
+            if (deleteRetainedRevision(draftKey, revision)) revisionRef.current = null;
+            return undefined;
+          },
+          (raw: unknown) => {
+            failRetainedRevision(draftKey, revision, asAppError(raw));
+            return undefined;
+          },
+        );
       }
     },
-    [],
+    [draftKey],
   );
 
   return (
@@ -104,6 +185,7 @@ export function NoteAutoSaveEditor({
           setDraft(event.target.value);
           draftRef.current = event.target.value;
           dirtyRef.current = true;
+          revisionRef.current = retainDraft(draftKey, event.target.value, null).revision;
           setStatus({ kind: "editing" });
           scheduleSave();
         }}

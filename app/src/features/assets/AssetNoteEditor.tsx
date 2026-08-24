@@ -11,6 +11,7 @@ import { NoteAutoSaveEditor } from "../workspace/NoteAutoSaveEditor";
 export function AssetNoteEditor({ hash, note }: { hash: string; note: string }) {
   return (
     <NoteAutoSaveEditor
+      draftKey={`asset:${hash}`}
       label="图片备注"
       initial={note}
       save={(text) => setAssetNote(hash, text)}

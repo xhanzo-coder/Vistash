@@ -12,6 +12,7 @@ import { NoteAutoSaveEditor } from "../workspace/NoteAutoSaveEditor";
 export function PromptNoteEditor({ id, note }: { id: string; note: string }) {
   return (
     <NoteAutoSaveEditor
+      draftKey={`prompt:${id}`}
       label="提示词备注"
       initial={note}
       save={(text) => setPromptNote(id, text)}

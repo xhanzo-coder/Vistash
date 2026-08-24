@@ -11,9 +11,11 @@ import {
   catalogSnapshot,
   createFolder,
   createPrompt,
+  createPromptFolder,
   deleteAsset,
   deleteFolder,
   deletePrompt,
+  deletePromptFolder,
   globalSearch,
   imageDetail,
   importAndLink,
@@ -27,6 +29,7 @@ import {
   purgeTrash,
   readLayout,
   renameFolder,
+  renamePromptFolder,
   restoreAsset,
   restorePrompt,
   setAssetFavorite,
@@ -285,6 +288,8 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
   mockIPC((command, payload) => {
     calls.push({ command, payload });
     if (command === "create_prompt") return prompt;
+    if (command === "create_prompt_folder") return "灵感";
+    if (command === "rename_prompt_folder") return "档案";
     if (command === "update_prompt") return prompt;
     if (command === "prompt_detail") return prompt;
     if (command === "prompt_snapshot") return snapshot;
@@ -298,6 +303,9 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
   await updatePrompt(PROMPT_ID, edit);
   await promptDetail(PROMPT_ID);
   await promptSnapshot(promptQuery);
+  await createPromptFolder(null, "灵感");
+  await renamePromptFolder("灵感", "档案");
+  await deletePromptFolder("档案");
   await setPromptNote(PROMPT_ID, "备注");
   await setPromptFavorite(PROMPT_ID, true);
   await setPromptFolders(PROMPT_ID, ["灵感"]);
@@ -316,6 +324,9 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
     { command: "update_prompt", payload: { id: PROMPT_ID, edit } },
     { command: "prompt_detail", payload: { id: PROMPT_ID } },
     { command: "prompt_snapshot", payload: { query: promptQuery } },
+    { command: "create_prompt_folder", payload: { parent: null, name: "灵感" } },
+    { command: "rename_prompt_folder", payload: { path: "灵感", newName: "档案" } },
+    { command: "delete_prompt_folder", payload: { path: "档案" } },
     { command: "set_prompt_note", payload: { id: PROMPT_ID, note: "备注" } },
     { command: "set_prompt_favorite", payload: { id: PROMPT_ID, favorite: true } },
     { command: "set_prompt_folders", payload: { id: PROMPT_ID, folders: ["灵感"] } },

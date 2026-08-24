@@ -546,6 +546,27 @@ mod tests {
     }
 
     #[test]
+    fn default_cover_skips_trashed_links_and_uses_the_first_active_image() {
+        let mut fixture = fixture();
+        let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
+        let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
+        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let owner = prompt(&mut fixture.catalog, "封面跳过回收站图片");
+        fixture
+            .catalog
+            .link_images(&owner.id, &[image_a.hash.clone(), image_b.hash.clone()])
+            .expect("建立有序关联");
+
+        fixture.catalog.delete_asset(&image_a.hash).expect("首图进入回收站");
+
+        assert_eq!(
+            card_cover(&fixture.catalog, &owner.id),
+            Some(image_b.hash.as_str().to_owned())
+        );
+    }
+
+    #[test]
     fn purging_a_prompt_leaves_every_image_byte_and_other_links_alone() {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);

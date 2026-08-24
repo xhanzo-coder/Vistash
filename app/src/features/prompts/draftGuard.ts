@@ -14,7 +14,7 @@ export type PromptDraftGuard = {
   /** 是否存在未保存的主字段修改。 */
   isDirty: () => boolean;
   /** 请求编辑器呈现保存/放弃/留在当前页的选择。 */
-  requestResolve: () => void;
+  requestResolve: (continueAction: () => void) => void;
 };
 
 let guard: PromptDraftGuard | null = null;
@@ -28,9 +28,9 @@ export function setPromptDraftGuard(next: PromptDraftGuard | null): void {
  * 导航放行前的统一闸口：有未保存修改时请求解决并返回 true（调用方必须拦截）；
  * 无守卫或无修改时返回 false（放行）。
  */
-export function blockIfPromptDraftDirty(): boolean {
+export function blockIfPromptDraftDirty(continueAction: () => void): boolean {
   if (guard === null) return false;
   if (!guard.isDirty()) return false;
-  guard.requestResolve();
+  guard.requestResolve(continueAction);
   return true;
 }

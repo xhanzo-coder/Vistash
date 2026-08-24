@@ -16,6 +16,7 @@ import type {
   PromptSnapshot,
 } from "../../shared/types";
 import { PromptWorkspace } from "./PromptWorkspace";
+import { DEFAULT_LAYOUT } from "../workspace/libraryLayout";
 
 /** 合成一条最小 PromptRow；带图变体按序号决定关联数量，与瀑布流测试同构。 */
 function makePrompt(index: number): PromptRow {
@@ -33,6 +34,7 @@ function makePrompt(index: number): PromptRow {
     tags: [],
     linked_image_hashes: linked,
     cover_image_hash: linked.length > 0 ? linked[0] ?? null : null,
+    resolved_cover_hash: linked.length > 0 ? linked[0] ?? null : null,
     created_at: "2026-08-20T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
     deleted_at: null,
@@ -171,6 +173,9 @@ beforeEach(() => {
     ) {
       return undefined;
     }
+    if (command === "create_prompt_folder") return "人像/室外";
+    if (command === "rename_prompt_folder") return "肖像";
+    if (command === "delete_prompt_folder") return undefined;
     if (command === "restore_prompt") return restoreOutcome;
     if (command === "purge_prompt_trash") return purgeReply;
     // 多选分区的批量关联选择器自取图片候选（任务 11.2）：默认空库。
@@ -382,6 +387,71 @@ test("工作区组合查询：搜索、文件夹、标签、收藏与回收站�
   expect(queries.at(-1)?.location).toBe("trash");
   expect(queries.at(-1)?.tags).toEqual([]);
 
+  await harness.unmount();
+});
+
+test("提示词分类栏可以在当前文件夹下新建子文件夹", async () => {
+  const harness = await setupWorkspace();
+  const currentFolder = harness.container.querySelector<HTMLButtonElement>(
+    '[data-folder="人像"]',
+  );
+  if (currentFolder === null) throw new Error("缺少人像文件夹入口");
+  await act(async () => currentFolder.click());
+
+  const input = harness.container.querySelector<HTMLInputElement>("#new-prompt-folder");
+  if (input === null) throw new Error("提示词分类栏缺少新建文件夹输入框");
+  setInput(input, "室外");
+  const form = input.closest("form");
+  if (form === null) throw new Error("新建提示词文件夹输入框不在表单内");
+  await act(async () => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  await flush();
+
+  expect(ipcCalls).toContainEqual({
+    command: "create_prompt_folder",
+    payload: { parent: "人像", name: "室外" },
+  });
+  await harness.unmount();
+});
+
+test("提示词分类栏可以重命名当前文件夹", async () => {
+  const harness = await setupWorkspace();
+  const currentFolder = harness.container.querySelector<HTMLButtonElement>(
+    '[data-folder="人像"]',
+  );
+  if (currentFolder === null) throw new Error("缺少人像文件夹入口");
+  await act(async () => currentFolder.click());
+
+  const input = harness.container.querySelector<HTMLInputElement>("#rename-prompt-folder");
+  if (input === null) throw new Error("提示词分类栏缺少重命名输入框");
+  setInput(input, "肖像");
+  await act(async () => buttonWithText(harness.container, "保存名称").click());
+  await flush();
+
+  expect(ipcCalls).toContainEqual({
+    command: "rename_prompt_folder",
+    payload: { path: "人像", newName: "肖像" },
+  });
+  await harness.unmount();
+});
+
+test("提示词分类栏删除当前文件夹前要求确认", async () => {
+  const harness = await setupWorkspace();
+  const currentFolder = harness.container.querySelector<HTMLButtonElement>(
+    '[data-folder="人像"]',
+  );
+  if (currentFolder === null) throw new Error("缺少人像文件夹入口");
+  await act(async () => currentFolder.click());
+  await act(async () => buttonWithText(harness.container, "删除文件夹").click());
+
+  const dialog = harness.container.querySelector<HTMLElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("删除提示词文件夹没有二次确认");
+  await act(async () => buttonWithText(dialog, "删除文件夹").click());
+  await flush();
+
+  expect(ipcCalls).toContainEqual({
+    command: "delete_prompt_folder",
+    payload: { path: "人像" },
+  });
   await harness.unmount();
 });
 
@@ -900,7 +970,18 @@ test("批量移入回收站经二次确认发起 batch_delete_prompts 并回显�
 test("双库布局恢复：滚动偏移按库隔离，切换库各自恢复自己的位置", async () => {
   savedLayouts = {
     // 库 A 已保存过详情列表偏移；库 B 从未保存过。
-    "library-a": { scrollOffsets: { "prompts-list": 240 } },
+    "library-a": {
+      assets: DEFAULT_LAYOUT,
+      prompts: {
+        ...DEFAULT_LAYOUT,
+        view: "list",
+        scrollOffsets: { "prompts-list": 240 },
+      },
+    },
+    "library-b": {
+      assets: DEFAULT_LAYOUT,
+      prompts: { ...DEFAULT_LAYOUT, view: "list" },
+    },
   };
   const harness = await setupWorkspace(null, "library-a");
   await flush();
@@ -924,9 +1005,11 @@ test("双库布局恢复：滚动偏移按库隔离，切换库各自恢复自�
   await act(async () => harness.rerender(null, "library-b"));
   await flush();
   await flush();
-  expect(savedLayouts["library-a"]).toEqual(
-    expect.objectContaining({ scrollOffsets: { "prompts-list": 500 } }),
-  );
+  const savedA = savedLayouts["library-a"];
+  if (!isRecordPayload(savedA) || !isRecordPayload(savedA.prompts)) {
+    throw new TypeError("库 A 没有保存提示词 section");
+  }
+  expect(savedA.prompts.scrollOffsets).toEqual({ "prompts-list": 500 });
   expect(list().scrollTop).toBe(0);
 
   // 切回库 A：恢复的是 A 自己的偏移，而不是 B 的残留或全局值。
@@ -935,5 +1018,55 @@ test("双库布局恢复：滚动偏移按库隔离，切换库各自恢复自�
   await flush();
   expect(list().scrollTop).toBe(500);
 
+  await harness.unmount();
+});
+
+test("提示词工作台从自身 section 恢复视图、文件夹、标签、收藏与局部搜索", async () => {
+  const libraryId = "018f3c9e-6c00-7000-8000-00000000000c";
+  savedLayouts[libraryId] = {
+    assets: DEFAULT_LAYOUT,
+    prompts: {
+      ...DEFAULT_LAYOUT,
+      view: "list",
+      text: "cinematic",
+      folder: { kind: "path", path: "人像" },
+      tags: ["夜景"],
+      favorite: true,
+    },
+  };
+  const harness = await setupWorkspace(null, libraryId);
+  await flush();
+
+  expect(queries.at(-1)).toEqual({
+    text: "cinematic",
+    folder: { kind: "path", path: "人像" },
+    tags: ["夜景"],
+    favorite: true,
+    location: "active",
+  });
+  expect(buttonWithText(harness.container, "详情列表").getAttribute("aria-pressed")).toBe("true");
+  await harness.unmount();
+});
+
+test("宽屏提示词工作台恢复折叠栏位并允许分别展开", async () => {
+  const libraryId = "018f3c9e-6c00-7000-8000-00000000000d";
+  savedLayouts[libraryId] = {
+    assets: DEFAULT_LAYOUT,
+    prompts: {
+      ...DEFAULT_LAYOUT,
+      railCollapsed: true,
+      inspectorCollapsed: true,
+    },
+  };
+  const harness = await setupWorkspace(null, libraryId);
+  await flush();
+
+  expect(harness.container.querySelector(".catalog-rail")).toBeNull();
+  expect(harness.container.querySelector(".inspector-rail")).toBeNull();
+  await act(async () => buttonWithText(harness.container, "展开分类栏").click());
+  await act(async () => buttonWithText(harness.container, "展开检查器").click());
+
+  expect(harness.container.querySelector(".catalog-rail")).not.toBeNull();
+  expect(harness.container.querySelector(".inspector-rail")).not.toBeNull();
   await harness.unmount();
 });

@@ -77,6 +77,7 @@ export function PromptBodyFocus({
   const [drafts, setDrafts] = useState<FieldDrafts>(() => draftsOf(prompt));
   const [status, setStatus] = useState<SaveStatus>({ kind: "idle" });
   const [confirmClose, setConfirmClose] = useState(false);
+  const pendingContinuationRef = useRef<(() => void) | null>(null);
 
   const dirty = editing && isDirty(prompt, drafts);
   // 脏探针镜像：全局守卫在事件回调里查询，不能依赖渲染期闭包。
@@ -88,7 +89,10 @@ export function PromptBodyFocus({
   useEffect(() => {
     setPromptDraftGuard({
       isDirty: () => dirtyRef.current,
-      requestResolve: () => setConfirmClose(true),
+      requestResolve: (continueAction) => {
+        pendingContinuationRef.current = continueAction;
+        setConfirmClose(true);
+      },
     });
     return () => setPromptDraftGuard(null);
   }, []);
@@ -106,6 +110,7 @@ export function PromptBodyFocus({
       });
       // 权威刷新后 props 更新，草稿与新权威一致，脏状态自然解除。
       await onSaved();
+      dirtyRef.current = false;
       setStatus({ kind: "saved" });
       return true;
     } catch (raw) {
@@ -118,18 +123,30 @@ export function PromptBodyFocus({
   /** 折叠/退出请求：干净则直接离开；有未保存修改先要三选一。 */
   function requestClose() {
     if (dirtyRef.current) {
+      pendingContinuationRef.current = null;
       setConfirmClose(true);
       return;
     }
     onClose();
   }
 
+  function leaveAfterResolution() {
+    const continuation = pendingContinuationRef.current;
+    pendingContinuationRef.current = null;
+    setConfirmClose(false);
+    if (continuation !== null) {
+      continuation();
+      return;
+    }
+    onClose();
+  }
+
   function discardAndClose() {
+    dirtyRef.current = false;
     setDrafts(draftsOf(prompt));
     setEditing(false);
     setStatus({ kind: "idle" });
-    setConfirmClose(false);
-    onClose();
+    leaveAfterResolution();
   }
 
   /** 字段更新的唯一入口：任何新输入都让"已保存"失效回编辑态。 */
@@ -267,13 +284,16 @@ export function PromptBodyFocus({
       {confirmClose && (
         <DraftGuardDialog
           saving={status.kind === "saving"}
-          onStay={() => setConfirmClose(false)}
+          onStay={() => {
+            pendingContinuationRef.current = null;
+            setConfirmClose(false);
+          }}
           onDiscard={discardAndClose}
           onSaveAndLeave={() => {
             void (async () => {
               const saved = await attemptSave();
               if (saved) {
-                onClose();
+                leaveAfterResolution();
                 return;
               }
               setConfirmClose(false);

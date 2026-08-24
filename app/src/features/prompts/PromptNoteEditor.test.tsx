@@ -25,15 +25,16 @@ afterEach(() => {
 
 const PROMPT_ID = "prompt-9";
 
-async function setupEditor(initialNote = ""): Promise<{
+async function setupEditor(initialNote = "", id = PROMPT_ID): Promise<{
   root: HTMLElement;
   textarea: () => HTMLTextAreaElement;
+  unmount: () => Promise<void>;
 }> {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<PromptNoteEditor id={PROMPT_ID} note={initialNote} />);
+    root.render(<PromptNoteEditor id={id} note={initialNote} />);
   });
   return {
     root: container,
@@ -44,7 +45,22 @@ async function setupEditor(initialNote = ""): Promise<{
       if (el === null) throw new Error("缺少备注编辑框");
       return el;
     },
+    unmount: () => act(async () => root.unmount()),
   };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((complete, fail) => {
+    resolve = complete;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 function setInputValue(el: HTMLTextAreaElement, value: string): void {
@@ -120,4 +136,84 @@ test("保存失败保留草稿并显示稳定错误码", async () => {
   });
   expect(harness.root.querySelector("[data-error-code]")).toBeNull();
   expect(harness.root.textContent).toContain("已保存");
+});
+
+test("切换条目时补写失败，返回同一提示词仍恢复草稿与错误", async () => {
+  mockIPC((command) => {
+    if (command === "set_prompt_note") {
+      throw { code: "library.prompt_note_write_failed", detail: "磁盘只读" };
+    }
+    throw new Error(`未预期的 IPC：${command}`);
+  });
+
+  const first = await setupEditor();
+  await act(async () => setInputValue(first.textarea(), "切换前尚未落盘的备注"));
+  await first.unmount();
+  await act(async () => Promise.resolve());
+
+  const returned = await setupEditor("");
+  expect(returned.textarea().value).toBe("切换前尚未落盘的备注");
+  expect(
+    returned.root.querySelector('[data-error-code="library.prompt_note_write_failed"]'),
+  ).not.toBeNull();
+  await returned.unmount();
+});
+
+test("旧草稿迟到失败不得覆盖同一提示词已经保存的新草稿", async () => {
+  const oldWrite = deferred<void>();
+  const newWrite = deferred<void>();
+  let callCount = 0;
+  mockIPC((command) => {
+    if (command !== "set_prompt_note") throw new Error(`未预期的 IPC：${command}`);
+    callCount += 1;
+    return callCount === 1 ? oldWrite.promise : newWrite.promise;
+  });
+  const id = "prompt-concurrent-note";
+
+  const first = await setupEditor("", id);
+  await act(async () => setInputValue(first.textarea(), "旧草稿"));
+  await first.unmount();
+
+  const second = await setupEditor("", id);
+  await act(async () => {
+    const textarea = second.textarea();
+    setInputValue(textarea, "新草稿");
+    textarea.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+  await act(async () => newWrite.resolve());
+  expect(second.root.textContent).toContain("已保存");
+
+  await act(async () => oldWrite.reject({ code: "library.prompt_note_write_failed" }));
+  await second.unmount();
+  const returned = await setupEditor("新草稿", id);
+
+  expect(returned.textarea().value).toBe("新草稿");
+  expect(returned.root.querySelector("[data-error-code]")).toBeNull();
+  await returned.unmount();
+});
+
+test("旧补写成功后新实例失焦会重新认领草稿并保存", async () => {
+  const oldWrite = deferred<void>();
+  let callCount = 0;
+  mockIPC((command) => {
+    if (command !== "set_prompt_note") throw new Error(`未预期的 IPC：${command}`);
+    callCount += 1;
+    return callCount === 1 ? oldWrite.promise : undefined;
+  });
+  const id = "prompt-successful-old-write";
+
+  const first = await setupEditor("", id);
+  await act(async () => setInputValue(first.textarea(), "待补写草稿"));
+  await first.unmount();
+  const returned = await setupEditor("", id);
+  await act(async () => oldWrite.resolve());
+
+  await act(async () => {
+    returned.textarea().dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+
+  expect(callCount).toBe(2);
+  expect(returned.textarea().value).toBe("待补写草稿");
+  expect(returned.root.textContent).toContain("已保存");
+  await returned.unmount();
 });

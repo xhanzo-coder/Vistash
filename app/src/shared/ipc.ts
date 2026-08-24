@@ -157,6 +157,19 @@ export function importPaths(
 }
 
 /**
+ * 把二进制 IPC 的返回值归一成 ArrayBuffer。
+ *
+ * 任务 11.5 的 release 验收发现：开发模式经 HTTP 传输时 `tauri::ipc::Response` 到达前端
+ * 是 ArrayBuffer，而 release（自定义协议内嵌）经 postMessage JSON 传输时是**数字数组**——
+ * 字节本身无损，只是序列化形态不同。直接把数组交给 `Blob` 会得到 `"82,73,70,70…"` 这样的
+ * 十进制文本，`<img>` 静默解码失败。因此这里显式归一，不轻信传输层给哪种形态。
+ */
+function asArrayBuffer(bytes: ArrayBuffer | number[]): ArrayBuffer {
+  if (bytes instanceof ArrayBuffer) return bytes;
+  return Uint8Array.from(bytes).buffer;
+}
+
+/**
  * 后端返回的原始字节包成 blob: URL。
  *
  * 走字节而不是 base64：base64 会把体积放大三分之一，而网格一次要取上百张缩略图。
@@ -171,9 +184,9 @@ function toObjectUrl(bytes: ArrayBuffer, mime: string): string {
 
 /** 素材缩略图的 blob: URL。缺失时后端会按需重新生成。 */
 export async function loadThumbnail(hash: string): Promise<string> {
-  const bytes = await call<ArrayBuffer>("asset_thumbnail", { hash });
+  const bytes = await call<ArrayBuffer | number[]>("asset_thumbnail", { hash });
   // 缩略图一律是 WebP，与素材本体的格式无关。
-  return toObjectUrl(bytes, "image/webp");
+  return toObjectUrl(asArrayBuffer(bytes), "image/webp");
 }
 
 /**
@@ -185,8 +198,8 @@ export async function loadThumbnail(hash: string): Promise<string> {
  * MIME 交给浏览器嗅探。`<img>` 按内容判定格式，因此这里不需要（也不该）自己猜。
  */
 export async function loadOriginal(hash: string): Promise<string> {
-  const bytes = await call<ArrayBuffer>("asset_original", { hash });
-  return toObjectUrl(bytes, "");
+  const bytes = await call<ArrayBuffer | number[]>("asset_original", { hash });
+  return toObjectUrl(asArrayBuffer(bytes), "");
 }
 
 /**
@@ -269,6 +282,21 @@ export function promptDetail(id: string): Promise<PromptAsset> {
 
 export function promptSnapshot(query: PromptQuery): Promise<PromptSnapshot> {
   return call<PromptSnapshot>("prompt_snapshot", { query });
+}
+
+/** 在独立的提示词文件夹树中创建一个逻辑文件夹。 */
+export function createPromptFolder(parent: string | null, name: string): Promise<string> {
+  return call<string>("create_prompt_folder", { parent, name });
+}
+
+/** 重命名提示词文件夹子树，并由核心事务同步更新成员归属。 */
+export function renamePromptFolder(path: string, newName: string): Promise<string> {
+  return call<string>("rename_prompt_folder", { path, newName });
+}
+
+/** 删除提示词文件夹子树；提示词素材本身保留并按核心语义回到根位置。 */
+export function deletePromptFolder(path: string): Promise<void> {
+  return call<void>("delete_prompt_folder", { path });
 }
 
 /** 设置提示词备注（独立自动保存流，不推进更新时间）。 */

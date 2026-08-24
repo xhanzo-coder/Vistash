@@ -206,6 +206,8 @@ export type PromptRow = {
   tags: string[];
   linked_image_hashes: string[];
   cover_image_hash: string | null;
+  /** 后端排除回收站图片后解析出的有效封面。 */
+  resolved_cover_hash: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

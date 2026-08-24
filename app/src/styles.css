@@ -152,6 +152,7 @@ input {
 button {
   cursor: pointer;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button:disabled {
@@ -373,18 +374,40 @@ button:disabled {
   flex: 1;
   display: grid;
   min-height: 0;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: var(--workspace-rail-width, 240px) minmax(0, 1fr);
   /* 行高钉在可用空间内：列内容再长也由各自的 overflow 处理（任务 11.4）。 */
   grid-template-rows: minmax(0, 1fr);
+}
+
+.workspace-layout-loading {
+  display: grid;
+  min-height: 0;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--surface-paper);
 }
 
 /* 宽屏三栏：右检查器原位常驻（with-inspector 由组件按窗口层级挂上）。 */
 .asset-workspace.with-inspector,
 .prompt-workspace.with-inspector {
-  grid-template-columns: 240px minmax(0, 1fr) 300px;
+  grid-template-columns:
+    var(--workspace-rail-width, 240px)
+    minmax(0, 1fr)
+    var(--workspace-inspector-width, 300px);
+}
+
+.asset-workspace.rail-collapsed,
+.prompt-workspace.rail-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.asset-workspace.rail-collapsed.with-inspector,
+.prompt-workspace.rail-collapsed.with-inspector {
+  grid-template-columns: minmax(0, 1fr) var(--workspace-inspector-width, 300px);
 }
 
 .catalog-rail {
+  position: relative;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -392,6 +415,49 @@ button:disabled {
   color: var(--text-on-rail);
   background: var(--surface-rail);
   border-inline-end: 1px solid var(--border-on-rail);
+}
+
+.inspector-rail {
+  position: relative;
+}
+
+.workspace-pane-heading {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2) var(--space-3) 0;
+}
+
+.workspace-pane-resizer {
+  position: absolute;
+  z-index: var(--z-sticky);
+  inset-block: 0;
+  width: 0.6rem;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.workspace-pane-resizer-start {
+  inset-inline-end: -0.3rem;
+}
+
+.workspace-pane-resizer-end {
+  inset-inline-start: -0.3rem;
+}
+
+.workspace-pane-resizer::after {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(50% - 0.5px);
+  width: 1px;
+  content: "";
+  background: var(--border-subtle);
+}
+
+.workspace-pane-resizer:hover::after,
+.workspace-pane-resizer:focus-visible::after {
+  width: 3px;
+  background: var(--focus-ring);
 }
 
 .rail-heading {
@@ -537,6 +603,17 @@ button:disabled {
   font-size: var(--text-size-xl);
   font-weight: 700;
   letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.result-count,
+.asset-dimensions,
+.prompt-card-count,
+.detail-row,
+.folder-progress,
+.operation-status {
+  font-variant-numeric: tabular-nums;
 }
 
 .folder-progress {
@@ -1366,6 +1443,8 @@ button:disabled {
   font-size: 1.45rem;
   font-weight: 700;
   letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .empty-state p:last-child {
@@ -1592,6 +1671,8 @@ button:disabled {
 .inspector-section h3,
 .inspector-section h4 {
   margin: 0;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .inspector-section fieldset {
@@ -1721,6 +1802,7 @@ button:disabled {
   flex-direction: column;
   width: min(320px, 86vw);
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--surface-rail);
   color: var(--text-on-rail);
   box-shadow: var(--shadow-dialog);

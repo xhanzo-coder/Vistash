@@ -45,7 +45,7 @@ function LinkedThumb({ hash }: { hash: string }) {
       {error !== null ? (
         <ErrorLine error={error} />
       ) : url !== null ? (
-        <img src={url} alt="" loading="lazy" />
+        <img src={url} alt="" width={1} height={1} loading="lazy" />
       ) : started ? (
         <p>正在载入…</p>
       ) : (
@@ -280,10 +280,14 @@ export function PromptImageLinks({
     }
   }
 
-  // 检查器的封面解析：显式值优先；缺省取第一张"正常"关联图片（规格）。回收站
-  // 徽标与封面徽标可以并存——那张图仍是显式封面，只是当前已删除。
+  // 检查器与卡片使用同一有效封面语义：显式值只有仍为正常图片时才优先，
+  // 否则回落到第一张正常关联图。已删除项保留关联与取消显式值的入口，但不冒充封面。
   const explicitCover = active.cover_image_hash;
-  const effectiveCover = explicitCover ?? states?.find((state) => !state.deleted)?.hash ?? null;
+  const explicitState = states?.find((state) => state.hash === explicitCover);
+  const effectiveCover =
+    explicitState !== undefined && !explicitState.deleted
+      ? explicitState.hash
+      : states?.find((state) => !state.deleted)?.hash ?? null;
 
   return (
     <div className="prompt-image-links">

@@ -116,8 +116,10 @@ export function App() {
     void (async () => {
       try {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
-        const fn = await getCurrentWindow().onCloseRequested((event) => {
-          if (blockIfPromptDraftDirty()) event.preventDefault();
+        const currentWindow = getCurrentWindow();
+        const fn = await currentWindow.onCloseRequested((event) => {
+          const continueClose = () => void currentWindow.close();
+          if (blockIfPromptDraftDirty(continueClose)) event.preventDefault();
         });
         if (cancelled) {
           fn();
@@ -135,25 +137,38 @@ export function App() {
     };
   }, []);
 
-  /** 一级入口切换：提示词侧有未保存草稿时先要三选一，不放行切换。返回是否已切换。 */
+  const runAfterDraftGuard = useCallback((action: () => void): boolean => {
+    if (blockIfPromptDraftDirty(action)) return false;
+    action();
+    return true;
+  }, []);
+
+  /** 一级入口切换：提示词侧有未保存草稿时先要三选一。返回是否已切换。 */
   const handleSectionChange = useCallback(
     (next: WorkspaceSection) => {
-      if (next !== section && blockIfPromptDraftDirty()) return false;
-      setSection(next);
-      return true;
+      if (next === section) return true;
+      return runAfterDraftGuard(() => setSection(next));
     },
-    [section],
+    [runAfterDraftGuard, section],
   );
 
   /** 全局搜索结果的定位（任务 11.1）：切到目标库并把查询重置到能看见该项的位置。 */
   const handleGlobalLocate = useCallback(
     (request: GlobalLocateRequest) => {
-      if (!handleSectionChange(request.section)) return;
-      locateNonce.current += 1;
-      setLocate({ ...request, nonce: locateNonce.current });
+      runAfterDraftGuard(() => {
+        setSection(request.section);
+        locateNonce.current += 1;
+        setLocate({ ...request, nonce: locateNonce.current });
+      });
     },
-    [handleSectionChange],
+    [runAfterDraftGuard],
   );
+
+  const handleLocateHandled = useCallback((nonce: number) => {
+    setLocate((current) =>
+      current !== null && current.nonce === nonce ? null : current,
+    );
+  }, []);
 
   if (statusError !== null) {
     return (
@@ -229,12 +244,14 @@ export function App() {
             refreshVersion={catalogVersion}
             libraryId={status.library_id}
             locate={locate?.section === "prompts" ? locate : null}
+            onLocateHandled={handleLocateHandled}
           />
         ) : (
           <AssetWorkspace
             refreshVersion={catalogVersion}
             libraryId={status.library_id}
             locate={locate?.section === "assets" ? locate : null}
+            onLocateHandled={handleLocateHandled}
           />
         )}
       </main>

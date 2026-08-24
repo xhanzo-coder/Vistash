@@ -59,6 +59,7 @@ function makePrompt(overrides: Partial<PromptRow> = {}): PromptRow {
     tags: [],
     linked_image_hashes: [HASH_A, HASH_B],
     cover_image_hash: null,
+    resolved_cover_hash: null,
     created_at: "2026-08-20T00:00:00Z",
     updated_at: "2026-08-21T00:00:00Z",
     deleted_at: null,
@@ -187,9 +188,10 @@ test("挂载读取关联状态：回收站项显式标记已删除，缺省封�
 test("显式封面优先于缺省解析：取消封面回到缺省", async () => {
   const harness = await setupLinks(makePrompt({ cover_image_hash: HASH_B }));
 
-  // 显式封面指向回收站里的那张：两个徽标并存（它仍是封面，只是当前已删除）。
+  // 已删除图片可以保留关联与显式偏好供还原，但不能继续充当当前有效封面。
   const items = harness.container.querySelectorAll<HTMLElement>("[data-linked-hash]");
-  expect(items[1]?.querySelector(".cover-badge")).not.toBeNull();
+  expect(items[0]?.querySelector(".cover-badge")?.textContent).toBe("封面");
+  expect(items[1]?.querySelector(".cover-badge")).toBeNull();
   expect(items[1]?.querySelector(".deleted-badge")).not.toBeNull();
 
   await act(async () =>
