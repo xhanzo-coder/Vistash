@@ -140,6 +140,8 @@ fn files_land_in_the_current_folder_or_unclassified() {
     }
 
     // 当前是全部/未分类/回收站位置（没有具体文件夹）：进入未分类。
+    // 上一个任务已被协调器确认结束；一次运行就是一次导入，这里开新任务。
+    let next_run = begin_run(&runs, &f.library);
     let unclassified = import_sources(
         &f.library,
         &ImportRequest {
@@ -147,7 +149,7 @@ fn files_land_in_the_current_folder_or_unclassified() {
             current_folder: None,
         },
         &[],
-        &run,
+        &next_run,
         &mut NoopObserver,
     )
     .expect("没有当前文件夹时协调器也应完成导入");
@@ -289,6 +291,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
     // 必须合并进现有 "trip"，而不是创建编号副本或拒绝整批。
     let second_trip = f.src.join("two/trip");
     let beta = write_png(&second_trip, "beta.png", [2, 2, 2, 255]);
+    let next_run = begin_run(&runs, &f.library);
     let second = import_sources(
         &f.library,
         &ImportRequest {
@@ -296,7 +299,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
             current_folder: None,
         },
         &[],
-        &run,
+        &next_run,
         &mut NoopObserver,
     )
     .expect("同路径第二次导入应整批继续而不是拒绝");
@@ -319,6 +322,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
             folders: vec!["trip".to_owned(), "配色".to_owned()],
         })
         .expect("补写配色文件夹");
+    let third_run = begin_run(&runs, &f.library);
     let again = import_sources(
         &f.library,
         &ImportRequest {
@@ -326,7 +330,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
             current_folder: Some("配色".to_owned()),
         },
         &[],
-        &run,
+        &third_run,
         &mut NoopObserver,
     )
     .expect("重复内容的导入请求不应整体失败");
@@ -513,13 +517,20 @@ fn processing_stops_at_the_next_boundary_and_counts_the_rest_as_pending() {
             sidecar.hash.as_str()
         );
     }
-    for skipped in &files[2..] {
-        let hash = vistash_core::hashing::ContentHash::of_file(skipped)
-            .expect("计算未处理文件的哈希");
-        assert!(
-            !f.library.sidecar_path(&hash).is_file(),
-            "未处理文件不得留下侧车"
-        );
+    // 计划按源路径排序，处理顺序不等于书写顺序；因此按集合断言：盘上侧车必须
+    // 恰好对应已入库的素材，未处理的三个一个都不能有。
+    let mut on_disk = 0usize;
+    for file in &files {
+        let hash = vistash_core::hashing::ContentHash::of_file(file)
+            .expect("计算源文件哈希");
+        if f.library.sidecar_path(&hash).is_file() {
+            on_disk += 1;
+        }
     }
+    assert_eq!(
+        on_disk,
+        report.imported.len(),
+        "盘上侧车数量必须与已成功素材一致"
+    );
     assert_eq!(run.state(), ImportRunState::Stopped, "协调器返回即后端确认");
 }

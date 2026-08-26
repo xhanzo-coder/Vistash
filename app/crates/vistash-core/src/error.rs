@@ -48,6 +48,7 @@ pub enum Code {
     ImportDuplicateInLibrary,
     ImportDuplicateInTrash,
     ImportCancelled,
+    ImportAlreadyRunning,
     // trash 域
     TrashDeleteFailed,
     TrashRestoreFailed,
@@ -131,6 +132,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::ImportDuplicateInLibrary,
     Code::ImportDuplicateInTrash,
     Code::ImportCancelled,
+    Code::ImportAlreadyRunning,
     Code::TrashDeleteFailed,
     Code::TrashRestoreFailed,
     Code::TrashRestoreTargetFolderMissing,
@@ -195,7 +197,8 @@ impl Code {
             | ImportMetadataWriteFailed
             | ImportDuplicateInLibrary
             | ImportDuplicateInTrash
-            | ImportCancelled => Domain::Import,
+            | ImportCancelled
+            | ImportAlreadyRunning => Domain::Import,
             TrashDeleteFailed
             | TrashRestoreFailed
             | TrashRestoreTargetFolderMissing
@@ -261,6 +264,7 @@ impl Code {
             ImportDuplicateInLibrary => "import.duplicate_in_library",
             ImportDuplicateInTrash => "import.duplicate_in_trash",
             ImportCancelled => "import.cancelled",
+            ImportAlreadyRunning => "import.already_running",
             TrashDeleteFailed => "trash.delete_failed",
             TrashRestoreFailed => "trash.restore_failed",
             TrashRestoreTargetFolderMissing => "trash.restore_target_folder_missing",
@@ -399,14 +403,15 @@ mod tests {
     }
 
     #[test]
-    fn import_domain_has_exactly_nine_codes() {
-        // asset-library 规格明确列出九个导入错误码。数量变化必须是有意的，
+    fn import_domain_has_exactly_ten_codes() {
+        // 设计第十条为统一导入协调器新增 import.already_running（库级并发键拒绝
+        // 第二个任务），导入错误码从九个变为十个。数量变化必须是有意的，
         // 因此在这里锁死，防止随手增删。
         let n = ALL_CODES
             .iter()
             .filter(|c| c.domain() == Domain::Import)
             .count();
-        assert_eq!(n, 9, "导入错误码数量与规格不符");
+        assert_eq!(n, 10, "导入错误码数量与规格不符");
     }
 
     #[test]

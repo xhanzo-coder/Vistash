@@ -20,7 +20,10 @@ use crate::sidecar::{
 };
 use chrono::Utc;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// 导入时施加在每个素材上的归属信息。
 ///
@@ -584,6 +587,11 @@ enum PlannedOutcome {
 }
 
 /// 统一协调器的完成报告。
+///
+/// 四个桶互相独立、数量齐全（asset-transfer 停止规格）：已成功看
+/// [`Self::imported`]，重复或跳过看 [`Self::duplicates`] 加 [`Self::skipped_non_images`]，
+/// 失败看 [`Self::failed`]，尚未处理看 [`Self::pending_count`]——未处理的项既不算
+/// 失败也不算重复，界面才能如实说明"停在这里，还剩多少没动"。
 #[derive(Debug, Clone, Serialize)]
 pub struct SourceImportReport {
     pub imported: Vec<AssetSidecar>,
@@ -591,6 +599,153 @@ pub struct SourceImportReport {
     pub failed: Vec<ImportFailure>,
     /// 目录来源中因不是图片而被跳过的文件数。
     pub skipped_non_images: usize,
+    /// 观察到停止后尚未处理（或被完整回滚）的计划内文件数。
+    pub pending_count: usize,
+}
+
+/// 长任务的唯一标识（设计第十条）。
+///
+/// UUIDv7 字面值：任务中心按创建时间展示，时间可排序让"按 ID 排"与"按开始时间排"
+/// 是同一个顺序。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ImportTaskId(String);
+
+impl ImportTaskId {
+    fn generate() -> Self {
+        Self(crate::ids::generate_canonical_uuid_v7())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ImportTaskId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// 导入运行的可见状态。
+///
+/// `stopped` 只能由协调器确认返回时进入：前端仅停止等待 MUST NOT 冒充任务已停止
+/// （asset-transfer 规格），调用方提前宣布同样算冒充。`stopping` 表示停止命令已被
+/// 接受但协调器还没在安全边界退出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportRunState {
+    Running,
+    Stopping,
+    Stopped,
+}
+
+impl ImportRunState {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Stopping,
+            2 => Self::Stopped,
+            _ => Self::Running,
+        }
+    }
+}
+
+/// 一次统一导入的运行句柄：任务身份、库级槽位与停止信号的载体（设计第十条）。
+///
+/// 停止是协作式的：[`ImportRun::request_stop`] 只把状态推进到 stopping，真正的
+/// 退出由 [`import_sources`] 在扫描循环与单素材事务边界轮询观察；协调器确认返回时
+/// 才进入 stopped。
+#[derive(Debug)]
+pub struct ImportRun {
+    id: ImportTaskId,
+    concurrency_key: String,
+    state: AtomicU8,
+}
+
+impl ImportRun {
+    pub fn id(&self) -> &ImportTaskId {
+        &self.id
+    }
+
+    pub fn concurrency_key(&self) -> &str {
+        &self.concurrency_key
+    }
+
+    pub fn state(&self) -> ImportRunState {
+        ImportRunState::from_u8(self.state.load(Ordering::SeqCst))
+    }
+
+    /// 提交停止请求。幂等；对已经确认结束的任务无效果。
+    pub fn request_stop(&self) {
+        // 只从 Running 推进：已确认结束的任务不得被拉回 stopping。
+        let _ = self.state.compare_exchange(
+            ImportRunState::Running as u8,
+            ImportRunState::Stopping as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    fn should_cancel(&self) -> bool {
+        self.state() != ImportRunState::Running
+    }
+
+    fn confirm_stopped(&self) {
+        self.state.store(ImportRunState::Stopped as u8, Ordering::SeqCst);
+    }
+}
+
+/// 库级导入运行注册表：同一时刻一座库最多一个进行中的导入（设计第十条）。
+///
+/// 生产环境由 Tauri 应用状态持有一份；停止命令经 [`ImportRuns::lookup`] 按并发键
+/// 定位运行中的任务提交停止。已确认结束的残留条目在下一次 begin 时被替换，
+/// 不需要显式清理。
+#[derive(Default)]
+pub struct ImportRuns {
+    active: Mutex<HashMap<String, Arc<ImportRun>>>,
+}
+
+impl ImportRuns {
+    pub fn new() -> Self {
+        Self {
+            active: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 占用该库的导入槽位。已有未结束的任务时报 `import.already_running`。
+    pub fn begin(&self, library: &Library) -> Result<Arc<ImportRun>> {
+        let key = concurrency_key_of(library);
+        let mut active = lock_runs(&self.active);
+        if let Some(existing) = active.get(&key) {
+            if existing.state() != ImportRunState::Stopped {
+                return Err(AppError::detailed(
+                    Code::ImportAlreadyRunning,
+                    format!("库已有进行中的导入任务：{key}"),
+                ));
+            }
+        }
+        let run = Arc::new(ImportRun {
+            id: ImportTaskId::generate(),
+            concurrency_key: key.clone(),
+            state: AtomicU8::new(ImportRunState::Running as u8),
+        });
+        active.insert(key, run.clone());
+        Ok(run)
+    }
+
+    /// 按并发键查找任务，供停止命令定位。已确认结束的任务也会被找到；
+    /// 是否还能停止由其状态决定。
+    pub fn lookup(&self, concurrency_key: &str) -> Option<Arc<ImportRun>> {
+        lock_runs(&self.active).get(concurrency_key).cloned()
+    }
+}
+
+/// 锁中毒只可能来自持锁线程 panic；注册表操作本身不 panic，直接取回内层数据，
+/// 不让一次历史 panic 永久堵死导入入口。
+fn lock_runs(active: &Mutex<HashMap<String, Arc<ImportRun>>>) -> std::sync::MutexGuard<'_, HashMap<String, Arc<ImportRun>>> {
+    active.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn concurrency_key_of(library: &Library) -> String {
+    format!("import@{}", library.root().display())
 }
 
 /// 计划阶段产出的单个待导文件及其已规范化的逻辑归属。
@@ -607,11 +762,31 @@ struct PlannedFile {
 /// 同一文件夹，不创建编号副本也不拒绝整批。内容重复既不复制也不移动既有素材，
 /// 作为独立结果呈现在 [`SourceImportReport::duplicates`] 里。
 ///
+/// 停止语义：`run` 是生产通路的停止信号——扫描阶段逐目录项尽快观察，处理阶段
+/// 只在单素材事务边界观察；已成功素材保留，当前素材完整成功或完整回滚，后续项
+/// 计入 [`SourceImportReport::pending_count`] 而不是失败。协调器返回（无论成败）
+/// 即后端确认，任务进入 stopped。
+///
 /// 部分成功是常态：单个素材失败只影响自己，报告覆盖全部输入。
 pub fn import_sources(
     lib: &Library,
     request: &ImportRequest,
     tags: &[String],
+    run: &ImportRun,
+    observer: &mut dyn ImportObserver,
+) -> Result<SourceImportReport> {
+    let result = import_sources_inner(lib, request, tags, run, observer);
+    // 无论正常结束还是整体出错（例如目标文件夹非法），协调器返回即后端确认：
+    // 槽位必须释放，状态不得永远悬在 running/stopping。
+    run.confirm_stopped();
+    result
+}
+
+fn import_sources_inner(
+    lib: &Library,
+    request: &ImportRequest,
+    tags: &[String],
+    run: &ImportRun,
     observer: &mut dyn ImportObserver,
 ) -> Result<SourceImportReport> {
     let base = request
@@ -620,7 +795,20 @@ pub fn import_sources(
         .map(normalize_folder_path)
         .transpose()?;
 
-    let (planned, skipped_non_images, failed) = plan_sources(&request.sources, &base)?;
+    let (planned, skipped_non_images, failed) = plan_sources(&request.sources, &base, run)?;
+
+    // 扫描阶段观察到停止：不建文件夹、不写任何素材。已发现的计划内文件全部计为
+    // 未处理——它们确实一个都没被碰过。
+    if run.should_cancel() {
+        return Ok(SourceImportReport {
+            imported: Vec::new(),
+            duplicates: Vec::new(),
+            failed,
+            skipped_non_images,
+            pending_count: planned.len(),
+        });
+    }
+
     ensure_folders(lib, planned.iter().filter_map(|p| p.folder.as_deref()))?;
 
     let total = planned.len();
@@ -629,27 +817,27 @@ pub fn import_sources(
         duplicates: Vec::new(),
         failed,
         skipped_non_images,
+        pending_count: 0,
     };
-    let mut cancelled = false;
+    let mut stopping = false;
 
     for (i, file) in planned.iter().enumerate() {
-        if cancelled || observer.should_cancel() {
-            cancelled = true;
-            report
-                .failed
-                .push(failure(&file.source, AppError::new(Code::ImportCancelled)));
+        if stopping || run.should_cancel() || observer.should_cancel() {
+            stopping = true;
+            report.pending_count += 1;
             continue;
         }
         observer.on_progress(i, total, &file.source);
-        match import_planned(lib, file, tags, observer) {
+        match import_planned(lib, file, tags, run, observer) {
             Ok(PlannedOutcome::Imported(sidecar)) => report.imported.push(*sidecar),
             Ok(PlannedOutcome::Duplicate(duplicate)) => report.duplicates.push(duplicate),
-            Err(e) => {
-                if e.code == Code::ImportCancelled {
-                    cancelled = true;
-                }
-                report.failed.push(failure(&file.source, e));
+            // 素材处理途中观察到取消：materialize 已把本项完整回滚，计未处理
+            // 而不是失败——它既没有入库也没有留下痕迹。
+            Err(e) if e.code == Code::ImportCancelled => {
+                stopping = true;
+                report.pending_count += 1;
             }
+            Err(e) => report.failed.push(failure(&file.source, e)),
         }
     }
     observer.on_progress(total, total, Path::new(""));
@@ -657,22 +845,26 @@ pub fn import_sources(
 }
 
 /// 把来源集合展开为带逻辑归属的计划。目录不可读等计划期问题记入失败列表，
-/// 不拖垮其余来源。
+/// 不拖垮其余来源。每个来源之间观察停止请求——扫描必须尽快停下。
 fn plan_sources(
     sources: &[ImportSource],
     base: &Option<String>,
+    run: &ImportRun,
 ) -> Result<(Vec<PlannedFile>, usize, Vec<ImportFailure>)> {
     let mut planned = Vec::new();
     let mut skipped = 0usize;
     let mut failed = Vec::new();
     for source in sources {
+        if run.should_cancel() {
+            break;
+        }
         match source {
             ImportSource::File(path) => planned.push(PlannedFile {
                 source: path.clone(),
                 folder: base.clone(),
             }),
             ImportSource::Directory(root) => {
-                collect_directory(root, base, &mut planned, &mut skipped, &mut failed);
+                collect_directory(root, base, run, &mut planned, &mut skipped, &mut failed);
             }
         }
     }
@@ -690,6 +882,7 @@ fn plan_sources(
 fn collect_directory(
     root: &Path,
     base: &Option<String>,
+    run: &ImportRun,
     planned: &mut Vec<PlannedFile>,
     skipped: &mut usize,
     failed: &mut Vec<ImportFailure>,
@@ -708,12 +901,13 @@ fn collect_directory(
         Some(base) => format!("{base}/{name}"),
         None => name,
     };
-    walk_directory(root, &prefix, planned, skipped, failed);
+    walk_directory(root, &prefix, run, planned, skipped, failed);
 }
 
 fn walk_directory(
     dir: &Path,
     logical_prefix: &str,
+    run: &ImportRun,
     planned: &mut Vec<PlannedFile>,
     skipped: &mut usize,
     failed: &mut Vec<ImportFailure>,
@@ -732,6 +926,11 @@ fn walk_directory(
         }
     };
     for entry in entries {
+        // 扫描阶段在每个目录项之间观察停止请求（设计第十条"扫描阶段尽快观察"）：
+        // 停止即整棵剩余子树都不再展开。
+        if run.should_cancel() {
+            return;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
@@ -764,6 +963,7 @@ fn walk_directory(
             walk_directory(
                 &path,
                 &format!("{logical_prefix}/{name}"),
+                run,
                 planned,
                 skipped,
                 failed,
@@ -813,15 +1013,17 @@ fn ensure_folders<'a>(lib: &Library, wanted: impl Iterator<Item = &'a str>) -> R
 
 /// 处理单个计划文件。
 ///
-/// 与旧入口唯一的语义差异在查重命中处：返回 [`PlannedOutcome::Duplicate`] 而不是
-/// 报错——落盘步骤、回滚不变式与取消边界完全一致。
+/// 与旧入口唯一的语义差异在两处：查重命中返回 [`PlannedOutcome::Duplicate`] 而不是
+/// 报错；停止信号以 `run` 为生产通路、观察者通道保留为测试与注入接缝——落盘步骤、
+/// 回滚不变式与取消边界完全一致。
 fn import_planned(
     lib: &Library,
     file: &PlannedFile,
     tags: &[String],
+    run: &ImportRun,
     observer: &mut dyn ImportObserver,
 ) -> Result<PlannedOutcome> {
-    if observer.should_cancel() {
+    if run.should_cancel() || observer.should_cancel() {
         return Err(AppError::new(Code::ImportCancelled));
     }
     let mut created = Created::new();
