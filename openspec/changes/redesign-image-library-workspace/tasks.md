@@ -35,7 +35,7 @@
 
 ## 5. Windows 剪贴板与出站能力
 
-- [ ] 5.1 按任务 1.1 的选型实现 `ClipboardPort` 生产 adapter 与内存 adapter，并用 contract tests 验证文件列表优先、位图与纯文本分流
+- [x] 5.1 按任务 1.1 的选型实现 `ClipboardPort` 生产 adapter 与内存 adapter，并用 contract tests 验证文件列表优先、位图与纯文本分流
 - [ ] 5.2 先为资源管理器文件/目录粘贴、Rust 位图 PNG 编码和文本编辑控件不认领 `Ctrl+V` 编写失败测试
 - [ ] 5.3 实现剪贴板导入 command、窗口快捷键认领与权限配置，确保前端不接收像素缓冲
 - [ ] 5.4 先为导出原图、显示文件名、跳过/覆盖/自动编号冲突计划、逐项失败和安全停止编写失败测试

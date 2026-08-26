@@ -19,6 +19,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "import.duplicate_in_library": "库中已有内容完全相同的素材，未重复入库。",
   "import.duplicate_in_trash": "回收站中已有内容完全相同的素材，未重复入库。",
   "import.cancelled": "导入被中断，该素材未入库。",
+  "import.already_running": "已有一个导入任务正在进行。同一时间每个库只能运行一个导入任务，可等待其完成或先停止它。",
 
   // trash 域
   "trash.delete_failed": "把素材移入库内回收站失败。",
@@ -79,4 +80,10 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "migration.resolution_invalid": "文件夹迁移选择无效。每个多归属素材必须且只能选择一个原文件夹。",
   "migration.plan_stale": "迁移计划生成后库内容发生了变化。请重新扫描并处理新的冲突列表。",
   "migration.staging_failed": "写入新格式暂存区失败，库内文件未被改动。请确认磁盘可写、空间充足后重试。",
+
+  // clipboard 域
+  "clipboard.busy": "系统剪贴板暂时被其他程序占用，无法读取。请稍后重试。",
+  "clipboard.read_failed": "读取剪贴板内容失败。",
+  "clipboard.image_invalid": "剪贴板里的图片数据不完整或形状异常，无法导入。",
+  "clipboard.image_too_large": "剪贴板里的图片超出本应用支持的像素上限，未导入。",
 };

@@ -4,6 +4,10 @@
 //! 窗口、插件与 command 注册在这里，业务判断在 `vistash-core`。
 
 pub mod commands;
+// Windows 剪贴板生产 adapter（任务 5.1）：本项目 Windows 优先，模块内的
+// Win32 调用不需要跨平台替身；非 Windows 目标编译时整个模块缺席。
+#[cfg(target_os = "windows")]
+pub mod windows_clipboard;
 
 use std::sync::Mutex;
 use tauri::Manager;

@@ -15,6 +15,8 @@ pub enum Domain {
     Library,
     Prompt,
     Migration,
+    /// Windows 剪贴板读取与位图校验（设计第十一条）。
+    Clipboard,
     Observe,
     Compile,
 }
@@ -28,6 +30,7 @@ impl Domain {
             Domain::Library => "library",
             Domain::Prompt => "prompt",
             Domain::Migration => "migration",
+            Domain::Clipboard => "clipboard",
             Domain::Observe => "observe",
             Domain::Compile => "compile",
         }
@@ -119,6 +122,16 @@ pub enum Code {
     MigrationPlanStale,
     /// v2→v3 提交的暂存写入失败。此时权威字节尚未改动，工作目录会被整体撤掉。
     MigrationStagingFailed,
+    // clipboard 域：Windows 剪贴板端口（设计第十一条）
+    /// 打开系统剪贴板失败，通常是其他进程正在独占。必须如实上抛，
+    /// 不得冒充"剪贴板为空"，否则界面会把粘贴无效果误报成没有内容。
+    ClipboardBusy,
+    /// 剪贴板已打开但读取内容失败（取数据句柄或锁定全局内存失败）。
+    ClipboardReadFailed,
+    /// 位图像素缓冲形状非法：零尺寸或 RGBA 长度与宽高不符。
+    ClipboardImageInvalid,
+    /// 位图超出允许的最大像素数或宽高相乘溢出。
+    ClipboardImageTooLarge,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -183,6 +196,10 @@ pub const ALL_CODES: &[Code] = &[
     Code::MigrationResolutionInvalid,
     Code::MigrationPlanStale,
     Code::MigrationStagingFailed,
+    Code::ClipboardBusy,
+    Code::ClipboardReadFailed,
+    Code::ClipboardImageInvalid,
+    Code::ClipboardImageTooLarge,
 ];
 
 impl Code {
@@ -249,6 +266,9 @@ impl Code {
             | MigrationResolutionInvalid
             | MigrationPlanStale
             | MigrationStagingFailed => Domain::Migration,
+            ClipboardBusy | ClipboardReadFailed | ClipboardImageInvalid | ClipboardImageTooLarge => {
+                Domain::Clipboard
+            }
         }
     }
 
@@ -315,6 +335,10 @@ impl Code {
             MigrationResolutionInvalid => "migration.resolution_invalid",
             MigrationPlanStale => "migration.plan_stale",
             MigrationStagingFailed => "migration.staging_failed",
+            ClipboardBusy => "clipboard.busy",
+            ClipboardReadFailed => "clipboard.read_failed",
+            ClipboardImageInvalid => "clipboard.image_invalid",
+            ClipboardImageTooLarge => "clipboard.image_too_large",
         }
     }
 
@@ -441,5 +465,31 @@ mod tests {
             .filter(|c| c.domain() == Domain::ColorCard)
             .count();
         assert_eq!(n, 3, "色卡错误码数量与规格不符");
+    }
+
+    #[test]
+    fn clipboard_domain_has_exactly_four_codes() {
+        // 设计第十一条冻结的四个剪贴板失败：busy 是打开系统剪贴板被占用（调研
+        // 明确禁止冒充空剪贴板）；read_failed 是已打开但读取内容失败；
+        // image_invalid 与 image_too_large 分别对应位图形状非法与超出像素上限。
+        // 数量变化必须是有意的，因此在这里锁死。
+        let n = ALL_CODES
+            .iter()
+            .filter(|c| c.domain() == Domain::Clipboard)
+            .count();
+        assert_eq!(n, 4, "剪贴板错误码数量与规格不符");
+        assert_eq!(Code::parse("clipboard.busy"), Some(Code::ClipboardBusy));
+        assert_eq!(
+            Code::parse("clipboard.read_failed"),
+            Some(Code::ClipboardReadFailed)
+        );
+        assert_eq!(
+            Code::parse("clipboard.image_invalid"),
+            Some(Code::ClipboardImageInvalid)
+        );
+        assert_eq!(
+            Code::parse("clipboard.image_too_large"),
+            Some(Code::ClipboardImageTooLarge)
+        );
     }
 }
