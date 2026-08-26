@@ -9,6 +9,7 @@ import {
   batchMoveAssetsToFolder,
   batchSetPromptFavorite,
   catalogSnapshot,
+  copyAssetToClipboard,
   createFolder,
   createPrompt,
   createPromptFolder,
@@ -17,6 +18,7 @@ import {
   deletePrompt,
   deletePromptFolder,
   exportAssets,
+  openWithDefaultApp,
   globalSearch,
   imageDetail,
   importAndLink,
@@ -266,6 +268,31 @@ test("exportAssets 使用固定 command、参数面与类型化冲突策略", as
     total: 2,
     current_filename: "风景.png",
   });
+});
+
+test("copyAssetToClipboard 与 openWithDefaultApp 是单哈希窄命令", async () => {
+  // 任务 5.6：复制图像与默认程序打开都只允许单张——"多选不合成"由参数面
+  // 在结构上锁死：入参只有 hash 一个键，不存在数组形状的入口；多选出站
+  // 只能走 export_assets 的批量通路。
+  const seen: Record<string, Record<string, unknown>> = {};
+  mockIPC((command, payload) => {
+    if (!isRecord(payload)) {
+      throw new TypeError(`${command} 的 IPC 参数不是对象`);
+    }
+    if (Object.keys(payload).length !== 1 || !("hash" in payload)) {
+      throw new TypeError(`${command} 的参数面超出约定（只允许单个 hash）`);
+    }
+    seen[command] = payload;
+    return null;
+  });
+
+  const hash = "b".repeat(64);
+  // 后端返回 Rust 的 unit，经 JSON 序列化到达前端是 null。
+  await expect(copyAssetToClipboard(hash)).resolves.toBeNull();
+  await expect(openWithDefaultApp(hash)).resolves.toBeNull();
+
+  expect(seen.copy_asset_to_clipboard).toEqual({ hash });
+  expect(seen.open_with_default_app).toEqual({ hash });
 });
 
 test("素材编目 IPC 使用固定 command 和参数名称", async () => {

@@ -24,6 +24,7 @@ use vistash_core::catalog::{
 };
 use vistash_core::clipboard::{self, ClipboardPayload};
 use vistash_core::error::{AppError, Code, Result};
+use vistash_core::external_open::ExternalOpenManager;
 use vistash_core::hashing::ContentHash;
 use vistash_core::import::{self, ImportFailure, ImportObserver, ImportRuns};
 use vistash_core::index::{AssetRow, Index};
@@ -56,6 +57,9 @@ pub struct AppState {
     recorded_path: Option<String>,
     /// 启动时恢复上次的库失败的原因。首次运行时为 `None`。
     restore_problem: Option<AppError>,
+    /// 默认程序打开的只读副本管理器（任务 5.6）。会话 ID 每次运行生成一次，
+    /// 由装配层构造后传入；清理逻辑凭它识别"当前会话"并永不自删。
+    external_open: ExternalOpenManager,
 }
 
 impl AppState {
@@ -64,13 +68,18 @@ impl AppState {
     /// 恢复走的是 [`Library::open`] 而不是 `open_or_create`：记录的路径若已被移走或改名，
     /// 必须报告并回到选择界面，**绝不能建出一个新的空库**——那会让使用者面对空库却以为
     /// 素材全丢了。规格把这条列为明令禁止。
-    pub fn restore(settings_path: PathBuf, layouts_dir: PathBuf) -> Self {
+    pub fn restore(
+        settings_path: PathBuf,
+        layouts_dir: PathBuf,
+        external_open: ExternalOpenManager,
+    ) -> Self {
         let mut state = Self {
             settings_path,
             layouts_dir,
             opened: None,
             recorded_path: None,
             restore_problem: None,
+            external_open,
         };
         let recorded = match AppSettings::read(&state.settings_path) {
             Ok(s) => s.last_library_path,
@@ -945,6 +954,109 @@ fn export_assets_blocking(
     vistash_core::export::export_assets(&library, &parsed, &request, &run, &mut observer)
 }
 
+/// 单图复制位图到系统剪贴板（任务 5.6，设计第十二条）。
+///
+/// 参数是单个哈希：复制图像只允许单张，多选不合成、多选出站一律走批量导出——
+/// 这条规则由 API 形状保证，本命令在结构上就不存在一次喂进多张图的入口。
+/// 像素全程留在 Rust 侧：核心解码原图为 RGBA 位图后经官方插件写入系统剪贴板，
+/// 前端只见成功或错误码，与导入方向同一纪律。
+#[tauri::command]
+pub async fn copy_asset_to_clipboard(
+    hash: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    let opened = current_opened(&state)?;
+    // 解码面对的是原图本体（可能上万像素）：放 blocking worker。
+    let bitmap = tauri::async_runtime::spawn_blocking(
+        move || -> Result<vistash_core::clipboard::BitmapImage> {
+            let library = lock(&opened.catalog)?.library().clone();
+            vistash_core::export::asset_bitmap(&library, &hash)
+        },
+    )
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台解码任务异常终止：{error}"),
+        )
+    })??;
+    write_bitmap_to_clipboard(&app, bitmap)
+}
+
+/// 把已解码位图写入系统剪贴板。Windows 经官方插件的设备无关位图写入；
+/// 非 Windows 目标没有 Windows 优先之外的生产承诺，返回稳定的写入失败。
+#[cfg(target_os = "windows")]
+fn write_bitmap_to_clipboard(
+    app: &tauri::AppHandle,
+    bitmap: vistash_core::clipboard::BitmapImage,
+) -> Result<()> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let (width, height) = (bitmap.width() as u32, bitmap.height() as u32);
+    let image = tauri::image::Image::new_owned(bitmap.into_rgba(), width, height);
+    app.clipboard().write_image(&image).map_err(|e| {
+        AppError::detailed(
+            Code::ClipboardWriteFailed,
+            format!("写入系统剪贴板失败：{e}"),
+        )
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn write_bitmap_to_clipboard(
+    _app: &tauri::AppHandle,
+    _bitmap: vistash_core::clipboard::BitmapImage,
+) -> Result<()> {
+    Err(AppError::detailed(
+        Code::ClipboardWriteFailed,
+        "当前平台尚未实现剪贴板图像复制",
+    ))
+}
+
+/// 用系统默认程序打开素材原图（任务 5.6，调研 §4–§5 冻结的隔离模型）。
+///
+/// 绝不把库内本体路径交给外部程序：外部写入与删除不可控，而本体是权威对象。
+/// 流程是把原始字节复制为应用缓存侧的只读临时副本，**只把副本路径**交给系统打开；
+/// 同一素材复用同一份不可变副本，重复打开不产生副本堆积。参数同样是单哈希，
+/// 多选打开不在规格内。
+#[tauri::command]
+pub async fn open_with_default_app(
+    hash: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    let opened = current_opened(&state)?;
+    let manager = {
+        let guard = lock(&state)?;
+        guard.external_open.clone()
+    };
+    // 复制本体字节属于磁盘 IO：放 blocking worker。
+    let path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf> {
+        let library = lock(&opened.catalog)?.library().clone();
+        manager.prepare(&library, &hash)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台副本准备任务异常终止：{error}"),
+        )
+    })??;
+
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| {
+            AppError::detailed(
+                Code::ExternalOpenFailed,
+                format!("用默认程序打开 {} 失败：{e}", path.display()),
+            )
+        })
+}
+
 /// 导入任务的可见状态。只有后端确认后才是 `stopped`——前端仅停止等待或隐藏进度
 /// MUST NOT 冒充任务已停止（asset-transfer 规格）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1655,6 +1767,18 @@ pub async fn write_layout(
 mod tests {
     use vistash_core::error::ALL_CODES;
 
+    /// 为测试构造一个指向临时目录的只读副本管理器（任务 5.6）。
+    ///
+    /// 会话 ID 用真实生成路径：状态恢复不关心它，但构造签名要求有一份。
+    fn external_manager_for(
+        workspace: &std::path::Path,
+    ) -> vistash_core::external_open::ExternalOpenManager {
+        vistash_core::external_open::ExternalOpenManager::new(
+            workspace.join("cache").join("external-open").join("v1"),
+            vistash_core::external_open::ExternalOpenManager::new_session_id(),
+        )
+    }
+
     /// 界面层不得读取像素。
     ///
     /// `app-shell` 规格禁止前端用 `Canvas`、`OffscreenCanvas` 或 `ImageData` 读取像素做缩放、
@@ -1830,7 +1954,11 @@ mod tests {
         };
         settings.write_atomic(&settings_path).expect("写入设置");
 
-        let state = super::AppState::restore(settings_path, workspace.path().join("layouts"));
+        let state = super::AppState::restore(
+            settings_path,
+            workspace.path().join("layouts"),
+            external_manager_for(workspace.path()),
+        );
         let status = super::status_of(&state).expect("状态应可读");
 
         let meta_text =
@@ -1850,6 +1978,7 @@ mod tests {
         let blank = super::AppState::restore(
             workspace.path().join("不存在的设置.json"),
             workspace.path().join("layouts"),
+            external_manager_for(workspace.path()),
         );
         let none_status = super::status_of(&blank).expect("空状态应可读");
         assert!(

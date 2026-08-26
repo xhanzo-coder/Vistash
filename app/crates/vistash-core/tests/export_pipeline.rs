@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
-use vistash_core::error::AppError;
+use vistash_core::error::{AppError, Code};
 use vistash_core::export::{export_assets, plan_export, ConflictPolicy, ExportRequest};
 use vistash_core::hashing::ContentHash;
 use vistash_core::import::{
@@ -474,4 +474,29 @@ fn exporting_into_a_missing_directory_is_a_stable_error() {
         err.detail.as_deref().is_some_and(|d| !d.is_empty()),
         "错误必须带可读说明"
     );
+}
+
+// —— 组七：单图复制位图（任务 5.6）——
+//
+// 规格："复制图像"只允许单张，多选出站走批量导出；位图由后端从权威本体解码，
+// 像素全程不经过前端。API 只收一个哈希——结构上不存在"多选合成"的入口。
+
+#[test]
+fn copy_image_decodes_the_authoritative_body_to_pixels() {
+    let f = fixture();
+    let bitmap = vistash_core::export::asset_bitmap(&f.library, &f.png_hash)
+        .expect("库内本体应能解码为位图");
+    assert_eq!(bitmap.width(), 16);
+    assert_eq!(bitmap.height(), 16);
+    // 样本图是纯色 [255,200,0]：首像素 RGBA 必须一致。
+    assert_eq!(&bitmap.rgba()[0..4], &[255, 200, 0, 255]);
+}
+
+#[test]
+fn copy_image_reports_a_missing_asset_stably() {
+    let f = fixture();
+    let orphan = ContentHash::of_bytes(b"copy-image-orphan");
+    let err = vistash_core::export::asset_bitmap(&f.library, &orphan)
+        .expect_err("孤儿哈希必须得到稳定错误");
+    assert_eq!(err.code, Code::ExportAssetMissing);
 }

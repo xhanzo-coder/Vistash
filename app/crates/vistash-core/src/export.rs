@@ -112,7 +112,10 @@ fn ensure_target_dir(target: &Path) -> Result<()> {
 ///
 /// 回收站中的素材在正式区没有侧车，同样落到这里报 `export.asset_missing`——
 /// 回收站素材不可导出是保守且正确的：它们正等待使用者决定去留。
-fn resolve_asset(lib: &Library, hash: &ContentHash) -> Result<(AssetSidecarV3, PathBuf)> {
+pub(crate) fn resolve_asset(
+    lib: &Library,
+    hash: &ContentHash,
+) -> Result<(AssetSidecarV3, PathBuf)> {
     let sidecar_path = lib.sidecar_path(hash);
     let sidecar = AssetSidecarV3::read(&sidecar_path).map_err(|e| {
         AppError::detailed(
@@ -132,7 +135,7 @@ fn resolve_asset(lib: &Library, hash: &ContentHash) -> Result<(AssetSidecarV3, P
 
 /// 完整导出名。侧车的 `display_filename` 本身就是含真实扩展名的完整文件名
 /// （任务 2.2 的领域不变量），直接使用即可，不得再拼一次扩展名。
-fn composed_name(sidecar: &AssetSidecarV3) -> String {
+pub(crate) fn composed_name(sidecar: &AssetSidecarV3) -> String {
     sidecar.display_filename.as_str().to_owned()
 }
 
@@ -337,4 +340,21 @@ impl ImportRuns {
     pub fn begin_export(&self, library: &Library) -> Result<Arc<ImportRun>> {
         self.begin(library)
     }
+}
+
+/// 单图复制位图（任务 5.6）：把库内本体解码为 RGBA 位图，交由调用方写入系统
+/// 剪贴板（Windows 上是设备无关位图格式）。
+///
+/// 参数是单个哈希——规格冻结的"复制图像只允许单张，多选不合成、多选出站走
+/// 批量导出"由 API 形状保证：这里在结构上就不存在一次喂进多张图的入口。
+/// 解码错误沿用媒体域的错误码，如实反映失败原因而不是笼统的"复制失败"。
+pub fn asset_bitmap(lib: &Library, hash: &ContentHash) -> Result<crate::clipboard::BitmapImage> {
+    let (_, body) = resolve_asset(lib, hash)?;
+    let decoded = crate::media::decode(&body)?;
+    let rgba = decoded.image.to_rgba8();
+    crate::clipboard::BitmapImage::new(
+        rgba.width() as usize,
+        rgba.height() as usize,
+        rgba.into_raw(),
+    )
 }

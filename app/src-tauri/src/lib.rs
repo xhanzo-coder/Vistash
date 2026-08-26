@@ -23,6 +23,10 @@ pub fn run() {
         // 不给 WebView 添加任何剪贴板 ACL 权限，前端全程不见像素；窗口级
         // Ctrl+V 由 paste_import 命令在后端完成分流裁决。
         .plugin(tauri_plugin_clipboard_manager::init())
+        // 默认程序打开（任务 5.6）：只在 Rust 侧经 OpenerExt 打开后端创建并
+        // 校验过的只读副本路径，不给 WebView 开任何 opener 权限——前端拿到的
+        // 只是"按素材哈希打开"的窄命令（调研 §3.3）。
+        .plugin(tauri_plugin_opener::init())
         // 库级导入运行注册表（设计第十条）：begin 在 import_sources 内占用槽位，
         // import_stop 经它按并发键定位运行中的任务。命令层只克隆 Arc 句柄。
         .manage(std::sync::Arc::new(vistash_core::import::ImportRuns::new()))
@@ -33,9 +37,19 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let settings_path = config_dir.join("settings.json");
             let layouts_dir = config_dir.join("layouts");
+            // 只读临时副本根（任务 5.6，调研 §4–§5）：位于应用缓存侧，与库根、
+            // 内容哈希树和导出目标结构性隔离。会话 ID 本次运行生成一次；启动时
+            // 顺手清理过期会话——被占用的留待下次启动重试。清理是自愈动作而非
+            // 前置条件：失败不阻塞启动，报告暂无界面呈现。
+            let external_open = vistash_core::external_open::ExternalOpenManager::new(
+                app.path().app_cache_dir()?.join("external-open").join("v1"),
+                vistash_core::external_open::ExternalOpenManager::new_session_id(),
+            );
+            let _report = external_open.cleanup(chrono::Utc::now());
             app.manage(Mutex::new(commands::AppState::restore(
                 settings_path,
                 layouts_dir,
+                external_open,
             )));
             Ok(())
         })
@@ -59,6 +73,8 @@ pub fn run() {
             commands::import_stop,
             commands::paste_import,
             commands::export_assets,
+            commands::copy_asset_to_clipboard,
+            commands::open_with_default_app,
             commands::asset_thumbnail,
             commands::asset_original,
             commands::all_error_codes,

@@ -86,4 +86,13 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "clipboard.read_failed": "读取剪贴板内容失败。",
   "clipboard.image_invalid": "剪贴板里的图片数据不完整或形状异常，无法导入。",
   "clipboard.image_too_large": "剪贴板里的图片超出本应用支持的像素上限，未导入。",
+  "clipboard.write_failed": "把图片复制到系统剪贴板失败。库内素材未受影响，可重试。",
+
+  // export 域：原图导出（设计第十二条）
+  "export.target_invalid": "导出目标不是可用的文件夹。导出只写入你明确选择的既有文件夹，请重新选择目标位置。",
+  "export.asset_missing": "找不到这张图的原始数据。列表可能已过期——请刷新后重试；其余素材不受影响。",
+  "export.write_failed": "把原图写入目标文件夹失败。已写入的其他文件保持不变，可重试失败的条目。",
+
+  // external 域：默认程序打开（任务 5.6）
+  "external.open_failed": "用系统默认程序打开这张图失败。库内素材未受影响；请检查该图片类型的默认打开方式设置后重试。",
 };

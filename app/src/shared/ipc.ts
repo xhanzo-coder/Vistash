@@ -222,6 +222,27 @@ export function exportAssets(
 }
 
 /**
+ * 把一张素材的原始位图复制到系统剪贴板（任务 5.6，设计第十二条）。
+ *
+ * 参数刻意是单个哈希而不是数组：复制图像只允许单张，多选不合成、多选出站
+ * 走批量导出——这条规则由 API 形状在结构上锁死。像素全程留在后端，前端
+ * 只见成功或错误码。
+ */
+export function copyAssetToClipboard(hash: string): Promise<void> {
+  return call<void>("copy_asset_to_clipboard", { hash });
+}
+
+/**
+ * 用系统默认程序打开素材原图（任务 5.6）。
+ *
+ * 后端把原始字节复制为应用缓存侧的只读临时副本，只把副本路径交给系统打开；
+ * 库内本体路径绝不离开 Rust 侧。同样只接受单个哈希。
+ */
+export function openWithDefaultApp(hash: string): Promise<void> {
+  return call<void>("open_with_default_app", { hash });
+}
+
+/**
  * 把二进制 IPC 的返回值归一成 ArrayBuffer。
  *
  * 任务 11.5 的 release 验收发现：开发模式经 HTTP 传输时 `tauri::ipc::Response` 到达前端

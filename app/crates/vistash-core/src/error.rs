@@ -15,9 +15,11 @@ pub enum Domain {
     Library,
     Prompt,
     Migration,
-    /// Windows 剪贴板读取与位图校验（设计第十一条）。
+    /// Windows 剪贴板读取、写入与位图校验（设计第十一条；写入属任务 5.6）。
     Clipboard,
     Export,
+    /// 默认程序打开等外部集成出站（任务 5.6，设计第十二条）。
+    External,
     Observe,
     Compile,
 }
@@ -33,6 +35,7 @@ impl Domain {
             Domain::Migration => "migration",
             Domain::Clipboard => "clipboard",
             Domain::Export => "export",
+            Domain::External => "external",
             Domain::Observe => "observe",
             Domain::Compile => "compile",
         }
@@ -134,6 +137,9 @@ pub enum Code {
     ClipboardImageInvalid,
     /// 位图超出允许的最大像素数或宽高相乘溢出。
     ClipboardImageTooLarge,
+    /// 把位图写入系统剪贴板失败（任务 5.6 的复制图像）。与读取侧的
+    /// `clipboard.read_failed` 分开：写失败时库内数据无损，重试即可。
+    ClipboardWriteFailed,
     // export 域：原图导出（设计第十二条）
     /// 导出目标不是目录或不可用。导出只写入使用者明确选择的既有目录，
     /// 不代建目录树：写错位置比少写一个目录更难收拾。
@@ -143,6 +149,10 @@ pub enum Code {
     ExportAssetMissing,
     /// 把本体复制到导出目标失败。目标侧的 IO 问题：磁盘满、权限、路径过长等。
     ExportWriteFailed,
+    // external 域：默认程序打开（任务 5.6，设计第十二条）
+    /// 把只读临时副本交给系统默认程序启动失败。副本已就绪且库内数据无损；
+    /// 常见原因是该扩展名的文件关联被改动或启动被系统策略阻止。
+    ExternalOpenFailed,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -211,9 +221,11 @@ pub const ALL_CODES: &[Code] = &[
     Code::ClipboardReadFailed,
     Code::ClipboardImageInvalid,
     Code::ClipboardImageTooLarge,
+    Code::ClipboardWriteFailed,
     Code::ExportTargetInvalid,
     Code::ExportAssetMissing,
     Code::ExportWriteFailed,
+    Code::ExternalOpenFailed,
 ];
 
 impl Code {
@@ -280,10 +292,13 @@ impl Code {
             | MigrationResolutionInvalid
             | MigrationPlanStale
             | MigrationStagingFailed => Domain::Migration,
-            ClipboardBusy | ClipboardReadFailed | ClipboardImageInvalid | ClipboardImageTooLarge => {
-                Domain::Clipboard
-            }
+            ClipboardBusy
+            | ClipboardReadFailed
+            | ClipboardImageInvalid
+            | ClipboardImageTooLarge
+            | ClipboardWriteFailed => Domain::Clipboard,
             ExportTargetInvalid | ExportAssetMissing | ExportWriteFailed => Domain::Export,
+            ExternalOpenFailed => Domain::External,
         }
     }
 
@@ -354,9 +369,11 @@ impl Code {
             ClipboardReadFailed => "clipboard.read_failed",
             ClipboardImageInvalid => "clipboard.image_invalid",
             ClipboardImageTooLarge => "clipboard.image_too_large",
+            ClipboardWriteFailed => "clipboard.write_failed",
             ExportTargetInvalid => "export.target_invalid",
             ExportAssetMissing => "export.asset_missing",
             ExportWriteFailed => "export.write_failed",
+            ExternalOpenFailed => "external.open_failed",
         }
     }
 
@@ -486,16 +503,17 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_domain_has_exactly_four_codes() {
-        // 设计第十一条冻结的四个剪贴板失败：busy 是打开系统剪贴板被占用（调研
-        // 明确禁止冒充空剪贴板）；read_failed 是已打开但读取内容失败；
+    fn clipboard_domain_has_exactly_five_codes() {
+        // 设计第十一条冻结的四个剪贴板读取侧失败：busy 是打开系统剪贴板被占用
+        // （调研明确禁止冒充空剪贴板）；read_failed 是已打开但读取内容失败；
         // image_invalid 与 image_too_large 分别对应位图形状非法与超出像素上限。
+        // 任务 5.6 的复制图像新增 write_failed（写入方向），数量从四变为五。
         // 数量变化必须是有意的，因此在这里锁死。
         let n = ALL_CODES
             .iter()
             .filter(|c| c.domain() == Domain::Clipboard)
             .count();
-        assert_eq!(n, 4, "剪贴板错误码数量与规格不符");
+        assert_eq!(n, 5, "剪贴板错误码数量与规格不符");
         assert_eq!(Code::parse("clipboard.busy"), Some(Code::ClipboardBusy));
         assert_eq!(
             Code::parse("clipboard.read_failed"),
@@ -508,6 +526,25 @@ mod tests {
         assert_eq!(
             Code::parse("clipboard.image_too_large"),
             Some(Code::ClipboardImageTooLarge)
+        );
+        assert_eq!(
+            Code::parse("clipboard.write_failed"),
+            Some(Code::ClipboardWriteFailed)
+        );
+    }
+
+    #[test]
+    fn external_domain_has_exactly_one_code() {
+        // 任务 5.6：默认程序打开目前只有一个稳定失败——把只读副本交给系统
+        // 启动失败。准备副本阶段的失败沿用 library/export 域既有码，不在此重复。
+        let n = ALL_CODES
+            .iter()
+            .filter(|c| c.domain() == Domain::External)
+            .count();
+        assert_eq!(n, 1, "外部集成错误码数量与规格不符");
+        assert_eq!(
+            Code::parse("external.open_failed"),
+            Some(Code::ExternalOpenFailed)
         );
     }
 }
