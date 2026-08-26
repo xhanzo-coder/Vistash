@@ -19,7 +19,8 @@ import {
   globalSearch,
   imageDetail,
   importAndLink,
-  importPaths,
+  importSources,
+  importStop,
   linkImages,
   linkedImageStates,
   migrateLibrary,
@@ -56,6 +57,7 @@ import type {
   ImportAndLinkReport,
   ImportOutcome,
   ImportProgress,
+  ImportRunState,
   LibraryStatus,
   MigrationProgress,
   PromptAsset,
@@ -110,7 +112,7 @@ test("migrateLibrary 转交迁移进度并使用固定 command 名", async () =>
   expect(received).toHaveBeenCalledExactlyOnceWith(expected);
 });
 
-test("importPaths 把当前文件与数量进度转交给调用方", async () => {
+test("importSources 把路径、当前文件夹与数量进度转交给调用方", async () => {
   const expected: ImportProgress = {
     done: 4,
     total: 10,
@@ -118,16 +120,21 @@ test("importPaths 把当前文件与数量进度转交给调用方", async () =>
   };
   const outcome: ImportOutcome = {
     imported: 10,
-    skipped_non_images: 0,
+    skipped_non_images: 1,
+    duplicates: 2,
+    pending_count: 3,
     failures: [],
   };
 
   mockIPC((command, payload) => {
-    expect(command).toBe("import_paths");
+    expect(command).toBe("import_sources");
     if (!isRecord(payload)) {
-      throw new TypeError("import_paths 的 IPC 参数不是对象");
+      throw new TypeError("import_sources 的 IPC 参数不是对象");
     }
     const args = payload;
+    if (args.currentFolder !== "参考/构图") {
+      throw new TypeError("import_sources 缺少当前文件夹参数");
+    }
     const channel = args.onProgress;
     if (channel instanceof Channel) {
       channel.onmessage(expected);
@@ -136,8 +143,19 @@ test("importPaths 把当前文件与数量进度转交给调用方", async () =>
   });
 
   const received = vi.fn<(progress: ImportProgress) => void>();
-  await expect(importPaths(["E:\\素材"], received)).resolves.toEqual(outcome);
+  await expect(
+    importSources(["E:\\素材"], "参考/构图", received),
+  ).resolves.toEqual(outcome);
   expect(received).toHaveBeenCalledExactlyOnceWith(expected);
+});
+
+test("importStop 调用真实停止命令并转交任务状态", async () => {
+  const stopping: ImportRunState = "stopping";
+  mockIPC((command) => {
+    expect(command).toBe("import_stop");
+    return stopping;
+  });
+  await expect(importStop()).resolves.toBe(stopping);
 });
 
 test("素材编目 IPC 使用固定 command 和参数名称", async () => {

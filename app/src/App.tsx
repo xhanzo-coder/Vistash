@@ -12,7 +12,7 @@ import {
   type WorkspaceSection,
 } from "./features/workspace/WorkspaceTopBar";
 import { asAppError } from "./shared/errors";
-import { importPaths, libraryStatus, onPathsDropped } from "./shared/ipc";
+import { importSources, libraryStatus, onPathsDropped } from "./shared/ipc";
 import type {
   AppError,
   ImportOutcome,
@@ -60,7 +60,9 @@ export function App() {
       setImporting(true);
       setImportProgress(null);
       try {
-        setOutcome(await importPaths(paths, setImportProgress));
+        // 整窗口拖放暂不带当前文件夹（落点接线随任务 10.2）：后端按 null 落入
+        // 未分类。按钮与目录选择接入时传各自的具体文件夹即可复用同一协调器。
+        setOutcome(await importSources(paths, null, setImportProgress));
         setCatalogVersion((version) => version + 1);
       } catch (raw) {
         setAssetsError(asAppError(raw));
@@ -272,6 +274,8 @@ function ImportSummary({ outcome }: { outcome: ImportOutcome }) {
       <p>
         成功 {outcome.imported} 个
         {outcome.failures.length > 0 && `，失败 ${outcome.failures.length} 个`}
+        {outcome.duplicates > 0 && `，${outcome.duplicates} 个库内已有相同内容`}
+        {outcome.pending_count > 0 && `，停止后有 ${outcome.pending_count} 个未处理`}
         {outcome.skipped_non_images > 0 &&
           `。另有 ${outcome.skipped_non_images} 个非图片文件未纳入`}
       </p>

@@ -24,7 +24,7 @@ use vistash_core::catalog::{
 };
 use vistash_core::error::{AppError, Code, Result};
 use vistash_core::hashing::ContentHash;
-use vistash_core::import::{self, ImportFailure, ImportObserver, ImportOptions};
+use vistash_core::import::{self, ImportFailure, ImportObserver, ImportRuns};
 use vistash_core::index::{AssetRow, Index};
 use vistash_core::library::{Library, LibraryId};
 use vistash_core::media::MediaType;
@@ -133,11 +133,17 @@ pub struct LibraryStatus {
 }
 
 /// 一次导入的结果。
+///
+/// 数量四桶互斥齐全（asset-transfer 停止规格）：已成功、重复、失败逐项与未处理。
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportOutcome {
     pub imported: usize,
     /// 目录中被跳过的非图片文件数。
     pub skipped_non_images: usize,
+    /// 内容已在库内（或回收站）而未再次复制的来源数；既有素材保持原归属。
+    pub duplicates: usize,
+    /// 观察到停止后尚未处理的来源数；不是失败。
+    pub pending_count: usize,
     /// 逐条失败。规格要求批量操作的失败可逐条查看，不得只报总数。
     pub failures: Vec<ImportFailure>,
 }
@@ -679,51 +685,115 @@ impl ImportObserver for ChannelObserver {
     }
 }
 
-/// 导入拖入或选中的路径。目录扫描与媒体处理全部在 blocking worker 中执行。
+/// 统一导入入口（设计第十条）：按钮、拖放与目录选择都汇入同一条命令。
+///
+/// 前端只交来路径与当前工作区位置；来源分类由后端按磁盘事实裁决——拖放事件拿不到
+/// "这是目录还是文件"，而层级语义取决于它。目录扫描、查重、层级映射与停止观察全部
+/// 在核心协调器内完成。目录扫描与媒体处理全部在 blocking worker 中执行。
 #[tauri::command]
-pub async fn import_paths(
+pub async fn import_sources(
     paths: Vec<String>,
+    current_folder: Option<String>,
     on_progress: Channel<ImportProgress>,
+    runs: tauri::State<'_, std::sync::Arc<ImportRuns>>,
     state: tauri::State<'_, Shared>,
 ) -> Result<ImportOutcome> {
     let opened = current_opened(&state)?;
-    tauri::async_runtime::spawn_blocking(move || import_paths_blocking(paths, on_progress, &opened))
-        .await
-        .map_err(|error| {
-            AppError::detailed(
-                Code::LibraryIoFailed,
-                format!("后台导入任务异常终止：{error}"),
-            )
-        })?
+    let runs = std::sync::Arc::clone(runs.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        import_sources_blocking(paths, current_folder, on_progress, &runs, &opened)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台导入任务异常终止：{error}"),
+        )
+    })?
 }
 
-fn import_paths_blocking(
+fn import_sources_blocking(
     paths: Vec<String>,
+    current_folder: Option<String>,
     on_progress: Channel<ImportProgress>,
+    runs: &ImportRuns,
     opened: &Opened,
 ) -> Result<ImportOutcome> {
     let _import_guard = lock(&opened.import_gate)?;
-    let expanded =
-        import::expand_sources(&paths.into_iter().map(PathBuf::from).collect::<Vec<_>>())?;
+    let sources = paths
+        .into_iter()
+        .map(|path| {
+            let path = PathBuf::from(path);
+            if path.is_dir() {
+                import::ImportSource::Directory(path)
+            } else {
+                import::ImportSource::File(path)
+            }
+        })
+        .collect::<Vec<_>>();
+    let request = import::ImportRequest {
+        sources,
+        current_folder,
+    };
 
-    // 拖入导入不自动推测文件夹或标签；导入后由使用者在素材详情中归类。
-    let opts = ImportOptions::default();
+    let library = lock(&opened.catalog)?.library().clone();
+    let run = runs.begin(&library)?;
+    // 拖入导入不自动推测标签；导入后由使用者在素材详情中归类。
     let mut observer = ChannelObserver {
         channel: on_progress,
         disconnected: false,
     };
-    let library = lock(&opened.catalog)?.library().clone();
-    let report = import::import_many(&library, &expanded.sources, &opts, &mut observer);
+    let report = import::import_sources(&library, &request, &[], &run, &mut observer)?;
 
     // 见模块头：命令层只把核心产出的侧车送入同层索引，不重新判断导入结果。
     let mut catalog = lock(&opened.catalog)?;
     catalog.index_imported(&report.imported)?;
-
     Ok(ImportOutcome {
         imported: report.imported.len(),
-        skipped_non_images: expanded.skipped_non_images,
+        skipped_non_images: report.skipped_non_images,
+        duplicates: report.duplicates.len(),
+        pending_count: report.pending_count,
         failures: report.failed,
     })
+}
+
+/// 导入任务的可见状态。只有后端确认后才是 `stopped`——前端仅停止等待或隐藏进度
+/// MUST NOT 冒充任务已停止（asset-transfer 规格）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRunStateDto {
+    Running,
+    Stopping,
+    Stopped,
+}
+
+impl From<import::ImportRunState> for ImportRunStateDto {
+    fn from(state: import::ImportRunState) -> Self {
+        match state {
+            import::ImportRunState::Running => Self::Running,
+            import::ImportRunState::Stopping => Self::Stopping,
+            import::ImportRunState::Stopped => Self::Stopped,
+        }
+    }
+}
+
+/// 提交导入停止请求：真实的后端命令（设计第十条）。返回提交后的任务状态；
+/// 没有进行中的导入时报告 `stopped`——无事可停即已停。
+#[tauri::command]
+pub fn import_stop(
+    runs: tauri::State<'_, ImportRuns>,
+    state: tauri::State<'_, Shared>,
+) -> Result<ImportRunStateDto> {
+    let opened = current_opened(&state)?;
+    let library = lock(&opened.catalog)?.library().clone();
+    let key = import::import_concurrency_key(&library);
+    match runs.lookup(&key) {
+        Some(run) => {
+            run.request_stop();
+            Ok(run.state().into())
+        }
+        None => Ok(ImportRunStateDto::Stopped),
+    }
 }
 
 /// 把库内记录的扩展名收敛为清单内的字面量。

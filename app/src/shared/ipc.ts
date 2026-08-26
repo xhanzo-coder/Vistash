@@ -24,6 +24,7 @@ import type {
   ImportAndLinkReport,
   ImportOutcome,
   ImportProgress,
+  ImportRunState,
   LibraryStatus,
   LinkedImageState,
   MigrationProgress,
@@ -148,13 +149,32 @@ export function purgeTrash(): Promise<PurgeReport> {
   return call<PurgeReport>("purge_trash");
 }
 
-/** 导入给定的文件或目录路径，并把单次任务的进度交给调用方。 */
-export function importPaths(
+/**
+ * 统一导入入口（设计第十条）：按钮、拖放与目录选择都走这一条命令。
+ *
+ * 文件与目录路径混排即可——后端按磁盘事实分类来源，目录以所选名称为逻辑根保留
+ * 相对层级。`currentFolder` 是工作区当前所在的具体逻辑文件夹；null 表示当前在
+ * 全部、未分类或回收站位置，导入一律落入未分类。
+ */
+export function importSources(
   paths: string[],
+  currentFolder: string | null,
   onProgress: (progress: ImportProgress) => void,
 ): Promise<ImportOutcome> {
   const progress = new Channel<ImportProgress>(onProgress);
-  return call<ImportOutcome>("import_paths", { paths, onProgress: progress });
+  return call<ImportOutcome>("import_sources", {
+    paths,
+    currentFolder,
+    onProgress: progress,
+  });
+}
+
+/**
+ * 提交导入停止请求：真实的后端命令，返回提交后的任务状态。
+ * 只有后端确认后才是 stopped——前端隐藏进度不算已停止。
+ */
+export function importStop(): Promise<ImportRunState> {
+  return call<ImportRunState>("import_stop");
 }
 
 /**

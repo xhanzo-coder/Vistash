@@ -82,8 +82,15 @@ export type ImportFailure = {
 export type ImportOutcome = {
   imported: number;
   skipped_non_images: number;
+  /** 内容已在库内（或回收站）而未再次复制的来源数；既有素材保持原归属。 */
+  duplicates: number;
+  /** 观察到停止后尚未处理的来源数；不是失败。 */
+  pending_count: number;
   failures: ImportFailure[];
 };
+
+/** `commands::ImportRunStateDto`：只有后端确认后才是 stopped。 */
+export type ImportRunState = "running" | "stopping" | "stopped";
 
 /** `commands::ImportProgress` */
 export type ImportProgress = {

@@ -712,7 +712,7 @@ impl ImportRuns {
 
     /// 占用该库的导入槽位。已有未结束的任务时报 `import.already_running`。
     pub fn begin(&self, library: &Library) -> Result<Arc<ImportRun>> {
-        let key = concurrency_key_of(library);
+        let key = import_concurrency_key(library);
         let mut active = lock_runs(&self.active);
         if let Some(existing) = active.get(&key) {
             if existing.state() != ImportRunState::Stopped {
@@ -738,14 +738,18 @@ impl ImportRuns {
     }
 }
 
+/// 库级导入并发键的字面值（设计第十条）。
+///
+/// 命令层的停止入口用它从注册表定位运行中的任务——键的字面规则只有这一处，
+/// begin 与停止两端才不会各拼各的字符串。
+pub fn import_concurrency_key(library: &Library) -> String {
+    format!("import@{}", library.root().display())
+}
+
 /// 锁中毒只可能来自持锁线程 panic；注册表操作本身不 panic，直接取回内层数据，
 /// 不让一次历史 panic 永久堵死导入入口。
 fn lock_runs(active: &Mutex<HashMap<String, Arc<ImportRun>>>) -> std::sync::MutexGuard<'_, HashMap<String, Arc<ImportRun>>> {
     active.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-fn concurrency_key_of(library: &Library) -> String {
-    format!("import@{}", library.root().display())
 }
 
 /// 计划阶段产出的单个待导文件及其已规范化的逻辑归属。

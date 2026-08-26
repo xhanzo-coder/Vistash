@@ -15,6 +15,9 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 库级导入运行注册表（设计第十条）：begin 在 import_sources 内占用槽位，
+        // import_stop 经它按并发键定位运行中的任务。命令层只克隆 Arc 句柄。
+        .manage(std::sync::Arc::new(vistash_core::import::ImportRuns::new()))
         .setup(|app| {
             // 设置文件与分库布局都放在应用配置目录，不放在库目录内——理由见
             // `settings` 模块的文档。目录由平台决定，因此这段平台相关的解析留在
@@ -44,7 +47,8 @@ pub fn run() {
             commands::delete_asset,
             commands::restore_asset,
             commands::purge_trash,
-            commands::import_paths,
+            commands::import_sources,
+            commands::import_stop,
             commands::asset_thumbnail,
             commands::asset_original,
             commands::all_error_codes,
