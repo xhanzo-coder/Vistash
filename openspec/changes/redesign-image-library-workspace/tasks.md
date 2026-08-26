@@ -45,7 +45,7 @@
 ## 6. 应用服务与平台 seam
 
 - [x] 6.1 定义并测试类型化 `WorkspaceNavigation`、`TaskCenter`、`GlobalSearch` 与 platform interfaces，禁止任意字符串事件和业务 fallback
-- [ ] 6.2 实现 Tauri/Memory platform adapters，并用共享 contract tests 验证错误码、媒体租约、文件对话框、拖放和取消监听
+- [x] 6.2 实现 Tauri/Memory platform adapters，并用共享 contract tests 验证错误码、媒体租约、文件对话框、拖放和取消监听
 - [ ] 6.3 实现任务中心 store、并发键、节流进度、真实停止确认和完成报告保留规则
 - [ ] 6.4 建立 `library-lifecycle`、`asset-library`、`prompt-library` 唯一公共出口，并添加禁止跨模块导入 `internal/` 的 lint 或结构检查
 
