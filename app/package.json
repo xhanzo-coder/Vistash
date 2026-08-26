@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "lint": "oxlint --type-aware",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && node --test scripts/e2e-app-config.test.mjs",
+    "test": "vitest run && node --test scripts/e2e-app-config.test.mjs scripts/module-boundaries.test.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {
