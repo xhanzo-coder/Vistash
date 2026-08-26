@@ -432,6 +432,47 @@ impl Library {
         })
     }
 
+    /// 打开门禁读取当前代的库级元数据：v2 与 v3 都放行，统一按 [`LibraryMetaV2`]
+    /// 的同构字段消费（见 [`From<LibraryMetaV3>`] 的文档），代际只保留在
+    /// `format_version` 字段里。
+    ///
+    /// 版本分派必须发生在按代解析之前：v1 文件缺少 v2 必填字段、更高版本的文件
+    /// 缺少 v3 必填字段，直接交给某个解析器都会得到"元数据损坏"，掩盖"待迁移"与
+    /// "版本过新"这两个完全不同的真实含义。"这是哪一代库"由这里的显式判定回答，
+    /// 不靠任何解析器顺带接受多种版本。
+    fn read_current_meta(path: &Path) -> Result<LibraryMetaV2> {
+        #[derive(serde::Deserialize)]
+        struct Probe {
+            format_version: u32,
+        }
+        let bytes = std::fs::read(path).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryPathUnreadable,
+                format!("读取 {META_FILE} 失败 {}: {e}", path.display()),
+            )
+        })?;
+        let probe: Probe = serde_json::from_slice(&bytes).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!("{META_FILE} 中读不出格式版本 {}: {e}", path.display()),
+            )
+        })?;
+        match probe.format_version {
+            LIBRARY_FORMAT_VERSION_V2 => LibraryMetaV2::from_bytes(path, &bytes),
+            LIBRARY_FORMAT_VERSION_V3 => Ok(LibraryMetaV3::from_bytes(path, &bytes)?.into()),
+            version if version > LIBRARY_FORMAT_VERSION_V3 => Err(AppError::detailed(
+                Code::LibraryFormatTooNew,
+                format!(
+                    "库格式版本 {version} 高于程序支持的 {LIBRARY_FORMAT_VERSION_V3}：{}",
+                    path.display()
+                ),
+            )),
+            // v1 等旧版本缺当前代必填字段。真实含义是"需要迁移"，由调用方先问
+            // `detect_library_format` 区分；这里保持与既有行为一致的损坏语义即可。
+            _ => LibraryMetaV2::from_bytes(path, &bytes),
+        }
+    }
+
     /// 打开既有库。
     pub fn open(root: &Path) -> Result<Self> {
         let meta_path = root.join(META_FILE);
@@ -441,11 +482,11 @@ impl Library {
                 format!("目录中没有 {META_FILE}：{}", root.display()),
             ));
         }
-        // 版本上限与哈希算法的校验都在 `LibraryMetaV2::read` 里，两处各写一遍迟早
-        // 出现一处接受、另一处拒绝的组合。遇到 v1 库时它报"元数据损坏"，而调用方要
-        // 区分"待迁移"与"真损坏"就必须先问 `detect_library_format`——那是开库入口的
-        // 职责，不是本函数的。
-        let meta = LibraryMetaV2::read(&meta_path)?;
+        // 版本分派、版本上限与哈希算法的校验都在 [`Self::read_current_meta`] 里，
+        // 两处各写一遍迟早出现一处接受、另一处拒绝的组合。遇到 v1 库时它报
+        // "元数据损坏"，而调用方要区分"待迁移"与"真损坏"就必须先问
+        // `detect_library_format`——那是开库入口的职责，不是本函数的。
+        let meta = Self::read_current_meta(&meta_path)?;
 
         // 补齐缺失的子目录。空目录不携带任何信息，因此重建它不会掩盖数据丢失——
         // 真正的数据丢失会在索引重建时表现为素材数量下降。

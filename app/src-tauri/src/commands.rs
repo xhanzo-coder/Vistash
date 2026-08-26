@@ -29,7 +29,9 @@ use vistash_core::index::{AssetRow, Index};
 use vistash_core::library::{Library, LibraryId};
 use vistash_core::media::MediaType;
 use vistash_core::migration::{
-    detect_library_format, LibraryFormatState, Migration, MigrationProgress as MigrationProgressCore,
+    detect_library_format, recover_interrupted_v3_commit, LibraryFormatState, Migration,
+    MigrationProgress as MigrationProgressCore, ResolvedV3MigrationPlan, V3CommitProgress,
+    V3FolderPlan, V3FolderResolution, V3MigrationCommit, V3MigrationPlan,
 };
 use vistash_core::prompt::{PromptAsset, PromptId};
 use vistash_core::settings::{AppSettings, LayoutStore};
@@ -91,6 +93,11 @@ impl AppState {
 
 /// 打开一个已存在的库及其派生数据。不创建库。
 fn open_at(root: &Path) -> Result<Arc<Opened>> {
+    // 设计第九条：v2→v3 提交期间进程被结束时，下次开库必须先经恢复入口整体回滚，
+    // 不能带着"半迁移"现场继续。对没有未完成提交的库它是零写入的快速探测；
+    // 恢复与提交共用同一份索引重建注入，保证回滚出的旧元数据配上一致的索引。
+    let mut rebuild = |index_root: &Path| Index::rebuild_at(index_root).map(|_| ());
+    recover_interrupted_v3_commit(root, &mut rebuild)?;
     open_derived(Library::open(root)?)
 }
 
@@ -391,6 +398,122 @@ pub async fn migrate_library(
         AppError::detailed(
             Code::LibraryIoFailed,
             format!("后台迁移任务异常终止：{error}"),
+        )
+    })??;
+    adopt_library(opened, state.inner())
+}
+
+/// v2→v3 迁移计划中一个素材的文件夹归属规划。
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum V3FolderPlanDto {
+    /// 零归属映射为未分类、单归属原样保留：无需使用者参与即可确定。
+    Automatic { folder: Option<String> },
+    /// 多归属冲突：必须由使用者在候选中为该素材选择唯一目标，提交前不得跳过。
+    Conflict { candidates: Vec<String> },
+}
+
+/// v2→v3 迁移计划中的单个素材。刻意不暴露侧车相对路径：那是库内布局，
+/// 界面只需要素材身份与冲突候选（设计第十二条）。
+#[derive(Debug, Clone, Serialize)]
+pub struct V3MigrationPlanEntryDto {
+    pub hash: String,
+    pub original_filename: String,
+    #[serde(flatten)]
+    pub folder: V3FolderPlanDto,
+}
+
+/// 一次 v2→v3 只读迁移计划。
+#[derive(Debug, Clone, Serialize)]
+pub struct V3MigrationPlanDto {
+    pub entries: Vec<V3MigrationPlanEntryDto>,
+}
+
+fn to_v3_plan_dto(plan: V3MigrationPlan) -> V3MigrationPlanDto {
+    V3MigrationPlanDto {
+        entries: plan
+            .entries
+            .into_iter()
+            .map(|entry| V3MigrationPlanEntryDto {
+                hash: entry.hash.as_str().to_owned(),
+                original_filename: entry.original_filename,
+                folder: match entry.folder {
+                    V3FolderPlan::Automatic(folder) => V3FolderPlanDto::Automatic { folder },
+                    V3FolderPlan::Conflict(candidates) => V3FolderPlanDto::Conflict { candidates },
+                },
+            })
+            .collect(),
+    }
+}
+
+/// 为一个 v2 库生成只读的 v2→v3 迁移计划。
+///
+/// 计划阶段不写任何权威字节；多归属素材以 `conflict` 呈现候选，由使用者在界面上
+/// 完成唯一目标选择后调用 [`commit_v3_migration`]。上万侧车的扫描放 blocking worker。
+#[tauri::command]
+pub async fn plan_v3_migration(path: String) -> Result<V3MigrationPlanDto> {
+    let root = PathBuf::from(&path);
+    let plan = tauri::async_runtime::spawn_blocking(move || V3MigrationPlan::inspect(&root))
+        .await
+        .map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("后台迁移规划任务异常终止：{error}"),
+            )
+        })??;
+    Ok(to_v3_plan_dto(plan))
+}
+
+/// 使用者对一个多归属素材选择的唯一保留文件夹。
+#[derive(Debug, Clone, Deserialize)]
+pub struct V3FolderResolutionInput {
+    pub hash: String,
+    pub folder: String,
+}
+
+/// 提交一次已完成全部冲突选择的 v2→v3 迁移，成功后把该库接管为当前库。
+///
+/// 冲突选择在这里与最新扫描的计划合并：`hash` 不在计划中或选择不属于原归属时返回
+/// 稳定的 `migration.resolution_invalid`，提交阶段还会再校验侧车摘要未被外部改动。
+/// 提交进入替换阶段后不可取消；进程中断由下一次开库经 [`open_at`] 的恢复入口回滚。
+#[tauri::command]
+pub async fn commit_v3_migration(
+    path: String,
+    resolutions: Vec<V3FolderResolutionInput>,
+    on_progress: Channel<MigrationProgress>,
+    state: tauri::State<'_, Shared>,
+) -> Result<LibraryStatus> {
+    let root = PathBuf::from(&path);
+    let mut parsed = Vec::with_capacity(resolutions.len());
+    for resolution in &resolutions {
+        parsed.push(V3FolderResolution {
+            hash: ContentHash::parse(&resolution.hash)?,
+            folder: resolution.folder.clone(),
+        });
+    }
+    let opened = tauri::async_runtime::spawn_blocking(move || -> Result<Arc<Opened>> {
+        // 以此刻的磁盘内容重新规划，而不是信任前端回传的整份计划：相对路径与
+        // 字节摘要必须来自权威扫描，前端只负责提供使用者的冲突选择。
+        let plan = V3MigrationPlan::inspect(&root)?;
+        let resolved: ResolvedV3MigrationPlan = plan.resolve(&parsed)?;
+        let mut rebuild = |index_root: &Path| Index::rebuild_at(index_root).map(|_| ());
+        let mut forward = |progress: V3CommitProgress| {
+            let _ = on_progress.send(MigrationProgress {
+                stage: progress.stage.as_str().to_owned(),
+                done: progress.done,
+                total: progress.total,
+                current_filename: progress.current_filename,
+            });
+        };
+        V3MigrationCommit::new(&resolved, &root).run(&mut rebuild, &mut forward)?;
+        // 提交完成后该库必然是 v3，按普通开库路径接管。
+        open_at(&root)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台迁移提交任务异常终止：{error}"),
         )
     })??;
     adopt_library(opened, state.inner())

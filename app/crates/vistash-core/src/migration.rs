@@ -10,9 +10,9 @@
 use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
 use crate::library::{
-    LibraryId, LibraryMeta, LibraryMetaV2, FOLDERS_FILE, INDEX_FILE, LIBRARY_FORMAT_VERSION_V2,
-    LIBRARY_FORMAT_VERSION_V3, META_FILE, OBJECTS_DIR, PROMPTS_DIR, PROMPT_FOLDERS_FILE,
-    PROMPT_OBJECTS_DIR, PROMPT_TRASH_DIR, TRASH_DIR,
+    CurrentLibraryMeta, LibraryId, LibraryMeta, LibraryMetaV2, LibraryMetaV3, FOLDERS_FILE,
+    INDEX_FILE, LIBRARY_FORMAT_VERSION_V2, LIBRARY_FORMAT_VERSION_V3, META_FILE, OBJECTS_DIR,
+    PROMPTS_DIR, PROMPT_FOLDERS_FILE, PROMPT_OBJECTS_DIR, PROMPT_TRASH_DIR, TRASH_DIR,
 };
 use crate::prompt::PromptFolderList;
 use crate::sidecar::{
@@ -219,8 +219,8 @@ pub const LOCK_FILE: &str = "migration.lock";
 /// v2 解析只会得到"元数据损坏"，而真实情况是"这个库还没迁移"——两者的处理方式完全不同。
 #[derive(Debug, Clone, PartialEq)]
 pub enum LibraryFormatState {
-    /// 已经是 v2，可以直接打开。
-    Current(LibraryMetaV2),
+    /// 已经是当前程序支持的某一代（v2 或 v3），可以直接打开。
+    Current(CurrentLibraryMeta),
     /// 旧格式，需要一次一次性迁移。
     NeedsMigration { from_version: u32 },
     /// 上次迁移没有走完。必须先继续或回滚，MUST NOT 当成正常库打开。
@@ -246,23 +246,26 @@ pub fn detect_library_format(root: &Path) -> Result<LibraryFormatState> {
         ));
     }
     let format_version = read_format_version(&meta_path)?;
-    if format_version > LIBRARY_FORMAT_VERSION_V2 {
+    if format_version > LIBRARY_FORMAT_VERSION_V3 {
         return Err(AppError::detailed(
             Code::LibraryFormatTooNew,
             format!(
-                "库格式版本 {format_version} 高于程序支持的 {LIBRARY_FORMAT_VERSION_V2}：{}",
+                "库格式版本 {format_version} 高于程序支持的 {LIBRARY_FORMAT_VERSION_V3}：{}",
                 root.display()
             ),
         ));
     }
-    if format_version == LIBRARY_FORMAT_VERSION_V2 {
-        return Ok(LibraryFormatState::Current(LibraryMetaV2::read(
-            &meta_path,
-        )?));
+    match format_version {
+        LIBRARY_FORMAT_VERSION_V3 => Ok(LibraryFormatState::Current(
+            CurrentLibraryMeta::V3(LibraryMetaV3::read(&meta_path)?),
+        )),
+        LIBRARY_FORMAT_VERSION_V2 => Ok(LibraryFormatState::Current(
+            CurrentLibraryMeta::V2(LibraryMetaV2::read(&meta_path)?),
+        )),
+        _ => Ok(LibraryFormatState::NeedsMigration {
+            from_version: format_version,
+        }),
     }
-    Ok(LibraryFormatState::NeedsMigration {
-        from_version: format_version,
-    })
 }
 
 /// 只读出 `library.json` 的格式版本。
@@ -397,7 +400,15 @@ impl V3MigrationPlan {
     /// 库不是完整 v2 状态、目录不可读或任一 v2 侧车损坏时返回稳定错误。
     pub fn inspect(root: &Path) -> Result<Self> {
         match detect_library_format(root)? {
-            LibraryFormatState::Current(_) => {}
+            // 只接受 v2 输入。对已是 v3 的库再规划一次，提交阶段会把 v3 侧车当 v2
+            // 解析并用垃圾字段顶替权威字节——门禁必须在读第一个侧车之前就拒绝。
+            LibraryFormatState::Current(CurrentLibraryMeta::V2(_)) => {}
+            LibraryFormatState::Current(CurrentLibraryMeta::V3(_)) => {
+                return Err(AppError::detailed(
+                    Code::MigrationPlanStale,
+                    "库已经是 v3 格式，v2→v3 迁移没有可做的工作",
+                ));
+            }
             LibraryFormatState::NeedsMigration { from_version } => {
                 return Err(AppError::detailed(
                     Code::LibraryFormatTooOld,
@@ -744,10 +755,17 @@ impl<'a> V3MigrationCommit<'a> {
         rebuild_index: &mut dyn FnMut(&Path) -> Result<()>,
         progress: &mut dyn FnMut(V3CommitProgress),
     ) -> Result<()> {
-        // 门禁一：只接受完整的 v2 库。被中断的迁移必须先走各自的恢复入口，否则
-        // “半迁移”的输入会把两种格式的侧车混在一起提交。
+        // 门禁一：只接受完整的 v2 库。已是 v3 的库没有可提交的工作，继续提交会用
+        // 垃圾字段顶替权威字节；被中断的迁移必须先走各自的恢复入口，否则“半迁移”
+        // 的输入会把两种格式的侧车混在一起提交。
         let meta = match detect_library_format(&self.root)? {
-            LibraryFormatState::Current(meta) => meta,
+            LibraryFormatState::Current(CurrentLibraryMeta::V2(meta)) => meta,
+            LibraryFormatState::Current(CurrentLibraryMeta::V3(_)) => {
+                return Err(AppError::detailed(
+                    Code::MigrationPlanStale,
+                    "库已经是 v3 格式，v2→v3 迁移提交没有可做的工作",
+                ));
+            }
             LibraryFormatState::NeedsMigration { from_version } => {
                 return Err(AppError::detailed(
                     Code::LibraryFormatTooOld,
@@ -1502,10 +1520,11 @@ impl Migration {
         // 先判定格式再取锁：格式过新之类的失败不该在库里留下一把没人负责的锁。
         let (mut journal, resumed) = match detect_library_format(&self.root)? {
             LibraryFormatState::Current(meta) => {
-                // 已经是 v2 就没有工作要做。这里返回成功而不是报错，使"打开库"可以
-                // 无条件先走一次迁移入口，而不必在每个调用方重复一遍版本判断。
+                // 已经是当前代（v2 或 v3）就没有工作要做。这里返回成功而不是报错，
+                // 使"打开库"可以无条件先走一次迁移入口，而不必在每个调用方重复一遍
+                // 版本判断；对 v3 库同样成立——它比本次迁移的目标还要新。
                 return Ok(MigrationOutcome {
-                    library_id: meta.library_id,
+                    library_id: meta.library_id().clone(),
                     sidecars_rewritten: 0,
                     resumed: false,
                 });
@@ -2239,8 +2258,8 @@ mod tests {
     use crate::colorcard::ColorCard;
     use crate::hashing::ContentHash;
     use crate::library::{
-        CurrentLibraryMeta, LibraryMetaV2, LIBRARY_FORMAT_VERSION_V3, META_FILE, PROMPTS_DIR,
-        PROMPT_FOLDERS_FILE, PROMPT_OBJECTS_DIR, PROMPT_TRASH_DIR,
+        CurrentLibraryMeta, LibraryMetaV2, LIBRARY_FORMAT_VERSION_V2, LIBRARY_FORMAT_VERSION_V3,
+        META_FILE, PROMPTS_DIR, PROMPT_FOLDERS_FILE, PROMPT_OBJECTS_DIR, PROMPT_TRASH_DIR,
     };
     use crate::media::MediaType;
     use crate::prompt::PromptFolderList;
@@ -2791,6 +2810,18 @@ mod tests {
         let library = Library::create(&dir.path().join("我的素材库")).expect("建立 v2 库");
         let root = library.root().to_path_buf();
         let library_id = library.meta().library_id.clone();
+        // 建库入口自任务 3.5 起直接产出 v3 库级元数据；v2→v3 迁移的输入必须是真
+        // v2 库，夹具因此显式把 library.json 降写回 v2——这正是迁移提交前旧库的样子。
+        // 侧车仍由下方 place() 按 v2 写出，与库级版本一致。
+        LibraryMetaV2 {
+            format_version: LIBRARY_FORMAT_VERSION_V2,
+            library_id: library_id.clone(),
+            hash_algo: library.meta().hash_algo.clone(),
+            created_at: library.meta().created_at,
+            created_by_app_version: library.meta().created_by_app_version.clone(),
+        }
+        .write_atomic(&root.join(META_FILE))
+        .expect("降写 v2 库级元数据");
 
         let mut original_sidecars = BTreeMap::new();
         let mut original_bodies = BTreeMap::new();
@@ -3048,7 +3079,7 @@ mod tests {
         assert_authoritative_bytes_untouched(&f, "索引重建失败");
         assert_no_v3_residue(&f, "索引重建失败");
         match detect_library_format(&f.root).expect("判定格式") {
-            LibraryFormatState::Current(meta) => {
+            LibraryFormatState::Current(CurrentLibraryMeta::V2(meta)) => {
                 assert_eq!(meta.library_id, f.library_id, "库仍应按原 v2 身份打开");
             }
             other => panic!("回滚后的库被判成了 {other:?}"),

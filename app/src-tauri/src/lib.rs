@@ -32,6 +32,8 @@ pub fn run() {
             commands::library_status,
             commands::open_library,
             commands::migrate_library,
+            commands::plan_v3_migration,
+            commands::commit_v3_migration,
             commands::list_assets,
             commands::catalog_snapshot,
             commands::create_folder,
