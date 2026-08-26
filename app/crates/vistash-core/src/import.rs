@@ -198,22 +198,7 @@ fn import_one_inner(
         return Err(AppError::new(Code::ImportCancelled));
     }
 
-    let meta = std::fs::metadata(source).map_err(|e| {
-        AppError::detailed(
-            Code::ImportSourceUnreadable,
-            format!("{}: {e}", source.display()),
-        )
-    })?;
-    if !meta.is_file() {
-        return Err(AppError::detailed(
-            Code::ImportSourceUnreadable,
-            format!("不是文件：{}", source.display()),
-        ));
-    }
-    let byte_size = meta.len();
-
-    let hash = ContentHash::of_file(source)?;
-    observer.after_stage(ImportStage::Hashed)?;
+    let (byte_size, hash) = probe_source(source, observer)?;
 
     // 查重以侧车为准而不是以本体为准：孤儿本体是中途失败的残留，不代表素材已入库。
     if lib.sidecar_path(&hash).is_file() {
@@ -229,10 +214,63 @@ fn import_one_inner(
         ));
     }
 
+    let folder = opts
+        .folder
+        .as_deref()
+        .map(normalize_folder_path)
+        .transpose()?;
+    materialize_import(
+        lib,
+        source,
+        byte_size,
+        &hash,
+        folder,
+        &opts.tags,
+        observer,
+        created,
+    )
+}
+
+/// 读取源文件元数据并计算内容哈希。这是每条导入管线的公共前半程。
+fn probe_source(source: &Path, observer: &mut dyn ImportObserver) -> Result<(u64, ContentHash)> {
+    let meta = std::fs::metadata(source).map_err(|e| {
+        AppError::detailed(
+            Code::ImportSourceUnreadable,
+            format!("{}: {e}", source.display()),
+        )
+    })?;
+    if !meta.is_file() {
+        return Err(AppError::detailed(
+            Code::ImportSourceUnreadable,
+            format!("不是文件：{}", source.display()),
+        ));
+    }
+    let byte_size = meta.len();
+    let hash = ContentHash::of_file(source)?;
+    observer.after_stage(ImportStage::Hashed)?;
+    Ok((byte_size, hash))
+}
+
+/// 把已确认非重复的源文件写入库：本体 → 缩略图 → 侧车。
+///
+/// 从 [`import_one_inner`] 中拆出，使统一协调器（[`import_sources`]）能复用同一条写入
+/// 管线，只把"查重命中"的处理从报错换成记录——两种入口的落盘步骤与回滚不变式必须
+/// 完全一致，否则两条路径会慢慢分叉。
+#[allow(clippy::too_many_arguments)]
+fn materialize_import(
+    lib: &Library,
+    source: &Path,
+    byte_size: u64,
+    hash: &ContentHash,
+    folder: Option<String>,
+    tags: &[String],
+    observer: &mut dyn ImportObserver,
+    created: &mut Created,
+) -> Result<AssetSidecar> {
     let decoded = media::decode(source)?;
     let ext = decoded.media_type.library_ext();
 
-    let body = lib.body_path(&hash, ext);
+    let body = lib.body_path(hash, ext);
     created.claim(&body);
     copy_into(source, &body)?;
     observer.after_stage(ImportStage::BodyWritten)?;
@@ -240,7 +278,7 @@ fn import_one_inner(
     // 缩略图失败按素材失败处理并回滚。它虽是可重算的派生数据，但编码失败几乎总是
     // 真问题（空间不足或图本身异常），静默放过只会得到一批在网格里看不见的素材。
     let thumb_bytes = media::encode_thumbnail(&decoded.image)?;
-    let thumb = lib.thumbnail_path(&hash);
+    let thumb = lib.thumbnail_path(hash);
     created.claim(&thumb);
     write_bytes(&thumb, &thumb_bytes, Code::LibraryThumbnailFailed)?;
     observer.after_stage(ImportStage::ThumbnailWritten)?;
@@ -260,11 +298,6 @@ fn import_one_inner(
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| original_filename.clone());
     let display_filename = DisplayFilename::new(&display_stem, decoded.media_type)?;
-    let folder = opts
-        .folder
-        .as_deref()
-        .map(normalize_folder_path)
-        .transpose()?;
 
     let sidecar = AssetSidecar {
         format_version: SIDECAR_FORMAT_VERSION_V3,
@@ -282,7 +315,7 @@ fn import_one_inner(
         },
         display_filename,
         folder,
-        tags: opts.tags.clone(),
+        tags: tags.to_vec(),
         color_card,
         // 新入库的素材既没有备注也未被收藏。这两个字段刻意没有 serde 默认值（见
         // `sidecar.rs`），因此必须在这里显式写出，不能靠反序列化时补齐。
@@ -292,7 +325,7 @@ fn import_one_inner(
         deleted_from_folder: None,
     };
 
-    let side = lib.sidecar_path(&hash);
+    let side = lib.sidecar_path(hash);
     created.claim(&side);
     sidecar.write_atomic(&side)?;
     observer.after_stage(ImportStage::SidecarWritten)?;
@@ -505,6 +538,327 @@ fn failure(source: &Path, error: AppError) -> ImportFailure {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
         error,
+    }
+}
+
+/// 统一导入的入站来源（设计第十条）。
+///
+/// 文件选择、目录选择、拖放与剪贴板只负责产生来源；查重、目标解析、层级映射与
+/// 逐项报告全部由 [`import_sources`] 一处裁决——四个入口不允许各自维护一套导入语义。
+#[derive(Debug, Clone)]
+pub enum ImportSource {
+    /// 使用者明确指定的单个文件。即便扩展名不受支持也原样送达，让它以
+    /// `import.unsupported_media_type` 失败而不是被悄悄丢掉。
+    File(PathBuf),
+    /// 使用者指定的目录：以目录名为逻辑根，内部相对层级映射为嵌套逻辑文件夹。
+    Directory(PathBuf),
+}
+
+/// 统一导入协调器的请求。
+#[derive(Debug, Clone)]
+pub struct ImportRequest {
+    pub sources: Vec<ImportSource>,
+    /// 工作区当前所在的具体逻辑文件夹；当前在全部、未分类或回收站时为 `None`，
+    /// 此时导入目标一律是未分类。
+    pub current_folder: Option<String>,
+}
+
+/// 内容重复的来源：库内（或回收站）已有相同内容。
+///
+/// 重复既不是失败也不是新导入：既有素材保持原归属、不被静默移动（asset-transfer
+/// 规格），但也不能一声不吭——报告单独列出，界面才有"这几张已经在库里了"可说。
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportDuplicate {
+    pub source_path: String,
+    pub original_filename: String,
+    pub hash: String,
+    /// 重复对象位于回收站而不是库内。
+    pub in_trash: bool,
+}
+
+/// 单个计划文件的处置结果。
+enum PlannedOutcome {
+    /// 装箱侧车：两个变体尺寸悬殊，重复记录远小于完整侧车。
+    Imported(Box<AssetSidecar>),
+    Duplicate(ImportDuplicate),
+}
+
+/// 统一协调器的完成报告。
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceImportReport {
+    pub imported: Vec<AssetSidecar>,
+    pub duplicates: Vec<ImportDuplicate>,
+    pub failed: Vec<ImportFailure>,
+    /// 目录来源中因不是图片而被跳过的文件数。
+    pub skipped_non_images: usize,
+}
+
+/// 计划阶段产出的单个待导文件及其已规范化的逻辑归属。
+struct PlannedFile {
+    source: PathBuf,
+    folder: Option<String>,
+}
+
+/// 统一导入入口：文件选择、目录选择、拖放与剪贴板共用的协调器（设计第十条）。
+///
+/// 目标规则：文件落在当前具体逻辑文件夹；当前是全部、未分类或回收站（`None`）
+/// 时落入未分类。目录以所选目录名为逻辑根保留相对层级，并整体挂在当前文件夹
+/// 之下（若有）。路径规范化发生在任何写入之前；规范化后相同的逻辑路径合并进
+/// 同一文件夹，不创建编号副本也不拒绝整批。内容重复既不复制也不移动既有素材，
+/// 作为独立结果呈现在 [`SourceImportReport::duplicates`] 里。
+///
+/// 部分成功是常态：单个素材失败只影响自己，报告覆盖全部输入。
+pub fn import_sources(
+    lib: &Library,
+    request: &ImportRequest,
+    tags: &[String],
+    observer: &mut dyn ImportObserver,
+) -> Result<SourceImportReport> {
+    let base = request
+        .current_folder
+        .as_deref()
+        .map(normalize_folder_path)
+        .transpose()?;
+
+    let (planned, skipped_non_images, failed) = plan_sources(&request.sources, &base)?;
+    ensure_folders(lib, planned.iter().filter_map(|p| p.folder.as_deref()))?;
+
+    let total = planned.len();
+    let mut report = SourceImportReport {
+        imported: Vec::new(),
+        duplicates: Vec::new(),
+        failed,
+        skipped_non_images,
+    };
+    let mut cancelled = false;
+
+    for (i, file) in planned.iter().enumerate() {
+        if cancelled || observer.should_cancel() {
+            cancelled = true;
+            report
+                .failed
+                .push(failure(&file.source, AppError::new(Code::ImportCancelled)));
+            continue;
+        }
+        observer.on_progress(i, total, &file.source);
+        match import_planned(lib, file, tags, observer) {
+            Ok(PlannedOutcome::Imported(sidecar)) => report.imported.push(*sidecar),
+            Ok(PlannedOutcome::Duplicate(duplicate)) => report.duplicates.push(duplicate),
+            Err(e) => {
+                if e.code == Code::ImportCancelled {
+                    cancelled = true;
+                }
+                report.failed.push(failure(&file.source, e));
+            }
+        }
+    }
+    observer.on_progress(total, total, Path::new(""));
+    Ok(report)
+}
+
+/// 把来源集合展开为带逻辑归属的计划。目录不可读等计划期问题记入失败列表，
+/// 不拖垮其余来源。
+fn plan_sources(
+    sources: &[ImportSource],
+    base: &Option<String>,
+) -> Result<(Vec<PlannedFile>, usize, Vec<ImportFailure>)> {
+    let mut planned = Vec::new();
+    let mut skipped = 0usize;
+    let mut failed = Vec::new();
+    for source in sources {
+        match source {
+            ImportSource::File(path) => planned.push(PlannedFile {
+                source: path.clone(),
+                folder: base.clone(),
+            }),
+            ImportSource::Directory(root) => {
+                collect_directory(root, base, &mut planned, &mut skipped, &mut failed);
+            }
+        }
+    }
+    // 与旧展开一致的确定性顺序：按源路径排序去重，同一文件不会被处理两次。
+    planned.sort_by(|a, b| a.source.cmp(&b.source));
+    planned.dedup_by(|a, b| a.source == b.source);
+    Ok((planned, skipped, failed))
+}
+
+/// 把一个目录来源展开为带逻辑归属的待导文件。
+///
+/// 目录名本身是逻辑根的第一段；子目录逐级拼进逻辑路径并在写入前统一规范化。
+/// 非图片计入跳过而不是失败（与旧展开同一口径）；目录树中途读不到的部分记为
+/// 该处的失败，已看到的文件照常导入。
+fn collect_directory(
+    root: &Path,
+    base: &Option<String>,
+    planned: &mut Vec<PlannedFile>,
+    skipped: &mut usize,
+    failed: &mut Vec<ImportFailure>,
+) {
+    let Some(name) = root.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        failed.push(failure(
+            root,
+            AppError::detailed(
+                Code::ImportSourceUnreadable,
+                format!("目录缺少名称：{}", root.display()),
+            ),
+        ));
+        return;
+    };
+    let prefix = match base {
+        Some(base) => format!("{base}/{name}"),
+        None => name,
+    };
+    walk_directory(root, &prefix, planned, skipped, failed);
+}
+
+fn walk_directory(
+    dir: &Path,
+    logical_prefix: &str,
+    planned: &mut Vec<PlannedFile>,
+    skipped: &mut usize,
+    failed: &mut Vec<ImportFailure>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            failed.push(failure(
+                dir,
+                AppError::detailed(
+                    Code::ImportSourceUnreadable,
+                    format!("读取目录失败 {}: {e}", dir.display()),
+                ),
+            ));
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                failed.push(failure(
+                    dir,
+                    AppError::detailed(
+                        Code::ImportSourceUnreadable,
+                        format!("读取目录项失败 {}: {e}", dir.display()),
+                    ),
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(e) => {
+                failed.push(failure(
+                    &path,
+                    AppError::detailed(
+                        Code::ImportSourceUnreadable,
+                        format!("读取目录项类型失败 {}: {e}", path.display()),
+                    ),
+                ));
+                continue;
+            }
+        };
+        if file_type.is_dir() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            walk_directory(
+                &path,
+                &format!("{logical_prefix}/{name}"),
+                planned,
+                skipped,
+                failed,
+            );
+            continue;
+        }
+        let supported = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(media::MediaType::from_extension)
+            .is_some();
+        if !supported {
+            *skipped += 1;
+            continue;
+        }
+        match normalize_folder_path(logical_prefix) {
+            Ok(folder) => planned.push(PlannedFile {
+                source: path,
+                folder: Some(folder),
+            }),
+            Err(e) => failed.push(failure(&path, e)),
+        }
+    }
+}
+
+/// 确保计划涉及的逻辑文件夹都已存在于清单里。
+///
+/// 在任何素材写入之前一次性补齐：侧车指向的逻辑路径必须在索引重建读到它之前
+/// 已经合法。只追加缺失项且彼此排序，既有清单的顺序保持不动——重排使用者的
+/// 文件夹不在导入的职权范围内。
+fn ensure_folders<'a>(lib: &Library, wanted: impl Iterator<Item = &'a str>) -> Result<()> {
+    let wanted: std::collections::BTreeSet<&str> = wanted.collect();
+    let known = lib.read_folders()?;
+    let additions: Vec<String> = wanted
+        .into_iter()
+        .filter(|folder| !known.folders.iter().any(|f| f == folder))
+        .map(str::to_owned)
+        .collect();
+    if additions.is_empty() {
+        return Ok(());
+    }
+    let mut list = known;
+    list.folders.extend(additions);
+    lib.write_folders(&list)?;
+    Ok(())
+}
+
+/// 处理单个计划文件。
+///
+/// 与旧入口唯一的语义差异在查重命中处：返回 [`PlannedOutcome::Duplicate`] 而不是
+/// 报错——落盘步骤、回滚不变式与取消边界完全一致。
+fn import_planned(
+    lib: &Library,
+    file: &PlannedFile,
+    tags: &[String],
+    observer: &mut dyn ImportObserver,
+) -> Result<PlannedOutcome> {
+    if observer.should_cancel() {
+        return Err(AppError::new(Code::ImportCancelled));
+    }
+    let mut created = Created::new();
+    let (byte_size, hash) = probe_source(&file.source, observer)?;
+
+    // 查重以侧车为准而不是以本体为准（与 import_one 同一口径）。命中的来源什么
+    // 都不写，自然也没有需要回滚的东西。
+    let in_library = lib.sidecar_path(&hash).is_file();
+    let in_trash = lib.trash_sidecar_path(&hash).is_file();
+    if in_library || in_trash {
+        return Ok(PlannedOutcome::Duplicate(ImportDuplicate {
+            source_path: file.source.to_string_lossy().into_owned(),
+            original_filename: file
+                .source
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            hash: hash.as_str().to_owned(),
+            in_trash,
+        }));
+    }
+
+    match materialize_import(
+        lib,
+        &file.source,
+        byte_size,
+        &hash,
+        file.folder.clone(),
+        tags,
+        observer,
+        &mut created,
+    ) {
+        Ok(sidecar) => Ok(PlannedOutcome::Imported(Box::new(sidecar))),
+        Err(e) => {
+            created.rollback();
+            Err(e)
+        }
     }
 }
 
