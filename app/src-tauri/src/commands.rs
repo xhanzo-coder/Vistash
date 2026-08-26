@@ -888,6 +888,63 @@ pub async fn paste_import(
     }
 }
 
+/// 原图导出（任务 5.5，设计第十二条）。
+///
+/// 只读库的出站操作：核心协调器按"侧车显示文件名 + 真实扩展名"复制原始字节到
+/// 使用者明确选择的目标目录，库内本体与侧车一个字节都不改。`policy` 是类型化枚举，
+/// 前端传 `"skip" / "overwrite" / "auto_number"`；覆盖属破坏性操作，前端必须先取得
+/// 使用者的明确确认才允许传 `overwrite` 进来。停止复用 [`import_stop`]——导入与
+/// 导出共用同一把库级并发键，同一时刻只有一种任务在跑。
+#[tauri::command]
+pub async fn export_assets(
+    hashes: Vec<String>,
+    target_dir: String,
+    policy: vistash_core::export::ConflictPolicy,
+    on_progress: Channel<ImportProgress>,
+    runs: tauri::State<'_, std::sync::Arc<ImportRuns>>,
+    state: tauri::State<'_, Shared>,
+) -> Result<vistash_core::export::ExportReport> {
+    let opened = current_opened(&state)?;
+    let runs = std::sync::Arc::clone(runs.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        export_assets_blocking(hashes, target_dir, policy, on_progress, &runs, &opened)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台导出任务异常终止：{error}"),
+        )
+    })?
+}
+
+fn export_assets_blocking(
+    hashes: Vec<String>,
+    target_dir: String,
+    policy: vistash_core::export::ConflictPolicy,
+    on_progress: Channel<ImportProgress>,
+    runs: &ImportRuns,
+    opened: &Opened,
+) -> Result<vistash_core::export::ExportReport> {
+    // 哈希字符串先解析成领域类型：非法值在这里变成稳定错误，
+    // 不占用槽位、也不溜进协调器。
+    let parsed = hashes
+        .iter()
+        .map(|raw| ContentHash::parse(raw))
+        .collect::<Result<Vec<_>>>()?;
+    let library = lock(&opened.catalog)?.library().clone();
+    let run = runs.begin_export(&library)?;
+    let mut observer = ChannelObserver {
+        channel: on_progress,
+        disconnected: false,
+    };
+    let request = vistash_core::export::ExportRequest {
+        target_dir: PathBuf::from(target_dir),
+        policy,
+    };
+    vistash_core::export::export_assets(&library, &parsed, &request, &run, &mut observer)
+}
+
 /// 导入任务的可见状态。只有后端确认后才是 `stopped`——前端仅停止等待或隐藏进度
 /// MUST NOT 冒充任务已停止（asset-transfer 规格）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

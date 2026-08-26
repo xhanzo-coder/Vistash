@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod clipboard;
 pub mod colorcard;
 pub mod error;
+pub mod export;
 pub mod hashing;
 pub mod ids;
 pub mod import;

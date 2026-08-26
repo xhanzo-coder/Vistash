@@ -770,11 +770,12 @@ impl ImportRun {
         );
     }
 
-    fn should_cancel(&self) -> bool {
+    /// 停止信号是否已提交。crate 内的协调器（导入与导出）在单文件边界观察。
+    pub(crate) fn should_cancel(&self) -> bool {
         self.state() != ImportRunState::Running
     }
 
-    fn confirm_stopped(&self) {
+    pub(crate) fn confirm_stopped(&self) {
         self.state.store(ImportRunState::Stopped as u8, Ordering::SeqCst);
     }
 }
@@ -804,7 +805,7 @@ impl ImportRuns {
             if existing.state() != ImportRunState::Stopped {
                 return Err(AppError::detailed(
                     Code::ImportAlreadyRunning,
-                    format!("库已有进行中的导入任务：{key}"),
+                    format!("库已有进行中的导入或导出任务：{key}"),
                 ));
             }
         }

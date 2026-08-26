@@ -18,6 +18,8 @@ import type {
   BatchProgress,
   BatchReport,
   CatalogSnapshot,
+  ConflictPolicy,
+  ExportOutcome,
   FolderMutationProgress,
   GlobalSearchResult,
   ImageDetail,
@@ -194,6 +196,29 @@ export function pasteImport(
  */
 export function importStop(): Promise<ImportRunState> {
   return call<ImportRunState>("import_stop");
+}
+
+/**
+ * 原图导出入口（任务 5.5，设计第十二条）。
+ *
+ * 后端按侧车显示文件名与真实扩展名复制原始字节到使用者明确选择的目标目录，
+ * 库内本体与侧车不被修改。同名冲突以调用方给定的策略落地；覆盖是破坏性操作，
+ * 界面必须先取得使用者的明确确认才允许传 "overwrite"。停止复用 import_stop：
+ * 导入与导出共用同一把库级并发键。
+ */
+export function exportAssets(
+  hashes: string[],
+  targetDir: string,
+  policy: ConflictPolicy,
+  onProgress: (progress: ImportProgress) => void,
+): Promise<ExportOutcome> {
+  const progress = new Channel<ImportProgress>(onProgress);
+  return call<ExportOutcome>("export_assets", {
+    hashes,
+    targetDir,
+    policy,
+    onProgress: progress,
+  });
 }
 
 /**

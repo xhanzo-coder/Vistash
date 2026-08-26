@@ -58,6 +58,7 @@ pub fn run() {
             commands::import_sources,
             commands::import_stop,
             commands::paste_import,
+            commands::export_assets,
             commands::asset_thumbnail,
             commands::asset_original,
             commands::all_error_codes,

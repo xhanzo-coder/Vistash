@@ -183,7 +183,7 @@ fn conflict_plan_reports_existing_targets_before_any_write() {
     let original = std::fs::read(&conflicting).expect("记住冲突文件字节");
 
     let planned =
-        plan_export(&f.library, &[f.png_hash.clone()], &f.target).expect("生成冲突计划");
+        plan_export(&f.library, std::slice::from_ref(&f.png_hash), &f.target).expect("生成冲突计划");
 
     assert_eq!(planned.len(), 1);
     assert!(
@@ -248,7 +248,7 @@ fn overwrite_policy_replaces_the_target_with_original_bytes() {
     };
     let report = export_assets(
         &f.library,
-        &[f.png_hash.clone()],
+        std::slice::from_ref(&f.png_hash),
         &request,
         &run,
         &mut NoopObserver,
@@ -277,7 +277,7 @@ fn auto_number_policy_writes_a_numbered_copy_without_touching_the_original() {
     };
     let report = export_assets(
         &f.library,
-        &[f.png_hash.clone()],
+        std::slice::from_ref(&f.png_hash),
         &request,
         &run,
         &mut NoopObserver,
@@ -311,7 +311,7 @@ fn auto_number_finds_the_first_free_number_in_a_dense_directory() {
     };
     let report = export_assets(
         &f.library,
-        &[f.png_hash.clone()],
+        std::slice::from_ref(&f.png_hash),
         &request,
         &run,
         &mut NoopObserver,
@@ -436,7 +436,7 @@ fn export_run_shares_the_library_scoped_concurrency_gate() {
     // 经真实协调器跑完一次导出，确认退出后槽位释放。
     let report = export_assets(
         &f.library,
-        &[f.png_hash.clone()],
+        std::slice::from_ref(&f.png_hash),
         &skip_request(f.target.clone()),
         &exporter,
         &mut NoopObserver,
@@ -461,7 +461,7 @@ fn exporting_into_a_missing_directory_is_a_stable_error() {
     };
     let err: AppError = export_assets(
         &f.library,
-        &[f.png_hash.clone()],
+        std::slice::from_ref(&f.png_hash),
         &request,
         &run,
         &mut NoopObserver,

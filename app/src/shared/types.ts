@@ -102,6 +102,27 @@ export type ImportProgress = {
   current_filename: string | null;
 };
 
+/** `vistash_core::export::ConflictPolicy`：同名冲突的使用者决议。覆盖是破坏性操作，前端必须先取得明确确认。 */
+export type ConflictPolicy = "skip" | "overwrite" | "auto_number";
+
+/** `vistash_core::export::ExportFailure` */
+export type ExportFailure = {
+  /** 调用方交来的哈希——失败项的唯一可靠定位符。 */
+  hash: string;
+  /** 能从侧车读出的显示名；侧车本身缺失时为 null。 */
+  display_filename: string | null;
+  error: AppError;
+};
+
+/** `commands::export_assets` 的报告：成功、冲突跳过、失败与未处理四桶数量守恒。 */
+export type ExportOutcome = {
+  /** 成功写出的文件名（相对目标目录）。 */
+  exported: string[];
+  skipped_existing: number;
+  failed: ExportFailure[];
+  pending_count: number;
+};
+
 export type FolderFilter =
   | { kind: "all" }
   | { kind: "root" }

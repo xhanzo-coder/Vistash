@@ -16,6 +16,7 @@ import {
   deleteFolder,
   deletePrompt,
   deletePromptFolder,
+  exportAssets,
   globalSearch,
   imageDetail,
   importAndLink,
@@ -52,6 +53,8 @@ import type {
   AssetRow,
   BatchReport,
   CatalogSnapshot,
+  ConflictPolicy,
+  ExportOutcome,
   FolderMutationProgress,
   GlobalSearchResult,
   ImageDetail,
@@ -212,6 +215,57 @@ test("pasteImport 在剪贴板无可导入内容时转交全零报告", async ()
     return empty;
   });
   await expect(pasteImport(null, () => {})).resolves.toEqual(empty);
+});
+
+test("exportAssets 使用固定 command、参数面与类型化冲突策略", async () => {
+  // 设计第十二条：导出是只读库的出站操作；策略是类型化枚举值，
+  // 覆盖（overwrite）必须由界面先取得使用者明确确认后才允许传入。
+  const outcome: ExportOutcome = {
+    exported: ["风景.png", "人像.jpg"],
+    skipped_existing: 1,
+    failed: [
+      {
+        hash: "0".repeat(64),
+        display_filename: null,
+        error: { code: "export.asset_missing", detail: null },
+      },
+    ],
+    pending_count: 0,
+  };
+
+  mockIPC((command, payload) => {
+    expect(command).toBe("export_assets");
+    if (!isRecord(payload)) {
+      throw new TypeError("export_assets 的 IPC 参数不是对象");
+    }
+    if (payload.policy !== "auto_number") {
+      throw new TypeError(`冲突策略应为类型化枚举值，收到：${String(payload.policy)}`);
+    }
+    if (
+      !Array.isArray(payload.hashes) ||
+      payload.targetDir !== "E:\\导出" ||
+      !("onProgress" in payload) ||
+      Object.keys(payload).length !== 4
+    ) {
+      throw new TypeError("export_assets 的参数面超出约定");
+    }
+    const channel = payload.onProgress;
+    if (channel instanceof Channel) {
+      channel.onmessage({ done: 0, total: 2, current_filename: "风景.png" });
+    }
+    return outcome;
+  });
+
+  const received = vi.fn<(progress: ImportProgress) => void>();
+  const policy: ConflictPolicy = "auto_number";
+  await expect(
+    exportAssets(["0".repeat(64)], "E:\\导出", policy, received),
+  ).resolves.toEqual(outcome);
+  expect(received).toHaveBeenCalledExactlyOnceWith({
+    done: 0,
+    total: 2,
+    current_filename: "风景.png",
+  });
 });
 
 test("素材编目 IPC 使用固定 command 和参数名称", async () => {

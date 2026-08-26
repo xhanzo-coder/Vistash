@@ -17,6 +17,7 @@ pub enum Domain {
     Migration,
     /// Windows 剪贴板读取与位图校验（设计第十一条）。
     Clipboard,
+    Export,
     Observe,
     Compile,
 }
@@ -31,6 +32,7 @@ impl Domain {
             Domain::Prompt => "prompt",
             Domain::Migration => "migration",
             Domain::Clipboard => "clipboard",
+            Domain::Export => "export",
             Domain::Observe => "observe",
             Domain::Compile => "compile",
         }
@@ -132,6 +134,15 @@ pub enum Code {
     ClipboardImageInvalid,
     /// 位图超出允许的最大像素数或宽高相乘溢出。
     ClipboardImageTooLarge,
+    // export 域：原图导出（设计第十二条）
+    /// 导出目标不是目录或不可用。导出只写入使用者明确选择的既有目录，
+    /// 不代建目录树：写错位置比少写一个目录更难收拾。
+    ExportTargetInvalid,
+    /// 哈希在库内没有对应的侧车或本体。正常库中不应出现，多半意味着
+    /// 界面拿着过期列表发起导出；逐项报告而不是整体失败（规格要求失败隔离）。
+    ExportAssetMissing,
+    /// 把本体复制到导出目标失败。目标侧的 IO 问题：磁盘满、权限、路径过长等。
+    ExportWriteFailed,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -200,6 +211,9 @@ pub const ALL_CODES: &[Code] = &[
     Code::ClipboardReadFailed,
     Code::ClipboardImageInvalid,
     Code::ClipboardImageTooLarge,
+    Code::ExportTargetInvalid,
+    Code::ExportAssetMissing,
+    Code::ExportWriteFailed,
 ];
 
 impl Code {
@@ -269,6 +283,7 @@ impl Code {
             ClipboardBusy | ClipboardReadFailed | ClipboardImageInvalid | ClipboardImageTooLarge => {
                 Domain::Clipboard
             }
+            ExportTargetInvalid | ExportAssetMissing | ExportWriteFailed => Domain::Export,
         }
     }
 
@@ -339,6 +354,9 @@ impl Code {
             ClipboardReadFailed => "clipboard.read_failed",
             ClipboardImageInvalid => "clipboard.image_invalid",
             ClipboardImageTooLarge => "clipboard.image_too_large",
+            ExportTargetInvalid => "export.target_invalid",
+            ExportAssetMissing => "export.asset_missing",
+            ExportWriteFailed => "export.write_failed",
         }
     }
 
