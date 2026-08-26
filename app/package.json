@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prototype:image-library": "vite --open /?prototype=image-library&variant=A",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "oxlint --type-aware",

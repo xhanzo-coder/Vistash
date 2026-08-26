@@ -10,8 +10,24 @@ if (!container) {
   throw new Error("找不到 #root 挂载点，index.html 与构建产物不一致");
 }
 
-createRoot(container).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const search = new URLSearchParams(window.location.search);
+const showImageLibraryPrototype =
+  import.meta.env.DEV && search.get("prototype") === "image-library";
+const root = createRoot(container);
+
+if (showImageLibraryPrototype) {
+  void import("./prototypes/image-library/ImageLibraryPrototype").then(
+    ({ ImageLibraryPrototype }) =>
+      root.render(
+        <StrictMode>
+          <ImageLibraryPrototype />
+        </StrictMode>,
+      ),
+  );
+} else {
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
