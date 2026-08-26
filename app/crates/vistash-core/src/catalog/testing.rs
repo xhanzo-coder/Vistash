@@ -96,4 +96,3 @@ pub(super) fn synthetic_sidecar(index: usize, folders: &[&str], tags: &[&str]) -
         deleted_from_folders: None,
     }
 }
-

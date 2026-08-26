@@ -47,6 +47,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "library.folder_exists": "同名文件夹已经存在。",
   "library.folder_not_found": "指定的文件夹不存在。",
   "library.tag_invalid": "标签不能为空且不能包含控制字符。",
+  "library.filename_invalid": "显示文件名不能为空、不能包含路径字符，也不能自行伪造图片扩展名。",
   "library.asset_metadata_write_failed": "写入素材组织元数据失败。",
 
   // prompt 域
@@ -75,4 +76,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "migration.sidecar_rewrite_failed": "重写素材元数据失败，已按备份把此前处理过的文件全部恢复原状。",
   "migration.commit_failed": "提交新库版本失败。库仍是旧版本，已处理的文件已恢复原状。",
   "migration.rollback_failed": "迁移回滚失败，库可能同时存在新旧两种元数据。请不要继续使用这个库，保留目录并联系支持。",
+  "migration.resolution_invalid": "文件夹迁移选择无效。每个多归属素材必须且只能选择一个原文件夹。",
+  "migration.plan_stale": "迁移计划生成后库内容发生了变化。请重新扫描并处理新的冲突列表。",
+  "migration.staging_failed": "写入新格式暂存区失败，库内文件未被改动。请确认磁盘可写、空间充足后重试。",
 };

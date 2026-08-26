@@ -75,6 +75,7 @@ pub enum Code {
     LibraryFolderExists,
     LibraryFolderNotFound,
     LibraryTagInvalid,
+    LibraryFilenameInvalid,
     LibraryAssetMetadataWriteFailed,
     // prompt 域：提示词素材及其权威文件
     PromptMetadataCorrupt,
@@ -103,7 +104,7 @@ pub enum Code {
     /// 关联目标图片不在库中。关联只能指向真实入库的图片，否则界面会把一个
     /// 永远无法解析的引用呈现成"已删除"。
     PromptLinkedImageNotFound,
-    // migration 域：库格式 v1 到 v2 的一次性迁移
+    // migration 域：库格式的一次性迁移（v1→v2 与 v2→v3）
     MigrationJournalCorrupt,
     MigrationJournalFormatTooNew,
     MigrationJournalWriteFailed,
@@ -113,6 +114,10 @@ pub enum Code {
     MigrationSidecarRewriteFailed,
     MigrationCommitFailed,
     MigrationRollbackFailed,
+    MigrationResolutionInvalid,
+    MigrationPlanStale,
+    /// v2→v3 提交的暂存写入失败。此时权威字节尚未改动，工作目录会被整体撤掉。
+    MigrationStagingFailed,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -148,6 +153,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::LibraryFolderExists,
     Code::LibraryFolderNotFound,
     Code::LibraryTagInvalid,
+    Code::LibraryFilenameInvalid,
     Code::LibraryAssetMetadataWriteFailed,
     Code::PromptMetadataCorrupt,
     Code::PromptFormatTooNew,
@@ -172,6 +178,9 @@ pub const ALL_CODES: &[Code] = &[
     Code::MigrationSidecarRewriteFailed,
     Code::MigrationCommitFailed,
     Code::MigrationRollbackFailed,
+    Code::MigrationResolutionInvalid,
+    Code::MigrationPlanStale,
+    Code::MigrationStagingFailed,
 ];
 
 impl Code {
@@ -209,6 +218,7 @@ impl Code {
             | LibraryFolderExists
             | LibraryFolderNotFound
             | LibraryTagInvalid
+            | LibraryFilenameInvalid
             | LibraryAssetMetadataWriteFailed => Domain::Library,
             PromptMetadataCorrupt
             | PromptFormatTooNew
@@ -233,7 +243,9 @@ impl Code {
             | MigrationSidecarRewriteFailed
             | MigrationCommitFailed
             | MigrationRollbackFailed
-            => Domain::Migration,
+            | MigrationResolutionInvalid
+            | MigrationPlanStale
+            | MigrationStagingFailed => Domain::Migration,
         }
     }
 
@@ -271,6 +283,7 @@ impl Code {
             LibraryFolderExists => "library.folder_exists",
             LibraryFolderNotFound => "library.folder_not_found",
             LibraryTagInvalid => "library.tag_invalid",
+            LibraryFilenameInvalid => "library.filename_invalid",
             LibraryAssetMetadataWriteFailed => "library.asset_metadata_write_failed",
             PromptMetadataCorrupt => "prompt.metadata_corrupt",
             PromptFormatTooNew => "prompt.format_too_new",
@@ -295,6 +308,9 @@ impl Code {
             MigrationSidecarRewriteFailed => "migration.sidecar_rewrite_failed",
             MigrationCommitFailed => "migration.commit_failed",
             MigrationRollbackFailed => "migration.rollback_failed",
+            MigrationResolutionInvalid => "migration.resolution_invalid",
+            MigrationPlanStale => "migration.plan_stale",
+            MigrationStagingFailed => "migration.staging_failed",
         }
     }
 
