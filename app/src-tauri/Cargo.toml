@@ -26,8 +26,12 @@ tauri-build = { version = "2", features = [] }
 vistash-core = { path = "../crates/vistash-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# 剪贴板位图导入（任务 5.3）：经官方插件的 Rust API 读位图，显示名取本地时间。
+# Rust 侧注册即可满足权限要求；不给 WebView 任何通用剪贴板能力（设计第十一条）。
+tauri-plugin-clipboard-manager = "2.3.2"
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

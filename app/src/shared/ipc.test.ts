@@ -25,6 +25,7 @@ import {
   linkedImageStates,
   migrateLibrary,
   moveAssetToFolder,
+  pasteImport,
   promptDetail,
   promptSnapshot,
   purgePromptTrash,
@@ -156,6 +157,61 @@ test("importStop 调用真实停止命令并转交任务状态", async () => {
     return stopping;
   });
   await expect(importStop()).resolves.toBe(stopping);
+});
+
+test("pasteImport 走窗口粘贴命令且不携带任何像素参数", async () => {
+  // 设计第十一条：前端只决定按键由谁认领；分流在后端。这里固定的合同是
+  // command 名与参数面——除当前文件夹与进度通道外不得有其他入参，更没有
+  // 像素缓冲的位置。
+  const outcome: ImportOutcome = {
+    imported: 1,
+    skipped_non_images: 0,
+    duplicates: 0,
+    pending_count: 0,
+    failures: [],
+  };
+
+  mockIPC((command, payload) => {
+    expect(command).toBe("paste_import");
+    if (!isRecord(payload)) {
+      throw new TypeError("paste_import 的 IPC 参数不是对象");
+    }
+    if (payload.currentFolder !== null) {
+      throw new TypeError("paste_import 的当前文件夹应为 null");
+    }
+    if (!("onProgress" in payload) || Object.keys(payload).length !== 2) {
+      throw new TypeError("paste_import 的参数面超出约定");
+    }
+    const channel = payload.onProgress;
+    if (channel instanceof Channel) {
+      channel.onmessage({ done: 0, total: 1, current_filename: "剪贴板图片 2026-08-26 142530.png" });
+    }
+    return outcome;
+  });
+
+  const received = vi.fn<(progress: ImportProgress) => void>();
+  await expect(pasteImport(null, received)).resolves.toEqual(outcome);
+  expect(received).toHaveBeenCalledExactlyOnceWith({
+    done: 0,
+    total: 1,
+    current_filename: "剪贴板图片 2026-08-26 142530.png",
+  });
+});
+
+test("pasteImport 在剪贴板无可导入内容时转交全零报告", async () => {
+  // 文本/网址/空剪贴板不是错误：后端返回全零报告，前端据此提示而不是弹错。
+  const empty: ImportOutcome = {
+    imported: 0,
+    skipped_non_images: 0,
+    duplicates: 0,
+    pending_count: 0,
+    failures: [],
+  };
+  mockIPC((command) => {
+    expect(command).toBe("paste_import");
+    return empty;
+  });
+  await expect(pasteImport(null, () => {})).resolves.toEqual(empty);
 });
 
 test("素材编目 IPC 使用固定 command 和参数名称", async () => {

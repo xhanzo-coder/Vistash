@@ -197,3 +197,42 @@ impl ClipboardPort for MemoryClipboard {
         Ok(arbitrate(self.available.clone()))
     }
 }
+
+/// 把已校验的 RGBA 位图编码为 PNG 字节（调研文档 2.2 节第 2 步）。
+///
+/// 编码在 Rust 侧完成后，字节直接交给既有导入管线；前端全程只见进度与结果，
+/// 不见像素。合法位图的编码失败几乎不可能发生，但一旦发生必须以稳定错误码
+/// 上抛而不是产出空字节。
+pub fn bitmap_to_png(image: &BitmapImage) -> Result<Vec<u8>> {
+    use image::ImageEncoder;
+
+    let canvas = image::RgbaImage::from_raw(
+        image.width() as u32,
+        image.height() as u32,
+        image.rgba().to_vec(),
+    )
+    .ok_or_else(|| AppError::detailed(Code::ClipboardImageInvalid, "像素缓冲与宽高不符"))?;
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(
+            canvas.as_raw(),
+            canvas.width(),
+            canvas.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| {
+            AppError::detailed(
+                Code::ClipboardImageInvalid,
+                format!("把位图编码为 PNG 失败：{e}"),
+            )
+        })?;
+    Ok(png)
+}
+
+/// 剪贴板位图的显示文件名（调研文档冻结的形态："剪贴板图片 YYYY-MM-DD HHMMSS.png"）。
+///
+/// 时间取本地时区，使用者在外部资源管理器里能按名字认出截图时刻；同一次导入
+/// 只有一个位图载荷，"当前导入内唯一"由此成立。
+pub fn clipboard_image_display_name(at: chrono::DateTime<chrono::Local>) -> String {
+    format!("剪贴板图片 {}.png", at.format("%Y-%m-%d %H%M%S"))
+}

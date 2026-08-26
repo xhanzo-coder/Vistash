@@ -174,11 +174,32 @@ pub fn decode(path: &Path) -> Result<Decoded> {
             format!("{}: {e}", path.display()),
         )
     })?;
+    finish_decode(image, detected)
+}
 
-    Ok(Decoded {
-        media_type: detected,
-        image,
-    })
+/// 解码一段内存字节（设计第十一条：剪贴板位图在 Rust 侧编码为 PNG 后直接
+/// 进入导入管线，没有源文件可读）。格式只由文件头判定。
+pub fn decode_bytes(bytes: &[u8]) -> Result<Decoded> {
+    let reader = ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| AppError::detailed(Code::ImportDecodeFailed, format!("无法判定格式：{e}")))?;
+    let detected = reader
+        .format()
+        .and_then(MediaType::from_image_format)
+        .ok_or_else(|| {
+            AppError::detailed(
+                Code::ImportUnsupportedMediaType,
+                "字节内容指向的格式不在支持清单内",
+            )
+        })?;
+    let image = reader.decode().map_err(|e| {
+        AppError::detailed(Code::ImportDecodeFailed, format!("解码失败：{e}"))
+    })?;
+    finish_decode(image, detected)
+}
+
+fn finish_decode(image: DynamicImage, media_type: MediaType) -> Result<Decoded> {
+    Ok(Decoded { media_type, image })
 }
 
 /// 按长边等比缩放后的目标尺寸。小于目标的图不放大。

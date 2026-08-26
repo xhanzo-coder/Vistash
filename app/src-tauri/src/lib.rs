@@ -19,6 +19,10 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 剪贴板位图读取（任务 5.3，设计第十一条）：只在 Rust 侧注册插件——
+        // 不给 WebView 添加任何剪贴板 ACL 权限，前端全程不见像素；窗口级
+        // Ctrl+V 由 paste_import 命令在后端完成分流裁决。
+        .plugin(tauri_plugin_clipboard_manager::init())
         // 库级导入运行注册表（设计第十条）：begin 在 import_sources 内占用槽位，
         // import_stop 经它按并发键定位运行中的任务。命令层只克隆 Arc 句柄。
         .manage(std::sync::Arc::new(vistash_core::import::ImportRuns::new()))
@@ -53,6 +57,7 @@ pub fn run() {
             commands::purge_trash,
             commands::import_sources,
             commands::import_stop,
+            commands::paste_import,
             commands::asset_thumbnail,
             commands::asset_original,
             commands::all_error_codes,

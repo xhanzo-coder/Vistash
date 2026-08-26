@@ -22,6 +22,7 @@ use vistash_core::catalog::{
     ImportAndLinkReport, LinkedImageState, NewPrompt, PromptEdit, PromptLocation, PromptQuery,
     PromptPurgeReport, PromptRestoreOutcome, PromptSnapshot, PurgeReport, RestoreOutcome, Tag,
 };
+use vistash_core::clipboard::{self, ClipboardPayload};
 use vistash_core::error::{AppError, Code, Result};
 use vistash_core::hashing::ContentHash;
 use vistash_core::import::{self, ImportFailure, ImportObserver, ImportRuns};
@@ -667,10 +668,10 @@ impl ImportObserver for ChannelObserver {
         self.disconnected
     }
 
-    fn on_progress(&mut self, done: usize, total: usize, source: &Path) {
-        let current_filename = source
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
+    fn on_progress(&mut self, done: usize, total: usize, current_filename: &str) {
+        // 协调器的约定：空串表示全部结束，转成 None 让前端不再显示文件名。
+        let current_filename =
+            (!current_filename.is_empty()).then(|| current_filename.to_owned());
         if self
             .channel
             .send(ImportProgress {
@@ -720,17 +721,28 @@ fn import_sources_blocking(
     opened: &Opened,
 ) -> Result<ImportOutcome> {
     let _import_guard = lock(&opened.import_gate)?;
-    let sources = paths
-        .into_iter()
-        .map(|path| {
-            let path = PathBuf::from(path);
-            if path.is_dir() {
-                import::ImportSource::Directory(path)
-            } else {
-                import::ImportSource::File(path)
-            }
-        })
-        .collect::<Vec<_>>();
+    // 来源分类复用核心的同一函数（任务 5.3）：拖放/选择与剪贴板粘贴的文件路径
+    // 走完全相同的"按磁盘事实分类"，不允许两条入口各写一套判断。
+    let sources = import::classify_paths(
+        paths
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    );
+    run_import(sources, current_folder, on_progress, runs, opened)
+}
+
+/// 把已构造好的来源集合交给统一协调器并回填索引。
+///
+/// [`import_sources_blocking`]（文件/目录）与 [`paste_import_blocking`]（剪贴板）
+/// 的公共后半程：占库级槽位、经 `Channel` 报告进度、导入完成后更新 SQLite 索引。
+fn run_import(
+    sources: Vec<import::ImportSource>,
+    current_folder: Option<String>,
+    on_progress: Channel<ImportProgress>,
+    runs: &ImportRuns,
+    opened: &Opened,
+) -> Result<ImportOutcome> {
     let request = import::ImportRequest {
         sources,
         current_folder,
@@ -738,7 +750,7 @@ fn import_sources_blocking(
 
     let library = lock(&opened.catalog)?.library().clone();
     let run = runs.begin(&library)?;
-    // 拖入导入不自动推测标签；导入后由使用者在素材详情中归类。
+    // 导入不自动推测标签；导入后由使用者在素材详情中归类。
     let mut observer = ChannelObserver {
         channel: on_progress,
         disconnected: false,
@@ -755,6 +767,125 @@ fn import_sources_blocking(
         pending_count: report.pending_count,
         failures: report.failed,
     })
+}
+
+/// 剪贴板里没有可导入内容时的全零报告。
+///
+/// 文本、网址与空剪贴板不是错误（设计第十一条：纯文本不处理），前端据此提示
+/// "剪贴板里没有可导入的图片"而不是弹错误。
+const EMPTY_PASTE_OUTCOME: ImportOutcome = ImportOutcome {
+    imported: 0,
+    skipped_non_images: 0,
+    duplicates: 0,
+    pending_count: 0,
+    failures: Vec::new(),
+};
+
+#[cfg(target_os = "windows")]
+fn paste_import_blocking(
+    current_folder: Option<String>,
+    on_progress: Channel<ImportProgress>,
+    app: tauri::AppHandle,
+    runs: &ImportRuns,
+    opened: &Opened,
+) -> Result<ImportOutcome> {
+    use vistash_core::clipboard::ClipboardPort;
+
+    let _import_guard = lock(&opened.import_gate)?;
+
+    // 剪贴板是全局单例且 trait 要求独占借用：在 blocking worker 内串行读取，
+    // 并在关闭系统剪贴板之后才做 PNG 编码等耗时工作（adapter 内部保证）。
+    let payload = {
+        let mut clipboard =
+            crate::windows_clipboard::WindowsClipboard::new(read_bitmap_via_plugin(app));
+        clipboard.snapshot()?
+    };
+    match payload {
+        ClipboardPayload::Files(paths) => {
+            run_import(import::classify_paths(paths), current_folder, on_progress, runs, opened)
+        }
+        ClipboardPayload::Bitmap(bitmap) => {
+            // 一次只有一个位图载荷：显示名带本地时间，来源身份记 Clipboard。
+            let sources = vec![import::ImportSource::PngBytes {
+                bytes: clipboard::bitmap_to_png(&bitmap)?,
+                filename: clipboard::clipboard_image_display_name(chrono::Local::now()),
+                captured_at: chrono::Utc::now(),
+            }];
+            run_import(sources, current_folder, on_progress, runs, opened)
+        }
+        ClipboardPayload::Text(_) | ClipboardPayload::Empty => Ok(EMPTY_PASTE_OUTCOME),
+    }
+}
+
+/// 经官方插件的 Rust API 读取位图（设计第十一条）。
+///
+/// 只在 CF_HDROP 与 CF_UNICODETEXT 都不在场时才会被调用。插件把 arboard 的
+/// "内容不可用/不受支持"压扁成字符串错误且没有 `Ok(None)` 路径，因此这里把一切
+/// Err 都解释为"位图不在场"，交由裁决落到 Empty——粘贴一个第一阶段不支持的内容
+/// 不该报错。剪贴板被占用已由 adapter 自己的 Win32 打开探测以 `clipboard.busy`
+/// 报告；真实系统剪贴板的完整行为验收在任务 11.5。
+#[cfg(target_os = "windows")]
+fn read_bitmap_via_plugin(
+    app: tauri::AppHandle,
+) -> impl FnMut() -> Result<Option<vistash_core::clipboard::BitmapImage>> + Send {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    move || {
+        use vistash_core::clipboard::BitmapImage;
+
+        // ClipboardExt 把官方插件的 Clipboard 实体挂到所有 Manager 类型上；
+        // read_image 内部经 arboard 打开系统剪贴板并复制出像素。
+        let image = match app.clipboard().read_image() {
+            Ok(image) => image,
+            Err(_) => return Ok(None),
+        };
+        BitmapImage::new(
+            image.width() as usize,
+            image.height() as usize,
+            image.rgba().to_vec(),
+        )
+        .map(Some)
+    }
+}
+
+/// 窗口级 Ctrl+V 的统一入口（设计第十一条）：前端只决定"这个按键由谁认领"，
+/// 剪贴板上有什么、按什么顺序分流全部由后端裁决。WebView 没有任何通用剪贴板
+/// 权限——位图像素从系统剪贴板到库内本体全程不经过前端。
+///
+/// 非 Windows 目标没有生产 adapter（本项目 Windows 优先），返回稳定的读取失败：
+/// 该平台上的窗口级粘贴本就不该到达这里。
+#[tauri::command]
+pub async fn paste_import(
+    current_folder: Option<String>,
+    on_progress: Channel<ImportProgress>,
+    app: tauri::AppHandle,
+    runs: tauri::State<'_, std::sync::Arc<ImportRuns>>,
+    state: tauri::State<'_, Shared>,
+) -> Result<ImportOutcome> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (current_folder, on_progress, app, runs, state);
+        Err(AppError::detailed(
+            Code::ClipboardReadFailed,
+            "当前平台尚未实现剪贴板导入",
+        ))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let opened = current_opened(&state)?;
+        let runs = std::sync::Arc::clone(runs.inner());
+        tauri::async_runtime::spawn_blocking(move || {
+            paste_import_blocking(current_folder, on_progress, app, &runs, &opened)
+        })
+        .await
+        .map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("后台粘贴导入任务异常终止：{error}"),
+            )
+        })?
+    }
 }
 
 /// 导入任务的可见状态。只有后端确认后才是 `stopped`——前端仅停止等待或隐藏进度

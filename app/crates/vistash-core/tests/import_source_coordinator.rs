@@ -93,7 +93,7 @@ struct StopAtProgress<'a> {
 }
 
 impl ImportObserver for StopAtProgress<'_> {
-    fn on_progress(&mut self, done: usize, _total: usize, _source: &Path) {
+    fn on_progress(&mut self, done: usize, _total: usize, _current: &str) {
         if done == self.limit {
             self.run.request_stop();
         }

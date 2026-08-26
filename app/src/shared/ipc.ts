@@ -170,6 +170,25 @@ export function importSources(
 }
 
 /**
+ * 窗口级 Ctrl+V 的统一入口（任务 5.3，设计第十一条）。
+ *
+ * 前端只负责"这个按键该不该由图片工作区认领"；剪贴板上有什么、按
+ * 文件 > 位图 > 文本 > 空的顺序如何分流，全部在后端裁决。WebView 没有
+ * 任何通用剪贴板权限，位图像素从系统剪贴板到库内本体全程不经过前端。
+ * 剪贴板里没有可导入内容时后端返回全零报告而不是报错。
+ */
+export function pasteImport(
+  currentFolder: string | null,
+  onProgress: (progress: ImportProgress) => void,
+): Promise<ImportOutcome> {
+  const progress = new Channel<ImportProgress>(onProgress);
+  return call<ImportOutcome>("paste_import", {
+    currentFolder,
+    onProgress: progress,
+  });
+}
+
+/**
  * 提交导入停止请求：真实的后端命令，返回提交后的任务状态。
  * 只有后端确认后才是 stopped——前端隐藏进度不算已停止。
  */

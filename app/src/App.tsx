@@ -12,7 +12,8 @@ import {
   type WorkspaceSection,
 } from "./features/workspace/WorkspaceTopBar";
 import { asAppError } from "./shared/errors";
-import { importSources, libraryStatus, onPathsDropped } from "./shared/ipc";
+import { importSources, libraryStatus, onPathsDropped, pasteImport } from "./shared/ipc";
+import { shouldClaimPaste } from "./features/assets/pasteClaim";
 import type {
   AppError,
   ImportOutcome,
@@ -53,16 +54,22 @@ export function App() {
 
   const opened = status?.path ?? null;
 
+  // 统一导入的驱动入口：拖放/选择交来路径列表，窗口级 Ctrl+V 交 null（后端
+  // 自行读剪贴板分流）。两者共用同一进度显示与并发闸。
   const runImport = useCallback(
-    async (paths: string[]) => {
-      if (paths.length === 0 || importingRef.current) return;
+    async (paths: string[] | null) => {
+      if ((paths !== null && paths.length === 0) || importingRef.current) return;
       importingRef.current = true;
       setImporting(true);
       setImportProgress(null);
       try {
         // 整窗口拖放暂不带当前文件夹（落点接线随任务 10.2）：后端按 null 落入
         // 未分类。按钮与目录选择接入时传各自的具体文件夹即可复用同一协调器。
-        setOutcome(await importSources(paths, null, setImportProgress));
+        setOutcome(
+          paths === null
+            ? await pasteImport(null, setImportProgress)
+            : await importSources(paths, null, setImportProgress),
+        );
         setCatalogVersion((version) => version + 1);
       } catch (raw) {
         setAssetsError(asAppError(raw));
@@ -107,6 +114,23 @@ export function App() {
       if (unlisten !== null) unlisten();
     };
   }, [opened, runImport]);
+
+  // 窗口级 Ctrl+V（任务 5.3，设计第十一条）：只在图片工作区处于前台且事件目标
+  // 不属于可编辑控件时认领；备注、搜索框等文本编辑位置保持原生粘贴。剪贴板上
+  // 是什么由后端裁决——前端只决定按键归属，不见任何像素。
+  useEffect(() => {
+    if (opened === null) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.key !== "v" && event.key !== "V") return;
+      if (section !== "assets") return;
+      if (!shouldClaimPaste(event.target)) return;
+      event.preventDefault();
+      void runImport(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [opened, section, runImport]);
 
   // 未保存主字段草稿的窗口级拦截（任务 10.4）：关闭窗口前先问保存/放弃/留在
   // 当前页。只在 Tauri 运行时里可用；纯浏览器/测试环境没有原生关闭事件可拦。

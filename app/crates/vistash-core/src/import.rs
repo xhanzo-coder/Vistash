@@ -18,7 +18,7 @@ use crate::media;
 use crate::sidecar::{
     normalize_folder_path, AssetSidecar, AssetSource, DisplayFilename, SIDECAR_FORMAT_VERSION_V3,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -54,8 +54,10 @@ pub trait ImportObserver {
         false
     }
 
-    fn on_progress(&mut self, done: usize, total: usize, source: &Path) {
-        let _ = (done, total, source);
+    /// 报告进度。`current_filename` 是当前即将处理的素材名（内存来源没有路径，
+    /// 只有名字），全部结束时为空串。
+    fn on_progress(&mut self, done: usize, total: usize, current_filename: &str) {
+        let _ = (done, total, current_filename);
     }
 
     fn after_stage(&mut self, stage: ImportStage) -> Result<()> {
@@ -224,7 +226,7 @@ fn import_one_inner(
         .transpose()?;
     materialize_import(
         lib,
-        source,
+        SourceData::Disk(source),
         byte_size,
         &hash,
         folder,
@@ -259,10 +261,29 @@ fn probe_source(source: &Path, observer: &mut dyn ImportObserver) -> Result<(u64
 /// 从 [`import_one_inner`] 中拆出，使统一协调器（[`import_sources`]）能复用同一条写入
 /// 管线，只把"查重命中"的处理从报错换成记录——两种入口的落盘步骤与回滚不变式必须
 /// 完全一致，否则两条路径会慢慢分叉。
+/// 物化阶段的载荷来源：磁盘文件或内存 PNG 字节（剪贴板位图，设计第十一条）。
+///
+/// 落盘步骤与回滚不变式对两者完全一致；分派点只有"读什么来解码"与"本体怎么写"。
+/// 这正是设计第十条"四个入口不得各自维护导入语义"在实现层的落点。
+#[derive(Debug, Clone, Copy)]
+enum SourceData<'a> {
+    Disk(&'a Path),
+    MemoryPng {
+        bytes: &'a [u8],
+        filename: &'a str,
+        captured_at: DateTime<Utc>,
+    },
+}
+
+/// 把已确认非重复的素材写入库：本体 → 缩略图 → 侧车。
+///
+/// 从 [`import_one_inner`] 中拆出，使统一协调器（[`import_sources`]）能复用同一条写入
+/// 管线，只把"查重命中"的处理从报错换成记录——两种入口的落盘步骤与回滚不变式必须
+/// 完全一致，否则两条路径会慢慢分叉。
 #[allow(clippy::too_many_arguments)]
 fn materialize_import(
     lib: &Library,
-    source: &Path,
+    source: SourceData<'_>,
     byte_size: u64,
     hash: &ContentHash,
     folder: Option<String>,
@@ -270,12 +291,57 @@ fn materialize_import(
     observer: &mut dyn ImportObserver,
     created: &mut Created,
 ) -> Result<AssetSidecar> {
-    let decoded = media::decode(source)?;
+    // 来源身份与解码按载荷类型分派；从这里开始两种载荷走完全相同的写入序列。
+    let (decoded, display_stem, asset_source) = match source {
+        SourceData::Disk(path) => {
+            let decoded = media::decode(path)?;
+            let filename = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let display_stem = std::path::Path::new(&filename)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| filename.clone());
+            (
+                decoded,
+                display_stem,
+                AssetSource::Filesystem {
+                    path: Some(path.to_string_lossy().into_owned()),
+                    filename,
+                },
+            )
+        }
+        SourceData::MemoryPng {
+            bytes,
+            filename,
+            captured_at,
+        } => {
+            // 位图已在 Rust 侧编码为 PNG：解码只走文件头判定，没有扩展名可查。
+            let decoded = media::decode_bytes(bytes)?;
+            let display_stem = std::path::Path::new(filename)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| filename.to_owned());
+            (
+                decoded,
+                display_stem,
+                AssetSource::Clipboard {
+                    captured_at,
+                    filename: filename.to_owned(),
+                },
+            )
+        }
+    };
     let ext = decoded.media_type.library_ext();
 
     let body = lib.body_path(hash, ext);
     created.claim(&body);
-    copy_into(source, &body)?;
+    // 写本体是唯一区分读写方式的步骤：磁盘文件流式复制，内存字节整块落盘。
+    match source {
+        SourceData::Disk(path) => copy_into(path, &body)?,
+        SourceData::MemoryPng { bytes, .. } => write_bytes(&body, bytes, Code::ImportCopyFailed)?,
+    }
     observer.after_stage(ImportStage::BodyWritten)?;
 
     // 缩略图失败按素材失败处理并回滚。它虽是可重算的派生数据，但编码失败几乎总是
@@ -289,17 +355,8 @@ fn materialize_import(
     // 色卡失败不影响入库：失败原因记录在色卡自身里。
     let color_card = colorcard::analyze(&decoded.image);
 
-    // v3 侧车：来源身份（路径与文件名）不可变，显示名初始化为来源名主体，归属是
-    // 唯一文件夹或未分类。名称主体非法时导入失败——真实扩展名与合法名称属于入库
-    // 条件，而不是事后修复项。
-    let original_filename = source
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let display_stem = std::path::Path::new(&original_filename)
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_else(|| original_filename.clone());
+    // v3 侧车：来源身份不可变，显示名初始化为来源名主体，归属是唯一文件夹或未分类。
+    // 名称主体非法时导入失败——真实扩展名与合法名称属于入库条件，而不是事后修复项。
     let display_filename = DisplayFilename::new(&display_stem, decoded.media_type)?;
 
     let sidecar = AssetSidecar {
@@ -312,10 +369,7 @@ fn materialize_import(
         width: decoded.width(),
         height: decoded.height(),
         imported_at: Utc::now(),
-        source: AssetSource::Filesystem {
-            path: Some(source.to_string_lossy().into_owned()),
-            filename: original_filename,
-        },
+        source: asset_source,
         display_filename,
         folder,
         tags: tags.to_vec(),
@@ -518,7 +572,11 @@ pub fn import_many(
             report.failed.push(failure(source, AppError::new(Code::ImportCancelled)));
             continue;
         }
-        observer.on_progress(i, total, source);
+        let name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        observer.on_progress(i, total, &name);
         match import_one(lib, source, opts, observer) {
             Ok(s) => report.imported.push(s),
             Err(e) => {
@@ -529,7 +587,7 @@ pub fn import_many(
             }
         }
     }
-    observer.on_progress(total, total, Path::new(""));
+    observer.on_progress(total, total, "");
     report
 }
 
@@ -555,6 +613,34 @@ pub enum ImportSource {
     File(PathBuf),
     /// 使用者指定的目录：以目录名为逻辑根，内部相对层级映射为嵌套逻辑文件夹。
     Directory(PathBuf),
+    /// 剪贴板位图经 Rust 侧编码的 PNG 字节（设计第十一条）。没有文件系统来源：
+    /// 来源身份记为 [`crate::sidecar::AssetSource::Clipboard`]，显示名由调用方
+    /// 按 [`crate::clipboard::clipboard_image_display_name`] 生成本地时间名，
+    /// 在当前导入内天然唯一。
+    PngBytes {
+        bytes: Vec<u8>,
+        filename: String,
+        captured_at: DateTime<Utc>,
+    },
+}
+
+/// 把资源管理器粘贴得到的路径分类为导入来源（设计第十一条）。
+///
+/// 剪贴板里的文件与目录不另起一套粘贴语义：按磁盘事实分类成 [`ImportSource`]，
+/// 与文件/目录选择入口产生完全相同的来源集合。目录保持为 Directory 来源，让
+/// 协调器保留所选目录名与相对层级；分类只做存在性判断，消失的路径按 File 来源
+/// 原样送达，由导入阶段以 `import.source_unreadable` 失败呈现。
+pub fn classify_paths(paths: Vec<PathBuf>) -> Vec<ImportSource> {
+    paths
+        .into_iter()
+        .map(|p| {
+            if p.is_dir() {
+                ImportSource::Directory(p)
+            } else {
+                ImportSource::File(p)
+            }
+        })
+        .collect()
 }
 
 /// 统一导入协调器的请求。
@@ -752,10 +838,78 @@ fn lock_runs(active: &Mutex<HashMap<String, Arc<ImportRun>>>) -> std::sync::Mute
     active.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// 计划阶段产出的单个待导文件及其已规范化的逻辑归属。
+/// 计划阶段产出的单个待导条目及其已规范化的逻辑归属。
 struct PlannedFile {
-    source: PathBuf,
+    item: PlannedItem,
     folder: Option<String>,
+}
+
+/// 计划内条目的载荷：磁盘文件或剪贴板位图编码出的内存 PNG。
+#[derive(Debug)]
+enum PlannedItem {
+    Disk(PathBuf),
+    MemoryPng {
+        bytes: Vec<u8>,
+        filename: String,
+        captured_at: DateTime<Utc>,
+    },
+}
+
+impl PlannedItem {
+    /// 确定性排序与去重键：磁盘文件按路径，内存载荷按来源名。
+    ///
+    /// 与旧展开一致的动机：同一批次里同一条目绝不会被处理两次；内存 PNG 的
+    /// 内容重复由哈希查重兜底，第二次出现会落入"重复"桶而不是再写一份。
+    fn sort_key(&self) -> (u8, String) {
+        match self {
+            PlannedItem::Disk(path) => (0, path.to_string_lossy().into_owned()),
+            PlannedItem::MemoryPng { filename, .. } => (1, filename.clone()),
+        }
+    }
+
+    /// 进度报告用的素材名（内存来源没有路径，只有名字）。
+    fn display_name(&self) -> String {
+        match self {
+            PlannedItem::Disk(path) => path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            PlannedItem::MemoryPng { filename, .. } => filename.clone(),
+        }
+    }
+
+    /// 报告里的定位串：磁盘载荷用完整路径，内存载荷用来源名。
+    fn locator(&self) -> String {
+        match self {
+            PlannedItem::Disk(path) => path.to_string_lossy().into_owned(),
+            PlannedItem::MemoryPng { filename, .. } => filename.clone(),
+        }
+    }
+
+    /// 失败报告：内存载荷没有路径可引，来源名同时充当定位信息。
+    fn failure(&self, error: AppError) -> ImportFailure {
+        ImportFailure {
+            source_path: self.locator(),
+            original_filename: self.display_name(),
+            error,
+        }
+    }
+
+    /// 物化阶段的载荷视图。
+    fn source_data(&self) -> SourceData<'_> {
+        match self {
+            PlannedItem::Disk(path) => SourceData::Disk(path),
+            PlannedItem::MemoryPng {
+                bytes,
+                filename,
+                captured_at,
+            } => SourceData::MemoryPng {
+                bytes,
+                filename,
+                captured_at: *captured_at,
+            },
+        }
+    }
 }
 
 /// 统一导入入口：文件选择、目录选择、拖放与剪贴板共用的协调器（设计第十条）。
@@ -831,7 +985,7 @@ fn import_sources_inner(
             report.pending_count += 1;
             continue;
         }
-        observer.on_progress(i, total, &file.source);
+        observer.on_progress(i, total, &file.item.display_name());
         match import_planned(lib, file, tags, run, observer) {
             Ok(PlannedOutcome::Imported(sidecar)) => report.imported.push(*sidecar),
             Ok(PlannedOutcome::Duplicate(duplicate)) => report.duplicates.push(duplicate),
@@ -841,10 +995,10 @@ fn import_sources_inner(
                 stopping = true;
                 report.pending_count += 1;
             }
-            Err(e) => report.failed.push(failure(&file.source, e)),
+            Err(e) => report.failed.push(file.item.failure(e)),
         }
     }
-    observer.on_progress(total, total, Path::new(""));
+    observer.on_progress(total, total, "");
     Ok(report)
 }
 
@@ -864,17 +1018,31 @@ fn plan_sources(
         }
         match source {
             ImportSource::File(path) => planned.push(PlannedFile {
-                source: path.clone(),
+                item: PlannedItem::Disk(path.clone()),
                 folder: base.clone(),
             }),
             ImportSource::Directory(root) => {
                 collect_directory(root, base, run, &mut planned, &mut skipped, &mut failed);
             }
+            // 内存 PNG 与磁盘文件同批时排在磁盘之后（真实来源优先）；位图的内容
+            // 重复由哈希查重兜底，再次粘贴落入重复桶而不是再写一份。
+            ImportSource::PngBytes {
+                bytes,
+                filename,
+                captured_at,
+            } => planned.push(PlannedFile {
+                item: PlannedItem::MemoryPng {
+                    bytes: bytes.clone(),
+                    filename: filename.clone(),
+                    captured_at: *captured_at,
+                },
+                folder: base.clone(),
+            }),
         }
     }
-    // 与旧展开一致的确定性顺序：按源路径排序去重，同一文件不会被处理两次。
-    planned.sort_by(|a, b| a.source.cmp(&b.source));
-    planned.dedup_by(|a, b| a.source == b.source);
+    // 与旧展开一致的确定性顺序：按排序键排序去重，同一条目不会被处理两次。
+    planned.sort_by_key(|file| file.item.sort_key());
+    planned.dedup_by(|a, b| a.item.sort_key() == b.item.sort_key());
     Ok((planned, skipped, failed))
 }
 
@@ -985,7 +1153,7 @@ fn walk_directory(
         }
         match normalize_folder_path(logical_prefix) {
             Ok(folder) => planned.push(PlannedFile {
-                source: path,
+                item: PlannedItem::Disk(path),
                 folder: Some(folder),
             }),
             Err(e) => failed.push(failure(&path, e)),
@@ -1031,7 +1199,15 @@ fn import_planned(
         return Err(AppError::new(Code::ImportCancelled));
     }
     let mut created = Created::new();
-    let (byte_size, hash) = probe_source(&file.source, observer)?;
+    let (byte_size, hash) = match &file.item {
+        PlannedItem::Disk(path) => probe_source(path, observer)?,
+        PlannedItem::MemoryPng { bytes, .. } => {
+            // 内存载荷没有文件系统元数据：大小即字节数，哈希直接对内容计算。
+            let hash = ContentHash::of_bytes(bytes);
+            observer.after_stage(ImportStage::Hashed)?;
+            (bytes.len() as u64, hash)
+        }
+    };
 
     // 查重以侧车为准而不是以本体为准（与 import_one 同一口径）。命中的来源什么
     // 都不写，自然也没有需要回滚的东西。
@@ -1039,12 +1215,8 @@ fn import_planned(
     let in_trash = lib.trash_sidecar_path(&hash).is_file();
     if in_library || in_trash {
         return Ok(PlannedOutcome::Duplicate(ImportDuplicate {
-            source_path: file.source.to_string_lossy().into_owned(),
-            original_filename: file
-                .source
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            source_path: file.item.locator(),
+            original_filename: file.item.display_name(),
             hash: hash.as_str().to_owned(),
             in_trash,
         }));
@@ -1052,7 +1224,7 @@ fn import_planned(
 
     match materialize_import(
         lib,
-        &file.source,
+        file.item.source_data(),
         byte_size,
         &hash,
         file.folder.clone(),
@@ -1095,7 +1267,7 @@ mod tests {
         fn should_cancel(&self) -> bool {
             self.started > self.limit
         }
-        fn on_progress(&mut self, _done: usize, _total: usize, _source: &Path) {
+        fn on_progress(&mut self, _done: usize, _total: usize, _current: &str) {
             self.started += 1;
         }
     }
@@ -1106,7 +1278,7 @@ mod tests {
         calls: Vec<(usize, usize)>,
     }
     impl ImportObserver for Recorder {
-        fn on_progress(&mut self, done: usize, total: usize, _source: &Path) {
+        fn on_progress(&mut self, done: usize, total: usize, _current: &str) {
             self.calls.push((done, total));
         }
     }
