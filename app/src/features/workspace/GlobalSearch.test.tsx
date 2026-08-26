@@ -24,6 +24,7 @@ const ASSET: AssetRow = {
   height: 960,
   imported_at: "2026-08-19T00:00:00Z",
   original_filename: "人物参考.png",
+  display_filename: "人物参考.png",
   source_path: null,
   deleted_at: null,
   color_card_status: "ok",
@@ -33,7 +34,7 @@ const ASSET: AssetRow = {
   note: "",
   favorite: false,
   tags: [],
-  folders: [],
+  folder: null,
   colors: [],
 };
 

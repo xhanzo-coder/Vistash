@@ -103,48 +103,20 @@ impl Catalog {
         report
     }
 
-    /// 批量把图片加入一个文件夹。已在目标文件夹的项幂等跳过。
-    pub fn batch_add_asset_folder(
+    /// 批量把图片移动到唯一目标文件夹（单归属）。已在目标状态的项幂等跳过；
+    /// `target` 为 `None` 表示批量移回未分类。
+    pub fn batch_move_assets_to_folder(
         &mut self,
         hashes: &[ContentHash],
-        folder: &FolderPath,
+        target: Option<&FolderPath>,
         progress: &mut dyn BatchProgress,
     ) -> BatchReport {
-        let mut targets: Vec<Target<Vec<FolderPath>>> = Vec::new();
+        let mut targets: Vec<Target<Option<FolderPath>>> = Vec::new();
         for hash in hashes {
-            targets.push(self.planned_asset_folders(hash, |folders| {
-                if folders.iter().any(|f| f == folder.as_str()) {
-                    return Ok(false);
-                }
-                folders.push(folder.as_str().to_owned());
-                folders.sort();
-                Ok(true)
-            }));
+            targets.push(self.planned_asset_move(hash, target));
         }
-        self.run_batch(progress, targets, |catalog, hash, folders| {
-            catalog.set_asset_folders(&hash, &folders)
-        })
-    }
-
-    /// 批量把图片移出一个文件夹。不在该文件夹的项幂等跳过。
-    pub fn batch_remove_asset_folder(
-        &mut self,
-        hashes: &[ContentHash],
-        folder: &FolderPath,
-        progress: &mut dyn BatchProgress,
-    ) -> BatchReport {
-        let mut targets: Vec<Target<Vec<FolderPath>>> = Vec::new();
-        for hash in hashes {
-            targets.push(self.planned_asset_folders(hash, |folders| {
-                if !folders.iter().any(|f| f == folder.as_str()) {
-                    return Ok(false);
-                }
-                folders.retain(|f| f != folder.as_str());
-                Ok(true)
-            }));
-        }
-        self.run_batch(progress, targets, |catalog, hash, folders| {
-            catalog.set_asset_folders(&hash, &folders)
+        self.run_batch(progress, targets, |catalog, hash, destination| {
+            catalog.move_asset_to_folder(&hash, destination.as_ref())
         })
     }
 
@@ -426,37 +398,34 @@ impl Catalog {
         })
     }
 
-    /// 图片侧批量组织的目标构造：读当前值、算新集合，错误进入同一失败通道。
-    /// 计划闭包返回是否需要写入——`false` 即已处于请求状态，幂等跳过。
-    fn planned_asset_folders(
+    /// 图片侧批量移动的目标构造：读当前唯一归属、比对目标，错误进入同一失败
+    /// 通道。计划值为 `None` 即已处于请求状态，幂等跳过；内层 `None` 表示
+    /// 移到未分类。存在性与回收站校验复用单项 `move_asset_to_folder`。
+    fn planned_asset_move(
         &self,
         hash: &ContentHash,
-        plan: impl FnOnce(&mut Vec<String>) -> Result<bool>,
-    ) -> Target<Vec<FolderPath>> {
+        target: Option<&FolderPath>,
+    ) -> Target<Option<FolderPath>> {
         match self
             .index()
             .and_then(|index| index.asset_row(hash.as_str()))
         {
             Ok(row) => {
-                let mut folders = row.folders.clone();
+                let unchanged = match target {
+                    Some(folder) => row.folder.as_deref() == Some(folder.as_str()),
+                    None => row.folder.is_none(),
+                };
                 let display_name = row.original_filename;
-                match plan(&mut folders) {
-                    Ok(false) => (
-                        hash.as_str().to_owned(),
-                        display_name,
-                        Ok((hash.clone(), None)),
-                    ),
-                    Ok(true) => {
-                        let parsed: std::result::Result<Vec<FolderPath>, AppError> =
-                            folders.iter().map(|f| FolderPath::parse(f)).collect();
-                        (
-                            hash.as_str().to_owned(),
-                            display_name,
-                            parsed.map(|folders| (hash.clone(), Some(folders))),
-                        )
-                    }
-                    Err(error) => (hash.as_str().to_owned(), display_name, Err(error)),
-                }
+                let payload = if unchanged {
+                    None
+                } else {
+                    Some(target.cloned())
+                };
+                (
+                    hash.as_str().to_owned(),
+                    display_name,
+                    Ok((hash.clone(), payload)),
+                )
             }
             Err(error) => (
                 hash.as_str().to_owned(),
@@ -607,13 +576,13 @@ mod tests {
         let one = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "a.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let trashed = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "c.png", [0, 0, 255, 255]),
-            &[],
+            None,
             &[],
         );
         fixture
@@ -627,9 +596,9 @@ mod tests {
             .expect("建立文件夹");
 
         let mut progress = RecordingProgress::default();
-        let report = fixture.catalog.batch_add_asset_folder(
+        let report = fixture.catalog.batch_move_assets_to_folder(
             &[one.hash.clone(), unknown.clone(), trashed.hash.clone()],
-            &folder,
+            Some(&folder),
             &mut progress,
         );
 
@@ -655,7 +624,7 @@ mod tests {
             .expect("索引")
             .asset_row(one.hash.as_str())
             .expect("索引行");
-        assert_eq!(row.folders, vec![folder.as_str().to_owned()]);
+        assert_eq!(row.folder, Some(folder.as_str().to_owned()));
     }
 
     #[test]
@@ -665,19 +634,19 @@ mod tests {
         let one = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "one.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let two = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "two.png", [0, 255, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let three = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "three.png", [0, 0, 255, 255]),
-            &[],
+            None,
             &[],
         );
 
@@ -716,7 +685,7 @@ mod tests {
         let sidecar = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "hero.png", [255, 200, 0, 255]),
-            &["人物"],
+            Some("人物"),
             &["主视觉"],
         );
         fixture
@@ -730,9 +699,9 @@ mod tests {
         let tag = Tag::parse("主视觉").expect("合法标签");
 
         // 三种请求都命中"已处于请求状态"：计成功但不触碰权威文件。
-        let folders_report = fixture.catalog.batch_add_asset_folder(
+        let folders_report = fixture.catalog.batch_move_assets_to_folder(
             std::slice::from_ref(&sidecar.hash),
-            &folder_path,
+            Some(&folder_path),
             &mut SilentProgress,
         );
         let tags_report = fixture.catalog.batch_add_asset_tag(
@@ -824,13 +793,13 @@ mod tests {
         let one = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "del-a.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let two = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "del-b.png", [0, 255, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let first = prompt(&mut fixture.catalog, "要删除的第一条提示词");
@@ -889,13 +858,13 @@ mod tests {
         let one = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "link-a.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let two = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "link-b.png", [0, 255, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let unknown = ContentHash::of_bytes(b"unknown-link-hash");

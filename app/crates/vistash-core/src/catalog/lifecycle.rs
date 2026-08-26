@@ -72,9 +72,9 @@ impl Catalog {
                 format!("素材已经在回收站：{hash}"),
             ));
         }
-        let previous_folders = sidecar.folders.clone();
-        sidecar.folders.clear();
-        sidecar.deleted_from_folders = Some(previous_folders);
+        // 单归属语义：删除时把唯一归属移入 deleted_from_folder，回收站中的素材
+        // 不再占有一个活跃归属。
+        sidecar.deleted_from_folder = sidecar.folder.take();
         sidecar.deleted_at = Some(chrono::Utc::now());
 
         if let Some(parent) = trash_body.parent() {
@@ -157,31 +157,24 @@ impl Catalog {
                 format!("回收站侧车没有删除状态：{hash}"),
             ));
         }
-        let Some(previous_folders) = sidecar.deleted_from_folders.clone() else {
-            return Err(AppError::detailed(
-                Code::TrashRestoreFailed,
-                format!("回收站侧车缺少删除前文件夹：{hash}"),
-            ));
-        };
-        let folder_list = self.library.read_folders()?;
-        let mut restored_folders = Vec::new();
+        // 单归属还原：删除前位置至多一个。`deleted_from_folder` 为 `None` 表示
+        // 删除前就在未分类，直接回到未分类而不是报错。原文件夹仍在清单中则恢复
+        // 归属，已被删除则回落未分类并把缺失路径显式返回给界面。
+        let previous_folder = sidecar.deleted_from_folder.take();
         let mut missing_folders = Vec::new();
-        for folder in previous_folders {
-            if folder_list
-                .folders
-                .iter()
-                .any(|existing| existing == &folder)
-            {
-                restored_folders.push(folder);
-            } else {
-                missing_folders.push(folder);
+        match previous_folder {
+            Some(previous) => {
+                let folder_list = self.library.read_folders()?;
+                if folder_list.folders.iter().any(|existing| existing == &previous) {
+                    sidecar.folder = Some(previous);
+                } else {
+                    missing_folders.push(previous);
+                }
             }
+            None => sidecar.folder = None,
         }
-        restored_folders.sort();
-        missing_folders.sort();
-        sidecar.folders = restored_folders;
         sidecar.deleted_at = None;
-        sidecar.deleted_from_folders = None;
+        sidecar.deleted_from_folder = None;
 
         if let Some(parent) = body.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
@@ -509,10 +502,10 @@ mod tests {
     use crate::error::Code;
 
     #[test]
-    fn delete_asset_moves_a_complete_pair_and_records_previous_folders() {
+    fn delete_asset_moves_a_complete_pair_and_records_the_previous_folder() {
         let mut fixture = fixture();
         let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-        let sidecar = import_with(&mut fixture.catalog, &source, &["参考", "配色"], &["人物"]);
+        let sidecar = import_with(&mut fixture.catalog, &source, Some("参考"), &["人物"]);
 
         fixture
             .catalog
@@ -538,11 +531,8 @@ mod tests {
             AssetSidecar::read(&fixture.catalog.library().trash_sidecar_path(&sidecar.hash))
                 .expect("读取回收站侧车");
         assert!(deleted.is_deleted());
-        assert!(deleted.folders.is_empty());
-        assert_eq!(
-            deleted.deleted_from_folders,
-            Some(vec!["参考".to_owned(), "配色".to_owned()])
-        );
+        assert_eq!(deleted.folder, None);
+        assert_eq!(deleted.deleted_from_folder.as_deref(), Some("参考"));
     }
 
     #[test]
@@ -554,7 +544,7 @@ mod tests {
         ] {
             let mut fixture = fixture();
             let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-            let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+            let sidecar = import_with(&mut fixture.catalog, &source, None, &[]);
             fixture.catalog.inject_lifecycle_failure(stage);
 
             fixture
@@ -586,42 +576,53 @@ mod tests {
     }
 
     #[test]
-    fn restore_asset_keeps_existing_folders_and_reports_missing_ones() {
+    fn restore_asset_returns_to_the_original_folder_when_it_still_exists() {
         let mut fixture = fixture();
         let reference = fixture
             .catalog
             .create_folder(None, &FolderName::parse("参考").expect("名称"))
             .expect("创建文件夹");
-        let removed = fixture
-            .catalog
-            .create_folder(None, &FolderName::parse("待删除").expect("名称"))
-            .expect("创建文件夹");
         let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-        let sidecar = import_with(
-            &mut fixture.catalog,
-            &source,
-            &[reference.as_str(), removed.as_str()],
-            &[],
-        );
+        let sidecar = import_with(&mut fixture.catalog, &source, Some(reference.as_str()), &[]);
         fixture
             .catalog
             .delete_asset(&sidecar.hash)
             .expect("删除素材");
-        fixture
-            .catalog
-            .delete_folder(&removed)
-            .expect("删除历史文件夹");
 
         let outcome = fixture
             .catalog
             .restore_asset(&sidecar.hash)
             .expect("还原素材");
 
-        assert_eq!(outcome.missing_folders, vec!["待删除".to_owned()]);
+        assert!(outcome.missing_folders.is_empty());
         let restored = AssetSidecar::read(&fixture.catalog.library().sidecar_path(&sidecar.hash))
             .expect("读取正常侧车");
-        assert_eq!(restored.folders, vec!["参考".to_owned()]);
+        assert_eq!(restored.folder.as_deref(), Some("参考"));
         assert!(!restored.is_deleted());
+    }
+
+    #[test]
+    fn restoring_an_asset_trashed_from_unclassified_returns_to_unclassified() {
+        // 未分类素材删除时没有删除前文件夹可记录：`deleted_from_folder` 为 `None`
+        // 是合法状态，还原必须回到未分类而不是报"缺少删除前文件夹"。
+        let mut fixture = fixture();
+        let source = write_png(&fixture.source, "路人.png", [255, 0, 0, 255]);
+        let sidecar = import_with(&mut fixture.catalog, &source, None, &[]);
+        fixture
+            .catalog
+            .delete_asset(&sidecar.hash)
+            .expect("删除素材");
+
+        let outcome = fixture
+            .catalog
+            .restore_asset(&sidecar.hash)
+            .expect("还原素材");
+
+        assert!(outcome.missing_folders.is_empty());
+        let restored = AssetSidecar::read(&fixture.catalog.library().sidecar_path(&sidecar.hash))
+            .expect("读取正常侧车");
+        assert!(!restored.is_deleted());
+        assert_eq!(restored.folder, None);
     }
 
     #[test]
@@ -633,7 +634,7 @@ mod tests {
         ] {
             let mut fixture = fixture();
             let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-            let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+            let sidecar = import_with(&mut fixture.catalog, &source, None, &[]);
             fixture
                 .catalog
                 .delete_asset(&sidecar.hash)
@@ -676,7 +677,7 @@ mod tests {
             .create_folder(None, &FolderName::parse("临时").expect("名称"))
             .expect("创建文件夹");
         let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-        let sidecar = import_with(&mut fixture.catalog, &source, &[folder.as_str()], &[]);
+        let sidecar = import_with(&mut fixture.catalog, &source, Some(folder.as_str()), &[]);
         fixture
             .catalog
             .delete_asset(&sidecar.hash)
@@ -689,11 +690,11 @@ mod tests {
             .expect("还原到根文件夹");
 
         assert_eq!(outcome.missing_folders, vec!["临时".to_owned()]);
-        assert!(
+        assert_eq!(
             AssetSidecar::read(&fixture.catalog.library().sidecar_path(&sidecar.hash))
                 .expect("读取侧车")
-                .folders
-                .is_empty()
+                .folder,
+            None
         );
     }
 
@@ -702,8 +703,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let first_sidecar = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let second_sidecar = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let first_sidecar = import_with(&mut fixture.catalog, &first, None, &[]);
+        let second_sidecar = import_with(&mut fixture.catalog, &second, None, &[]);
         fixture
             .catalog
             .delete_asset(&first_sidecar.hash)
@@ -755,8 +756,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let failed = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let successful = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let failed = import_with(&mut fixture.catalog, &first, None, &[]);
+        let successful = import_with(&mut fixture.catalog, &second, None, &[]);
         fixture
             .catalog
             .delete_asset(&failed.hash)

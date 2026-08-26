@@ -742,7 +742,7 @@ mod tests {
         let image = crate::catalog::testing::import_with(
             &mut fixture.catalog,
             &source,
-            &["人物"],
+            Some("人物"),
             &[],
         );
         let created = fixture
@@ -782,7 +782,7 @@ mod tests {
             &fixture.catalog.library().sidecar_path(&image.hash),
         )
         .expect("读回图片侧车");
-        assert_eq!(image_sidecar.folders, vec!["人物".to_owned()]);
+        assert_eq!(image_sidecar.folder.as_deref(), Some("人物"));
         let image_list = fixture.catalog.library().read_folders().expect("读回图片清单");
         assert_eq!(image_list.folders, vec!["人物".to_owned()]);
     }
@@ -980,7 +980,7 @@ mod tests {
         let mut fixture = fixture();
         let source = fixture.source.join("样例.png");
         crate::catalog::testing::write_png(&fixture.source, "样例.png", [255, 0, 0, 255]);
-        crate::catalog::testing::import_with(&mut fixture.catalog, &source, &[], &["人物"]);
+        crate::catalog::testing::import_with(&mut fixture.catalog, &source, None, &["人物"]);
         let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
 
         fixture

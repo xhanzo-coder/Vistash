@@ -20,6 +20,7 @@ const ASSET: AssetRow = {
   height: 960,
   imported_at: "2026-08-19T00:00:00Z",
   original_filename: "人物参考.png",
+  display_filename: "人物参考.png",
   source_path: null,
   deleted_at: null,
   color_card_status: "ok",
@@ -29,7 +30,7 @@ const ASSET: AssetRow = {
   note: "",
   favorite: false,
   tags: ["人物"],
-  folders: ["参考"],
+  folder: "参考",
   colors: [],
 };
 
@@ -155,8 +156,7 @@ beforeEach(() => {
     }
     // 批量组织命令（任务 11.2）：统一 BatchReport 应答，逐项失败由报告呈现。
     if (
-      command === "batch_add_asset_folder" ||
-      command === "batch_remove_asset_folder" ||
+      command === "batch_move_assets_to_folder" ||
       command === "batch_add_asset_tag" ||
       command === "batch_remove_asset_tag" ||
       command === "batch_set_asset_favorite" ||
@@ -656,7 +656,7 @@ test("已应用条件呈现为可移除芯片：移除文件夹保留其余条�
   await act(async () => root.unmount());
 });
 
-test("多选呈现批量工具条与检查器批量分区，批量加入文件夹走后端批量命令", async () => {
+test("多选呈现批量工具条与检查器批量分区，批量移动文件夹走后端批量命令", async () => {
   const second: AssetRow = {
     ...ASSET,
     hash: "c".repeat(64),
@@ -696,15 +696,16 @@ test("多选呈现批量工具条与检查器批量分区，批量加入文件�
   if (batchSection === null) throw new Error("缺少检查器批量分区");
   expect(container.querySelector('[data-inspector-section="info"]')).toBeNull();
 
-  // 批量加入文件夹：意图经检查器上报，写入走统一的后端批量命令并回显报告。
-  const joinFolder = batchSection.querySelector<HTMLInputElement>(
-    '[aria-label="批量加入文件夹 参考/构图"]',
+  // 批量移动文件夹：单归属下点选目标即整体移动，意图经检查器上报，
+  // 写入走统一的后端批量命令并回显报告。
+  const moveTarget = batchSection.querySelector<HTMLInputElement>(
+    '[aria-label="批量移动到文件夹 参考/构图"]',
   );
-  if (joinFolder === null) throw new Error("缺少批量加入文件夹复选框");
-  await act(async () => joinFolder.click());
+  if (moveTarget === null) throw new Error("缺少批量移动文件夹单选钮");
+  await act(async () => moveTarget.click());
   await flush();
 
-  const call = ipcCalls.find((entry) => entry.command === "batch_add_asset_folder");
+  const call = ipcCalls.find((entry) => entry.command === "batch_move_assets_to_folder");
   expect(call?.payload).toEqual(
     expect.objectContaining({
       hashes: [ASSET.hash, second.hash],

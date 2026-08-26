@@ -882,6 +882,7 @@ test("批量建立图片关联逐条建立普通关联并聚合逐项失败", as
     height: 1080,
     imported_at: "2026-08-21T08:30:00Z",
     original_filename: "窗台.png",
+    display_filename: "窗台.png",
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -891,7 +892,7 @@ test("批量建立图片关联逐条建立普通关联并聚合逐项失败", as
     note: "",
     favorite: false,
     tags: [],
-    folders: [],
+    folder: null,
     colors: [],
   };
   catalogReply = { assets: [candidate], folders: [], tags: [], trash_count: 0 };

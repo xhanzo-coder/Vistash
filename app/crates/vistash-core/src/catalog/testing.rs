@@ -23,7 +23,7 @@ use crate::hashing::{ContentHash, HASH_ALGO_ID};
 #[cfg(not(debug_assertions))]
 use crate::media::MediaType;
 #[cfg(not(debug_assertions))]
-use crate::sidecar::SIDECAR_FORMAT_VERSION_V2;
+use crate::sidecar::SIDECAR_FORMAT_VERSION_V3;
 
 pub(super) struct Fixture {
     pub(super) catalog: Catalog,
@@ -58,11 +58,11 @@ pub(super) fn write_png(dir: &Path, name: &str, color: [u8; 4]) -> PathBuf {
 pub(super) fn import_with(
     catalog: &mut Catalog,
     source: &Path,
-    folders: &[&str],
+    folder: Option<&str>,
     tags: &[&str],
 ) -> AssetSidecar {
     let options = ImportOptions {
-        folders: folders.iter().map(|folder| (*folder).to_owned()).collect(),
+        folder: folder.map(str::to_owned),
         tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
     };
     let sidecar =
@@ -74,9 +74,14 @@ pub(super) fn import_with(
 }
 
 #[cfg(not(debug_assertions))]
-pub(super) fn synthetic_sidecar(index: usize, folders: &[&str], tags: &[&str]) -> AssetSidecar {
+pub(super) fn synthetic_sidecar(
+    index: usize,
+    folder: Option<&str>,
+    tags: &[&str],
+) -> AssetSidecar {
+    let filename = format!("素材-{index:05}-人物.png");
     AssetSidecar {
-        format_version: SIDECAR_FORMAT_VERSION_V2,
+        format_version: SIDECAR_FORMAT_VERSION_V3,
         hash: ContentHash::of_bytes(&index.to_le_bytes()),
         hash_algo: HASH_ALGO_ID.to_owned(),
         media_type: MediaType::Png,
@@ -85,14 +90,18 @@ pub(super) fn synthetic_sidecar(index: usize, folders: &[&str], tags: &[&str]) -
         width: 1,
         height: 1,
         imported_at: chrono::DateTime::from_timestamp(index as i64, 0).expect("构造固定时间戳"),
-        original_filename: format!("素材-{index:05}-人物.png"),
-        source_path: None,
-        folders: folders.iter().map(|value| (*value).to_owned()).collect(),
+        source: crate::sidecar::AssetSource::Filesystem {
+            path: None,
+            filename: filename.clone(),
+        },
+        display_filename: crate::sidecar::DisplayFilename::new(&filename, MediaType::Png)
+            .expect("合成显示名"),
+        folder: folder.map(str::to_owned),
         tags: tags.iter().map(|value| (*value).to_owned()).collect(),
         color_card: ColorCard::failed(Code::ColorCardInsufficientOpaquePixels),
         note: String::new(),
         favorite: false,
         deleted_at: None,
-        deleted_from_folders: None,
+        deleted_from_folder: None,
     }
 }

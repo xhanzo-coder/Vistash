@@ -593,18 +593,15 @@ pub async fn delete_folder(path: String, state: tauri::State<'_, Shared>) -> Res
 }
 
 #[tauri::command]
-pub async fn set_asset_folders(
+pub async fn move_asset_to_folder(
     hash: String,
-    folders: Vec<String>,
+    folder: Option<String>,
     state: tauri::State<'_, Shared>,
 ) -> Result<()> {
     let hash = ContentHash::parse(&hash)?;
-    let folders = folders
-        .iter()
-        .map(|folder| FolderPath::parse(folder))
-        .collect::<Result<Vec<_>>>()?;
+    let folder = folder.map(|folder| FolderPath::parse(&folder)).transpose()?;
     with_catalog(state, move |catalog| {
-        catalog.set_asset_folders(&hash, &folders)
+        catalog.move_asset_to_folder(&hash, folder.as_ref())
     })
     .await
 }
@@ -1150,33 +1147,17 @@ fn channel_progress(channel: Channel<BatchProgressDto>) -> ChannelProgress {
 }
 
 #[tauri::command]
-pub async fn batch_add_asset_folder(
+pub async fn batch_move_assets_to_folder(
     hashes: Vec<String>,
-    folder: String,
+    folder: Option<String>,
     on_progress: Channel<BatchProgressDto>,
     state: tauri::State<'_, Shared>,
 ) -> Result<BatchReport> {
     let hashes = parse_hashes(&hashes)?;
-    let folder = FolderPath::parse(&folder)?;
+    let folder = folder.map(|folder| FolderPath::parse(&folder)).transpose()?;
     with_catalog(state, move |catalog| {
         let mut progress = channel_progress(on_progress);
-        Ok(catalog.batch_add_asset_folder(&hashes, &folder, &mut progress))
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn batch_remove_asset_folder(
-    hashes: Vec<String>,
-    folder: String,
-    on_progress: Channel<BatchProgressDto>,
-    state: tauri::State<'_, Shared>,
-) -> Result<BatchReport> {
-    let hashes = parse_hashes(&hashes)?;
-    let folder = FolderPath::parse(&folder)?;
-    with_catalog(state, move |catalog| {
-        let mut progress = channel_progress(on_progress);
-        Ok(catalog.batch_remove_asset_folder(&hashes, &folder, &mut progress))
+        Ok(catalog.batch_move_assets_to_folder(&hashes, folder.as_ref(), &mut progress))
     })
     .await
 }

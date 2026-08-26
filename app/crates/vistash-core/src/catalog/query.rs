@@ -193,7 +193,7 @@ impl Catalog {
         })
     }
 
-    /// 跨图片与提示词的全局搜索：文本命中图片文件名/标签或提示词标题/正文/标签。
+    /// 跨图片与提示词的全局搜索：文本命中图片来源名/显示名/标签或提示词标题/正文/标签。
     ///
     /// 只搜正常库——回收站素材不属于快速跳转的呈现范围。空白文本返回空结果而
     /// 不是全部素材。文本语义与各自视图一致：Rust 侧大小写折叠子串匹配，排序
@@ -210,6 +210,7 @@ impl Catalog {
         let mut assets = index.query_assets(false, FolderSelection::All, &[], None, "")?;
         assets.retain(|asset| {
             asset.original_filename.to_lowercase().contains(&needle)
+                || asset.display_filename.to_lowercase().contains(&needle)
                 || asset
                     .tags
                     .iter()
@@ -281,9 +282,9 @@ mod tests {
         let backlit = write_png(&fixture.source, "人物-逆光.png", [255, 0, 0, 255]);
         let front = write_png(&fixture.source, "人物-正面.png", [0, 255, 0, 255]);
         let landscape = write_png(&fixture.source, "风景.png", [0, 0, 255, 255]);
-        import_with(&mut fixture.catalog, &backlit, &[], &["人物", "逆光"]);
-        import_with(&mut fixture.catalog, &front, &[], &["人物"]);
-        import_with(&mut fixture.catalog, &landscape, &[], &["逆光"]);
+        import_with(&mut fixture.catalog, &backlit, None, &["人物", "逆光"]);
+        import_with(&mut fixture.catalog, &front, None, &["人物"]);
+        import_with(&mut fixture.catalog, &landscape, None, &["逆光"]);
 
         let snapshot = fixture
             .catalog
@@ -314,8 +315,8 @@ mod tests {
         let mut fixture = fixture();
         let root = write_png(&fixture.source, "根.png", [255, 0, 0, 255]);
         let filed = write_png(&fixture.source, "已归档.png", [0, 255, 0, 255]);
-        import_with(&mut fixture.catalog, &root, &[], &[]);
-        import_with(&mut fixture.catalog, &filed, &["参考"], &[]);
+        import_with(&mut fixture.catalog, &root, None, &[]);
+        import_with(&mut fixture.catalog, &filed, Some("参考"), &[]);
 
         let snapshot = fixture
             .catalog
@@ -336,8 +337,8 @@ mod tests {
         let mut fixture = fixture();
         let exact = write_png(&fixture.source, "构图.png", [255, 0, 0, 255]);
         let child = write_png(&fixture.source, "三分法.png", [0, 255, 0, 255]);
-        import_with(&mut fixture.catalog, &exact, &["参考"], &[]);
-        import_with(&mut fixture.catalog, &child, &["参考/构图"], &[]);
+        import_with(&mut fixture.catalog, &exact, Some("参考"), &[]);
+        import_with(&mut fixture.catalog, &child, Some("参考/构图"), &[]);
 
         let snapshot = fixture
             .catalog
@@ -358,10 +359,10 @@ mod tests {
         let mut fixture = fixture();
         let active = write_png(&fixture.source, "正常.png", [255, 0, 0, 255]);
         let deleted = write_png(&fixture.source, "已删除.png", [0, 255, 0, 255]);
-        import_with(&mut fixture.catalog, &active, &[], &[]);
-        let mut deleted_sidecar = import_with(&mut fixture.catalog, &deleted, &[], &[]);
+        import_with(&mut fixture.catalog, &active, None, &[]);
+        let mut deleted_sidecar = import_with(&mut fixture.catalog, &deleted, None, &[]);
         deleted_sidecar.deleted_at = Some(chrono::Utc::now());
-        deleted_sidecar.deleted_from_folders = Some(Vec::new());
+        deleted_sidecar.deleted_from_folder = None;
         fixture
             .catalog
             .index_imported(&[deleted_sidecar])
@@ -388,11 +389,11 @@ mod tests {
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
         let deleted = write_png(&fixture.source, "删.png", [0, 0, 255, 255]);
-        import_with(&mut fixture.catalog, &first, &[], &["人物"]);
-        import_with(&mut fixture.catalog, &second, &[], &["人物", "逆光"]);
-        let mut deleted_sidecar = import_with(&mut fixture.catalog, &deleted, &[], &["人物"]);
+        import_with(&mut fixture.catalog, &first, None, &["人物"]);
+        import_with(&mut fixture.catalog, &second, None, &["人物", "逆光"]);
+        let mut deleted_sidecar = import_with(&mut fixture.catalog, &deleted, None, &["人物"]);
         deleted_sidecar.deleted_at = Some(chrono::Utc::now());
-        deleted_sidecar.deleted_from_folders = Some(Vec::new());
+        deleted_sidecar.deleted_from_folder = None;
         fixture
             .catalog
             .index_imported(&[deleted_sidecar])
@@ -437,10 +438,10 @@ mod tests {
             .create_folder(None, &FolderName::parse("空文件夹").expect("名称"))
             .expect("创建空文件夹");
         let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-        let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+        let sidecar = import_with(&mut fixture.catalog, &source, None, &[]);
         fixture
             .catalog
-            .set_asset_folders(&sidecar.hash, &[reference])
+            .move_asset_to_folder(&sidecar.hash, Some(&reference))
             .expect("设置文件夹");
         fixture
             .catalog
@@ -471,7 +472,7 @@ mod tests {
             .create_folder(None, &FolderName::parse("参考").expect("名称"))
             .expect("创建文件夹");
         let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-        let sidecar = import_with(&mut fixture.catalog, &source, &[folder.as_str()], &["人物"]);
+        let sidecar = import_with(&mut fixture.catalog, &source, Some(folder.as_str()), &["人物"]);
         fixture
             .catalog
             .delete_asset(&sidecar.hash)
@@ -509,7 +510,7 @@ mod tests {
         // 图片：一张带多行备注与收藏，一张经生产删除路径移入回收站（侧车进 trash 树）。
         let noted_src = write_png(&fixture.source, "带备注.png", [255, 0, 0, 255]);
         let trashed_src = write_png(&fixture.source, "已删除.png", [0, 0, 255, 255]);
-        let mut noted = import_with(&mut fixture.catalog, &noted_src, &["人物/室内"], &["人物"]);
+        let mut noted = import_with(&mut fixture.catalog, &noted_src, Some("人物/室内"), &["人物"]);
         noted.note = "第一行\n\n第三行".to_owned();
         noted.favorite = true;
         noted
@@ -519,7 +520,7 @@ mod tests {
             .catalog
             .index_imported(std::slice::from_ref(&noted))
             .expect("写入备注素材");
-        let trashed = import_with(&mut fixture.catalog, &trashed_src, &["参考/构图"], &["参考"]);
+        let trashed = import_with(&mut fixture.catalog, &trashed_src, Some("参考/构图"), &["参考"]);
         fixture
             .catalog
             .delete_asset(&trashed.hash)
@@ -691,7 +692,7 @@ mod tests {
             .create_folder(None, &FolderName::parse("参考").expect("文件夹名"))
             .expect("创建文件夹");
         let rows: Vec<AssetSidecar> = (0..10_000)
-            .map(|index| synthetic_sidecar(index, &[folder.as_str()], &["人物", "逆光"]))
+            .map(|index| synthetic_sidecar(index, Some(folder.as_str()), &["人物", "逆光"]))
             .collect();
         fixture
             .catalog
@@ -1089,13 +1090,13 @@ mod tests {
         import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "逆光-构图.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &["风景"],
         );
         import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "街景.png", [0, 255, 0, 255]),
-            &[],
+            None,
             &["人物"],
         );
         place_prompt(
@@ -1167,19 +1168,19 @@ mod tests {
         import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "逆光-a.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &[],
         );
         import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "逆光-b.png", [0, 255, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let trashed_image = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "逆光-已删.png", [0, 0, 255, 255]),
-            &[],
+            None,
             &[],
         );
         fixture
@@ -1235,7 +1236,7 @@ mod tests {
         import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "存在.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &[],
         );
         place_prompt(
@@ -1266,7 +1267,7 @@ mod tests {
         let image = import_with(
             &mut fixture.catalog,
             &write_png(&fixture.source, "详情.png", [255, 0, 0, 255]),
-            &[],
+            None,
             &[],
         );
         let active = prompt_via_create(&mut fixture.catalog, "活跃的关联提示词");

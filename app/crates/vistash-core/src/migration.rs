@@ -1236,9 +1236,12 @@ fn staged_meta_json(meta: &LibraryMetaV2) -> Result<Vec<u8>> {
 /// 扩展名由真实媒体类型重新给出。
 fn convert_sidecar_v2_to_v3(v2: &AssetSidecarV2, folder: Option<&str>) -> Result<AssetSidecarV3> {
     let original_filename = v2.original_filename.clone();
-    let stem = original_filename
-        .strip_suffix(&format!(".{}", v2.ext))
-        .unwrap_or(&original_filename);
+    // v2 的 ext 在导入时归一成小写（本体路径 `<hash>.<ext>` 依赖它），而原始文件名
+    // 原样保留磁盘上的大小写——"IMG_0042.JPG" 配 ext "jpg" 是真实数据。剥离必须
+    // 大小写不敏感，否则整段文件名会带着扩展名落进主体，被显示名校验拒绝，迁移
+    // 直接失败。
+    let stem =
+        strip_suffix_case_insensitive(&original_filename, &format!(".{}", v2.ext));
     // 先于结构体字面量构造显示名：stem 借着 original_filename，而后者随后要整体
     // 移动进来源字段。
     let display_filename = DisplayFilename::new(stem, v2.media_type)?;
@@ -1269,6 +1272,22 @@ fn convert_sidecar_v2_to_v3(v2: &AssetSidecarV2, folder: Option<&str>) -> Result
             None
         },
     })
+}
+
+/// 大小写不敏感地剥离后缀。
+///
+/// 扩展名是 ASCII，按 ASCII 折叠即可。切分点必须落在字符边界上——尾部若从多字节
+/// 字符中间开始，不可能与 ASCII 后缀相等，自然回落到完整文件名，由显示名校验
+/// 对真正的坏数据报错。
+fn strip_suffix_case_insensitive<'a>(text: &'a str, suffix: &str) -> &'a str {
+    match text.len().checked_sub(suffix.len()) {
+        Some(split)
+            if text.is_char_boundary(split) && text[split..].eq_ignore_ascii_case(suffix) =>
+        {
+            &text[..split]
+        }
+        _ => text,
+    }
 }
 
 /// 返回工作目录下唯一的会话子目录；工作目录不存在或为空时返回 `None`。
@@ -2801,6 +2820,30 @@ mod tests {
             favorite: false,
             deleted_at: None,
             deleted_from_folders: None,
+        }
+    }
+
+    #[test]
+    fn v3_conversion_strips_the_disk_extension_case_insensitively() {
+        // 真实 v2 数据：ext 在导入时归一成小写，而原始文件名保留磁盘上的大小写。
+        // 剥离必须折叠大小写——否则整段文件名带着扩展名落进主体，被显示名校验
+        // 拒绝，迁移对这类库直接失败。
+        let mut v2 = v2_sidecar_fixture(&ContentHash::of_bytes(b"uppercase-ext"), &[]);
+        v2.original_filename = "IMG_0042.PNG".to_owned();
+        v2.source_path = Some("D:/素材/IMG_0042.PNG".to_owned());
+
+        let v3 = convert_sidecar_v2_to_v3(&v2, None).expect("大写扩展名不得让迁移失败");
+
+        assert_eq!(
+            v3.display_filename.as_str(),
+            "IMG_0042.png",
+            "显示名取主体加媒体类型规范扩展名"
+        );
+        match v3.source {
+            AssetSource::Filesystem { filename, .. } => {
+                assert_eq!(filename, "IMG_0042.PNG", "来源名原样保留磁盘上的大小写");
+            }
+            other => panic!("文件系统导入不应映射成其他来源：{other:?}"),
         }
     }
 

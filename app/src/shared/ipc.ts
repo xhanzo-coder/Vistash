@@ -127,8 +127,9 @@ export function deleteFolder(path: string): Promise<void> {
   return call<void>("delete_folder", { path });
 }
 
-export function setAssetFolders(hash: string, folders: string[]): Promise<void> {
-  return call<void>("set_asset_folders", { hash, folders });
+/** 把素材移动到唯一目标文件夹；`folder` 为 null 表示移回未分类。 */
+export function moveAssetToFolder(hash: string, folder: string | null): Promise<void> {
+  return call<void>("move_asset_to_folder", { hash, folder });
 }
 
 export function setAssetTags(hash: string, tags: string[]): Promise<void> {
@@ -386,20 +387,13 @@ function batchCall(
   return call<BatchReport>(command, { ...args, onProgress: progress });
 }
 
-export function batchAddAssetFolder(
+/** 批量把素材移动到唯一目标文件夹；`folder` 为 null 表示批量移回未分类。 */
+export function batchMoveAssetsToFolder(
   hashes: string[],
-  folder: string,
+  folder: string | null,
   onProgress: (progress: BatchProgress) => void,
 ): Promise<BatchReport> {
-  return batchCall("batch_add_asset_folder", { hashes, folder }, onProgress);
-}
-
-export function batchRemoveAssetFolder(
-  hashes: string[],
-  folder: string,
-  onProgress: (progress: BatchProgress) => void,
-): Promise<BatchReport> {
-  return batchCall("batch_remove_asset_folder", { hashes, folder }, onProgress);
+  return batchCall("batch_move_assets_to_folder", { hashes, folder }, onProgress);
 }
 
 export function batchAddAssetTag(

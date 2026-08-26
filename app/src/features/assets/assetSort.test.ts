@@ -14,6 +14,7 @@ function makeAsset(overrides: Partial<AssetRow> & { hash?: string }): AssetRow {
     height: 100,
     imported_at: "2026-08-19T00:00:00Z",
     original_filename: "图片.png",
+    display_filename: "图片.png",
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -23,7 +24,7 @@ function makeAsset(overrides: Partial<AssetRow> & { hash?: string }): AssetRow {
     note: "",
     favorite: false,
     tags: [],
-    folders: [],
+    folder: null,
     colors: [],
     ...overrides,
   };

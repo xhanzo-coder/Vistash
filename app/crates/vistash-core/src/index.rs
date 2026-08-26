@@ -25,11 +25,15 @@ use std::path::{Path, PathBuf};
 ///
 /// v2：新增 prompts、prompt_folders、prompt_tags、prompt_images，并为 assets 增加
 /// note/favorite 列（设计第五条）。
-pub const INDEX_USER_VERSION: i32 = 2;
+///
+/// v3：assets 增加 display_filename 列；多对多 asset_folders 表被 assets.folder 单值
+/// 列取代——库格式 v3 的素材只属于零个或一个文件夹，索引如实派生，不再保留
+/// 多归属的表示空间（设计第八条）。
+pub const INDEX_USER_VERSION: i32 = 3;
 
 /// 表结构。
 ///
-/// 素材、标签、文件夹与色卡各自成表而不是把标签塞进一个逗号分隔的字段：按标签筛选是
+/// 素材、标签与色卡各自成表而不是把标签塞进一个逗号分隔的字段：按标签筛选是
 /// v1 承诺的能力，而字符串匹配无法正确处理"标签名本身含逗号"与"前缀相同的两个标签"。
 const SCHEMA: &str = "
 CREATE TABLE assets (
@@ -42,7 +46,9 @@ CREATE TABLE assets (
   height                         INTEGER NOT NULL,
   imported_at                    TEXT NOT NULL,
   original_filename              TEXT NOT NULL,
+  display_filename               TEXT NOT NULL,
   source_path                    TEXT,
+  folder                         TEXT,
   deleted_at                     TEXT,
   color_card_status              TEXT NOT NULL,
   color_card_algo_version        INTEGER NOT NULL,
@@ -56,12 +62,6 @@ CREATE TABLE asset_tags (
   hash TEXT NOT NULL REFERENCES assets(hash) ON DELETE CASCADE,
   tag  TEXT NOT NULL,
   PRIMARY KEY (hash, tag)
-);
-
-CREATE TABLE asset_folders (
-  hash   TEXT NOT NULL REFERENCES assets(hash) ON DELETE CASCADE,
-  folder TEXT NOT NULL,
-  PRIMARY KEY (hash, folder)
 );
 
 -- ordinal 而不是 rank：rank 在 SQLite 里是窗口函数名，用作列名容易踩到解析歧义。
@@ -132,7 +132,7 @@ CREATE TABLE prompt_images (
 );
 
 CREATE INDEX idx_asset_tags_tag ON asset_tags(tag);
-CREATE INDEX idx_asset_folders_folder ON asset_folders(folder);
+CREATE INDEX idx_assets_folder ON assets(folder);
 CREATE INDEX idx_assets_deleted_at ON assets(deleted_at);
 CREATE INDEX idx_prompts_deleted_at ON prompts(deleted_at);
 CREATE INDEX idx_prompt_tags_tag ON prompt_tags(tag);
@@ -165,8 +165,13 @@ pub struct AssetRow {
     pub width: u32,
     pub height: u32,
     pub imported_at: String,
+    /// 不可变的来源文件名。来自 v3 侧车的 `source` 字段，重命名不改变它。
     pub original_filename: String,
+    /// 可编辑的显示文件名，含由真实媒体类型决定的扩展名。列表与检查器优先呈现它。
+    pub display_filename: String,
     pub source_path: Option<String>,
+    /// 唯一文件夹归属；`None` 即界面所称的"未分类"。
+    pub folder: Option<String>,
     pub deleted_at: Option<String>,
     pub color_card_status: String,
     pub color_card_algo_version: u32,
@@ -178,8 +183,6 @@ pub struct AssetRow {
     pub favorite: bool,
     /// 按字典序排序。排序是快照可比较的前提。
     pub tags: Vec<String>,
-    /// 按字典序排序。
-    pub folders: Vec<String>,
     /// 按 `ordinal` 升序，与侧车中的顺序一致（占比降序）。
     pub colors: Vec<ColorRow>,
 }
@@ -271,22 +274,38 @@ fn upsert_asset_in_transaction(
     let hash = sidecar.hash.as_str();
 
     // 先删子表再删主表：即便外键未生效也不会留下孤儿行。
-    for table in ["asset_tags", "asset_folders", "asset_colors"] {
+    for table in ["asset_tags", "asset_colors"] {
         tx.execute(&format!("DELETE FROM {table} WHERE hash = ?1"), [hash])
             .map_err(|error| sql_err(&format!("清理 {table} 失败"), error))?;
     }
     tx.execute("DELETE FROM assets WHERE hash = ?1", [hash])
         .map_err(|error| sql_err("清理 assets 失败", error))?;
 
+    // 来源文件名与来源路径都派生自不可变的 source 字段：剪贴板来源没有伪造路径，
+    // 落索引时同样保持 None。
+    let source_path = match &sidecar.source {
+        crate::sidecar::AssetSource::Filesystem { path, .. } => path.clone(),
+        crate::sidecar::AssetSource::Clipboard { .. } => None,
+    };
+    let original_filename = sidecar.source.filename().to_owned();
+    // 回收站中的素材不再占有一个活跃归属：删除前位置只存在于 deleted_from_folder，
+    // 与图片侧还原语义一致。
+    let folder = if sidecar.is_deleted() {
+        None
+    } else {
+        sidecar.folder.clone()
+    };
+
     let card: &ColorCard = &sidecar.color_card;
     tx.execute(
         "INSERT INTO assets (
             hash, hash_algo, media_type, ext, byte_size, width, height,
-            imported_at, original_filename, source_path, deleted_at,
+            imported_at, original_filename, display_filename, source_path,
+            folder, deleted_at,
             color_card_status, color_card_algo_version,
             color_card_failure_reason, color_card_sampled_pixel_count,
             note, favorite
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         rusqlite::params![
             hash,
             sidecar.hash_algo,
@@ -296,8 +315,10 @@ fn upsert_asset_in_transaction(
             sidecar.width,
             sidecar.height,
             sidecar.imported_at.to_rfc3339(),
-            sidecar.original_filename,
-            sidecar.source_path,
+            original_filename,
+            sidecar.display_filename.as_str(),
+            source_path,
+            folder,
             sidecar.deleted_at.map(|time| time.to_rfc3339()),
             card.status.as_str(),
             card.algo_version,
@@ -317,16 +338,6 @@ fn upsert_asset_in_transaction(
             statement
                 .execute(rusqlite::params![hash, tag])
                 .map_err(|error| sql_err("写入标签失败", error))?;
-        }
-    }
-    {
-        let mut statement = tx
-            .prepare("INSERT OR IGNORE INTO asset_folders (hash, folder) VALUES (?1, ?2)")
-            .map_err(|error| sql_err("准备素材文件夹写入失败", error))?;
-        for folder in &sidecar.folders {
-            statement
-                .execute(rusqlite::params![hash, folder])
-                .map_err(|error| sql_err("写入素材文件夹失败", error))?;
         }
     }
     {
@@ -740,15 +751,12 @@ impl Index {
         }
         match folder {
             FolderSelection::All => {}
-            FolderSelection::Root => clauses.push(
-                "NOT EXISTS (SELECT 1 FROM asset_folders af WHERE af.hash = a.hash)".to_owned(),
-            ),
+            // 未分类即没有唯一归属；回收站素材的 folder 列恒为 NULL，因此该条件
+            // 天然不会把回收站素材混进未分类结果。
+            FolderSelection::Root => clauses.push("a.folder IS NULL".to_owned()),
             FolderSelection::Exact(path) => {
                 values.push(path.to_owned());
-                clauses.push(format!(
-                    "EXISTS (SELECT 1 FROM asset_folders af WHERE af.hash = a.hash AND af.folder = ?{})",
-                    values.len()
-                ));
+                clauses.push(format!("a.folder = ?{}", values.len()));
             }
         }
         for tag in tags {
@@ -941,7 +949,8 @@ impl Index {
     ) -> Result<Vec<AssetRow>> {
         let sql = format!(
             "SELECT hash, hash_algo, media_type, ext, byte_size, width, height,
-                    imported_at, original_filename, source_path, deleted_at,
+                    imported_at, original_filename, display_filename, source_path,
+                    folder, deleted_at,
                     color_card_status, color_card_algo_version,
                     color_card_failure_reason, color_card_sampled_pixel_count,
                     note, favorite
@@ -963,16 +972,17 @@ impl Index {
                     height: r.get(6)?,
                     imported_at: r.get(7)?,
                     original_filename: r.get(8)?,
-                    source_path: r.get(9)?,
-                    deleted_at: r.get(10)?,
-                    color_card_status: r.get(11)?,
-                    color_card_algo_version: r.get(12)?,
-                    color_card_failure_reason: r.get(13)?,
-                    color_card_sampled_pixel_count: r.get(14)?,
-                    note: r.get(15)?,
-                    favorite: r.get(16)?,
+                    display_filename: r.get(9)?,
+                    source_path: r.get(10)?,
+                    folder: r.get(11)?,
+                    deleted_at: r.get(12)?,
+                    color_card_status: r.get(13)?,
+                    color_card_algo_version: r.get(14)?,
+                    color_card_failure_reason: r.get(15)?,
+                    color_card_sampled_pixel_count: r.get(16)?,
+                    note: r.get(17)?,
+                    favorite: r.get(18)?,
                     tags: Vec::new(),
-                    folders: Vec::new(),
                     colors: Vec::new(),
                 })
             })
@@ -984,16 +994,17 @@ impl Index {
         if let Some(filename_text) = filename_text {
             let needle = filename_text.to_lowercase();
             if !needle.is_empty() {
-                assets.retain(|asset| asset.original_filename.to_lowercase().contains(&needle));
+                // 双文件名匹配（规格）：显示名与来源名都参与 Unicode 小写折叠后的
+                // 子串比较，改名后的素材仍能按来源名找到。
+                assets.retain(|asset| {
+                    asset.original_filename.to_lowercase().contains(&needle)
+                        || asset.display_filename.to_lowercase().contains(&needle)
+                });
             }
         }
         for a in &mut assets {
             a.tags = self.strings_for(
                 "SELECT tag FROM asset_tags WHERE hash = ?1 ORDER BY tag",
-                &a.hash,
-            )?;
-            a.folders = self.strings_for(
-                "SELECT folder FROM asset_folders WHERE hash = ?1 ORDER BY folder",
                 &a.hash,
             )?;
             a.colors = self.colors_for(&a.hash)?;
@@ -1271,7 +1282,7 @@ mod tests {
             ),
         ];
         let opts = ImportOptions {
-            folders: vec!["参考/构图".to_owned()],
+            folder: Some("参考/构图".to_owned()),
             tags: vec!["黄".to_owned(), "参考".to_owned()],
         };
         // 索引必须在导入之前打开。若先导入再 open，open 会因索引文件不存在而走全量重建，
@@ -1454,7 +1465,11 @@ mod tests {
 
         for a in &snap.assets {
             assert_eq!(a.tags, vec!["参考".to_owned(), "黄".to_owned()], "标签丢失");
-            assert_eq!(a.folders, vec!["参考/构图".to_owned()], "素材文件夹丢失");
+            assert_eq!(
+                a.folder.as_deref(),
+                Some("参考/构图"),
+                "素材文件夹丢失"
+            );
             assert_eq!(a.color_card_status, "ok", "色卡状态不对：{a:?}");
             assert!(!a.colors.is_empty(), "色卡颜色丢失：{a:?}");
             for c in &a.colors {
@@ -1541,7 +1556,7 @@ mod tests {
         let hash = &victim.hash;
         let mut moved = victim.clone();
         moved.deleted_at = Some(chrono::Utc::now());
-        moved.deleted_from_folders = Some(victim.folders.clone());
+        moved.deleted_from_folder = victim.folder.clone();
 
         let trash_body = f.lib.trash_body_path(hash, &victim.ext);
         std::fs::create_dir_all(trash_body.parent().expect("回收站叶目录"))
@@ -1822,8 +1837,8 @@ mod tests {
             .find(|a| a.original_filename == "红蓝.png")
             .expect("应能找到图片行");
         assert_eq!(
-            noted.folders,
-            vec!["参考/构图".to_owned()],
+            noted.folder.as_deref(),
+            Some("参考/构图"),
             "图片获得了提示词文件夹的成员关系"
         );
         let full_row = snap

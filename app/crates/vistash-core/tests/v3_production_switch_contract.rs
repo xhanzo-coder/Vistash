@@ -94,12 +94,21 @@ fn v3_sidecar(
 /// 建一个 v2 库并写入给定侧车，然后走真实迁移流程得到 v3 库。
 ///
 /// 迁移完成后以生产门禁 [`Library::open`] 重新打开——这同时持续验证任务 3.5 的
-/// 门禁确实放行自己迁移出来的库。文件夹清单在迁移之后重写：清单属于使用者正在
-/// 组织的工作区状态，不由迁移内部对清单的处理方式决定。
+/// 门禁确实放行自己迁移出来的库。文件夹清单在建库后、提交前写入：生产里真实 v2
+/// 库的清单本来就先于迁移存在（它属于使用者正在组织的工作区状态），而提交时的
+/// 索引重建会读取当时的清单——增量索引等于重建索引的承诺要求两侧看到同一份。
 fn migrated_library(sidecars: &[AssetSidecarV2], folders: &[&str]) -> (tempfile::TempDir, Library) {
     let directory = tempfile::tempdir().expect("建立临时目录");
     let root = directory.path().join("library");
     let library = Library::create(&root).expect("建立库");
+    if !folders.is_empty() {
+        library
+            .write_folders(&FolderList {
+                format_version: LIBRARY_FORMAT_VERSION,
+                folders: folders.iter().map(|folder| (*folder).to_owned()).collect(),
+            })
+            .expect("写入迁移前的文件夹清单");
+    }
     // 建库入口自任务 3.5 起直接产出 v3 元数据；迁移门禁只接受 v2 输入，
     // 因此夹具先把 library.json 降写回真实 v2 元数据。
     let v2_meta = vistash_core::library::LibraryMetaV2 {
@@ -128,14 +137,6 @@ fn migrated_library(sidecars: &[AssetSidecarV2], folders: &[&str]) -> (tempfile:
         .expect("提交 v2→v3 迁移");
 
     let library = Library::open(&root).expect("迁移后的库应以 v3 门禁打开");
-    if !folders.is_empty() {
-        library
-            .write_folders(&FolderList {
-                format_version: LIBRARY_FORMAT_VERSION,
-                folders: folders.iter().map(|folder| (*folder).to_owned()).collect(),
-            })
-            .expect("写入迁移后的文件夹清单");
-    }
     (directory, library)
 }
 
@@ -153,10 +154,15 @@ fn all_active_query() -> AssetQuery {
 
 #[test]
 fn the_migrated_library_rebuilds_its_index_from_v3_sidecars() {
-    // 迁移把旧原始文件名同时复制进来源与显示字段（设计第八条）。重建后的索引必须
-    // 如实呈现两个名字与单值归属；零归属素材必须落在未分类而不是被猜测出一个归属。
-    let renamed_source = v2_sidecar(b"renamed-in-migration", "IMG_0042.JPG", &["参考"]);
+    // 迁移把旧原始文件名复制进不可变的来源字段；显示名取名称主体加真实媒体类型的
+    // 规范扩展名。夹具的磁盘名带大写扩展名——真实 v2 数据里 ext 是小写归一的，而
+    // 文件名保留原样，剥离必须大小写不敏感才能不把整段名字落进主体。重建后的索引
+    // 必须如实呈现两个名字与单值归属；零归属素材必须落在未分类而不是被猜测出归属。
+    let renamed_source = v2_sidecar(b"renamed-in-migration", "IMG_0042.PNG", &["参考"]);
     let loose = v2_sidecar(b"loose-in-migration", "plain.png", &[]);
+    // 哈希在夹具消费侧车前取出：迁移会拿走所有权。
+    let renamed_hash = renamed_source.hash.clone();
+    let loose_hash = loose.hash.clone();
     let (_directory, library) = migrated_library(&[renamed_source, loose], &["参考"]);
 
     // 删掉迁移提交时留下的索引，验证"仅凭磁盘上的 v3 元数据即可完整重建"。
@@ -168,15 +174,15 @@ fn the_migrated_library_rebuilds_its_index_from_v3_sidecars() {
     let renamed = snapshot
         .assets
         .iter()
-        .find(|asset| asset.hash == renamed_source.hash.as_str())
+        .find(|asset| asset.hash == renamed_hash.as_str())
         .expect("应能找到带归属素材的行");
     assert_eq!(
-        renamed.display_filename, "IMG_0042.JPG",
-        "迁移应把旧原始文件名复制为显示文件名"
+        renamed.display_filename, "IMG_0042.png",
+        "显示名应取剥离扩展名后的主体加媒体类型规范扩展名"
     );
     assert_eq!(
-        renamed.original_filename, "IMG_0042.JPG",
-        "来源文件名应来自不可变的来源字段"
+        renamed.original_filename, "IMG_0042.PNG",
+        "来源文件名应原样保留磁盘上的大小写"
     );
     assert_eq!(
         renamed.folder.as_deref(),
@@ -187,7 +193,7 @@ fn the_migrated_library_rebuilds_its_index_from_v3_sidecars() {
     let loose_row = snapshot
         .assets
         .iter()
-        .find(|asset| asset.hash == loose.hash.as_str())
+        .find(|asset| asset.hash == loose_hash.as_str())
         .expect("应能找到零归属素材的行");
     assert_eq!(
         loose_row.folder, None,
@@ -248,12 +254,15 @@ fn the_incrementally_built_v3_index_matches_a_full_rebuild() {
     // 重建读取路径的分歧才测得出来。
     let first = v2_sidecar(b"equivalence-first", "first.png", &["参考"]);
     let second = v2_sidecar(b"equivalence-second", "second.png", &[]);
+    let first_hash = first.hash.clone();
+    let second_hash = second.hash.clone();
     let (_directory, library) = migrated_library(&[first, second], &["参考"]);
 
     // 把迁移后的 v3 侧车重新读出来，经增量入口再次写入同一索引。
-    let v3_first = AssetSidecarV3::read(&library.sidecar_path(&first.hash)).expect("读取 v3 侧车");
+    let v3_first =
+        AssetSidecarV3::read(&library.sidecar_path(&first_hash)).expect("读取 v3 侧车");
     let v3_second =
-        AssetSidecarV3::read(&library.sidecar_path(&second.hash)).expect("读取 v3 侧车");
+        AssetSidecarV3::read(&library.sidecar_path(&second_hash)).expect("读取 v3 侧车");
 
     let mut index = Index::open(&library).expect("打开迁移留下的索引");
     index
@@ -274,7 +283,9 @@ fn the_incrementally_built_v3_index_matches_a_full_rebuild() {
 /// 三张素材的标准场景库：A 已改名（来源 IMG_0042.JPG → 显示 雨夜街道）、
 /// B 显示名带英文大小写混合（Character-Sheet）、C 无关对照。
 fn dual_name_library() -> (tempfile::TempDir, Library, ContentHash, ContentHash) {
-    let renamed = v2_sidecar(b"dual-renamed", "IMG_0042.JPG", &[]);
+    // 磁盘名保留原样大小写而 ext 小写归一，是真实 v2 数据——迁移剥离扩展名时
+    // 必须大小写不敏感，否则这两张夹具都过不了显示名校验。
+    let renamed = v2_sidecar(b"dual-renamed", "IMG_0042.PNG", &[]);
     let mixed_case = v2_sidecar(b"dual-mixed-case", "DSC_0100.PNG", &[]);
     let unrelated = v2_sidecar(b"dual-unrelated", "bg_0001.png", &[]);
     // 侧车会整体移进夹具，哈希先取出来供断言使用。
@@ -387,6 +398,9 @@ fn trash_query_filters_by_both_filenames_without_mixing_active_assets() {
     trashed_v3
         .write_atomic(&library.trash_sidecar_path(&trashed.hash))
         .expect("写入回收站 v3 侧车");
+    // 回收站侧车是绕过增量入口手工落盘的，迁移提交留下的索引里没有它；
+    // 删掉索引迫使打开时全量重建，查询看到的才是磁盘上的全部权威元数据。
+    std::fs::remove_file(library.index_path()).expect("删除索引迫使重建");
 
     let catalog = Catalog::open(library).expect("打开编目");
     let trash_query = |text: &str| AssetQuery {
@@ -523,6 +537,9 @@ fn trashed_assets_refuse_folder_moves() {
     let body = library.body_path(&hash, "png");
     let trash_body = library.trash_body_path(&hash, "png");
     std::fs::create_dir_all(trash_body.parent().expect("回收站叶目录")).expect("建立回收站叶目录");
+    // 迁移只搬运元数据，夹具里本体从未存在；真实回收流程移动的是有本体的素材，
+    // 先补一个占位再移动，保持与生产相同的文件布局。
+    std::fs::write(&body, b"trashed-body").expect("写入占位本体");
     std::fs::rename(&body, &trash_body).expect("移动本体到回收站");
     std::fs::remove_file(library.sidecar_path(&hash)).expect("删除正常树侧车");
     trashed

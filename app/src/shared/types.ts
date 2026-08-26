@@ -38,7 +38,11 @@ export type AssetRow = {
   height: number;
   imported_at: string;
   original_filename: string;
+  /** 可编辑的显示文件名，含由真实媒体类型决定的扩展名。列表与检查器优先呈现它。 */
+  display_filename: string;
   source_path: string | null;
+  /** 唯一文件夹归属；null 即界面所称的"未分类"。 */
+  folder: string | null;
   deleted_at: string | null;
   color_card_status: string;
   color_card_algo_version: number;
@@ -49,7 +53,6 @@ export type AssetRow = {
   /** 二值收藏状态。收藏筛选从这里回答。 */
   favorite: boolean;
   tags: string[];
-  folders: string[];
   colors: ColorRow[];
 };
 

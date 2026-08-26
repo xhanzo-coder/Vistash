@@ -19,6 +19,7 @@ const ASSET: AssetRow = {
   height: 1,
   imported_at: "2026-08-19T00:00:00Z",
   original_filename: "acceptance-sample.png",
+  display_filename: "acceptance-sample.png",
   source_path: null,
   deleted_at: null,
   color_card_status: "ok",
@@ -28,7 +29,7 @@ const ASSET: AssetRow = {
   note: "",
   favorite: false,
   tags: [],
-  folders: [],
+  folder: null,
   colors: [
     {
       hex: "#ff0000",

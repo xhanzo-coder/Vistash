@@ -15,15 +15,19 @@ use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
 use crate::library::Library;
 use crate::media;
-use crate::sidecar::{AssetSidecar, SIDECAR_FORMAT_VERSION_V2};
+use crate::sidecar::{
+    normalize_folder_path, AssetSidecar, AssetSource, DisplayFilename, SIDECAR_FORMAT_VERSION_V3,
+};
 use chrono::Utc;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 /// 导入时施加在每个素材上的归属信息。
+///
+/// 库格式 v3 起素材只属于零个或一个文件夹：`folder` 为 `None` 即导入到"未分类"。
 #[derive(Debug, Clone, Default)]
 pub struct ImportOptions {
-    pub folders: Vec<String>,
+    pub folder: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -244,8 +248,26 @@ fn import_one_inner(
     // 色卡失败不影响入库：失败原因记录在色卡自身里。
     let color_card = colorcard::analyze(&decoded.image);
 
+    // v3 侧车：来源身份（路径与文件名）不可变，显示名初始化为来源名主体，归属是
+    // 唯一文件夹或未分类。名称主体非法时导入失败——真实扩展名与合法名称属于入库
+    // 条件，而不是事后修复项。
+    let original_filename = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let display_stem = std::path::Path::new(&original_filename)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| original_filename.clone());
+    let display_filename = DisplayFilename::new(&display_stem, decoded.media_type)?;
+    let folder = opts
+        .folder
+        .as_deref()
+        .map(normalize_folder_path)
+        .transpose()?;
+
     let sidecar = AssetSidecar {
-        format_version: SIDECAR_FORMAT_VERSION_V2,
+        format_version: SIDECAR_FORMAT_VERSION_V3,
         hash: hash.clone(),
         hash_algo: lib.meta().hash_algo.clone(),
         media_type: decoded.media_type,
@@ -254,12 +276,12 @@ fn import_one_inner(
         width: decoded.width(),
         height: decoded.height(),
         imported_at: Utc::now(),
-        original_filename: source
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        source_path: Some(source.to_string_lossy().into_owned()),
-        folders: opts.folders.clone(),
+        source: AssetSource::Filesystem {
+            path: Some(source.to_string_lossy().into_owned()),
+            filename: original_filename,
+        },
+        display_filename,
+        folder,
         tags: opts.tags.clone(),
         color_card,
         // 新入库的素材既没有备注也未被收藏。这两个字段刻意没有 serde 默认值（见
@@ -267,7 +289,7 @@ fn import_one_inner(
         note: String::new(),
         favorite: false,
         deleted_at: None,
-        deleted_from_folders: None,
+        deleted_from_folder: None,
     };
 
     let side = lib.sidecar_path(&hash);
@@ -732,7 +754,7 @@ mod tests {
         let f = fixture();
         let p = write_png(&f.src, "封面图.png", 40, 20, [10, 200, 90, 255]);
         let opts = ImportOptions {
-            folders: vec!["参考/构图".to_owned()],
+            folder: Some("参考/构图".to_owned()),
             tags: vec!["草稿".to_owned()],
         };
         let s = import_one(&f.lib, &p, &opts, &mut NoopObserver).expect("导入应成功");
@@ -740,9 +762,18 @@ mod tests {
         assert_eq!((s.width, s.height), (40, 20));
         assert_eq!(s.media_type, MediaType::Png);
         assert_eq!(s.ext, "png");
-        assert_eq!(s.original_filename, "封面图.png");
+        // 来源文件名来自不可变的 source 字段；显示名初始化为来源名主体。
+        assert_eq!(s.source.filename(), "封面图.png");
+        assert_eq!(s.display_filename.as_str(), "封面图.png");
+        assert_eq!(
+            s.source,
+            AssetSource::Filesystem {
+                path: Some(p.to_string_lossy().into_owned()),
+                filename: "封面图.png".to_owned(),
+            }
+        );
         assert_eq!(s.byte_size, std::fs::metadata(&p).expect("读取大小").len());
-        assert_eq!(s.folders, opts.folders);
+        assert_eq!(s.folder.as_deref(), Some("参考/构图"));
         assert_eq!(s.tags, opts.tags);
         assert!(!s.is_deleted());
         assert!(s.color_card.is_ok(), "色卡应成功：{:?}", s.color_card);
@@ -764,7 +795,7 @@ mod tests {
             .expect("导入应成功");
         assert_eq!(s.media_type, MediaType::Jpeg);
         assert_eq!(s.ext, "jpg");
-        assert_eq!(s.original_filename, "照片.jpeg");
+        assert_eq!(s.source.filename(), "照片.jpeg");
         assert!(f.lib.body_path(&s.hash, "jpg").is_file());
     }
 

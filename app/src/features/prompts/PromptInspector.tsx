@@ -4,8 +4,8 @@ import { asAppError } from "../../shared/errors";
 import { catalogSnapshot } from "../../shared/ipc";
 import type { AppError, AssetRow, PromptRow } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
-import { BatchOrganizer } from "../workspace/BatchOrganizer";
 import { useSelection } from "../workspace/selectionContext";
+import { PromptBatchOrganizer } from "./PromptBatchOrganizer";
 import { PromptImageLinks } from "./PromptImageLinks";
 import { PromptNoteEditor } from "./PromptNoteEditor";
 import { promptDisplayTitle } from "./promptDisplay";
@@ -97,7 +97,7 @@ export function PromptInspector({
           <div className="inspector-heading-row">
             <h3 id="inspector-batch-heading">已选 {selected.length} 条</h3>
           </div>
-          <BatchOrganizer
+          <PromptBatchOrganizer
             items={selected}
             folders={folders}
             mutating={mutating}

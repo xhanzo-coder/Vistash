@@ -34,6 +34,7 @@ function makeAsset(index: number, overrides: Partial<AssetRow> = {}): AssetRow {
     height: 900,
     imported_at: "2026-08-19T00:00:00Z",
     original_filename: `图片-${index}.png`,
+    display_filename: `图片-${index}.png`,
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -43,7 +44,7 @@ function makeAsset(index: number, overrides: Partial<AssetRow> = {}): AssetRow {
     note: "",
     favorite: false,
     tags: [],
-    folders: [],
+    folder: null,
     colors: [],
     ...overrides,
   };
@@ -226,7 +227,7 @@ test("多值列与备注摘要按规格取值呈现", async () => {
     media_type: "jpg",
     imported_at: "2026-08-21T08:30:00Z",
     tags: ["人物", "夜景"],
-    folders: ["参考", "参考/构图"],
+    folder: "参考/构图",
     note: "第一行说明\n第二行补充",
   });
   const harness = await setupList([asset]);
@@ -235,7 +236,7 @@ test("多值列与备注摘要按规格取值呈现", async () => {
   const cells = [...row.querySelectorAll<HTMLElement>(".detail-value")];
   expect(cells.map((cell) => cell.textContent)).toEqual([
     "人物参考.png",
-    "参考、参考/构图",
+    "参考/构图",
     "人物、夜景",
     "1920 × 1080",
     "jpg",

@@ -6,7 +6,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import {
-  batchAddAssetFolder,
+  batchMoveAssetsToFolder,
   batchSetPromptFavorite,
   catalogSnapshot,
   createFolder,
@@ -23,6 +23,7 @@ import {
   linkImages,
   linkedImageStates,
   migrateLibrary,
+  moveAssetToFolder,
   promptDetail,
   promptSnapshot,
   purgePromptTrash,
@@ -33,7 +34,6 @@ import {
   restoreAsset,
   restorePrompt,
   setAssetFavorite,
-  setAssetFolders,
   setAssetNote,
   setAssetTags,
   setPromptCover,
@@ -183,7 +183,7 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
   await createFolder(null, "参考");
   await renameFolder("参考", "灵感", receivedRenameProgress);
   await deleteFolder("灵感");
-  await setAssetFolders("a".repeat(64), ["配色"]);
+  await moveAssetToFolder("a".repeat(64), "配色");
   await setAssetTags("a".repeat(64), ["人物"]);
   await deleteAsset("a".repeat(64));
   await restoreAsset("a".repeat(64));
@@ -208,8 +208,8 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
     },
     { command: "delete_folder", payload: { path: "灵感" } },
     {
-      command: "set_asset_folders",
-      payload: { hash: "a".repeat(64), folders: ["配色"] },
+      command: "move_asset_to_folder",
+      payload: { hash: "a".repeat(64), folder: "配色" },
     },
     {
       command: "set_asset_tags",
@@ -348,6 +348,7 @@ function sampleAssetRow(): AssetRow {
     height: 32,
     imported_at: "2026-08-21T00:00:00Z",
     original_filename: "逆光.png",
+    display_filename: "逆光.png",
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -357,7 +358,7 @@ function sampleAssetRow(): AssetRow {
     note: "",
     favorite: false,
     tags: [],
-    folders: [],
+    folder: null,
     colors: [],
   };
 }
@@ -446,7 +447,7 @@ test("批量命令转交逐项进度并返回统一报告", async () => {
     if (!(payload.onProgress instanceof Channel)) {
       throw new TypeError(`${command} 缺少进度 Channel`);
     }
-    if (command === "batch_add_asset_folder") {
+    if (command === "batch_move_assets_to_folder") {
       payload.onProgress.onmessage(assetProgress);
       return assetReport;
     }
@@ -459,7 +460,7 @@ test("批量命令转交逐项进度并返回统一报告", async () => {
 
   const receivedAsset = vi.fn<(progress: { done: number; total: number }) => void>();
   const receivedPrompt = vi.fn<(progress: { done: number; total: number }) => void>();
-  await expect(batchAddAssetFolder([HASH], "配色", receivedAsset)).resolves.toEqual(assetReport);
+  await expect(batchMoveAssetsToFolder([HASH], "配色", receivedAsset)).resolves.toEqual(assetReport);
   await expect(batchSetPromptFavorite([PROMPT_ID], true, receivedPrompt)).resolves.toEqual(promptReport);
   expect(receivedAsset).toHaveBeenCalledExactlyOnceWith(assetProgress);
   expect(receivedPrompt).toHaveBeenCalledExactlyOnceWith(promptProgress);

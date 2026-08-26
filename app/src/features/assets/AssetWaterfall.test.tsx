@@ -34,6 +34,7 @@ function makeAsset(index: number): AssetRow {
     height: short ? 1200 : 900,
     imported_at: "2026-08-19T00:00:00Z",
     original_filename: `图片-${index}.png`,
+    display_filename: `图片-${index}.png`,
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -43,7 +44,7 @@ function makeAsset(index: number): AssetRow {
     note: "",
     favorite: false,
     tags: [],
-    folders: [],
+    folder: null,
     colors: [],
   };
 }

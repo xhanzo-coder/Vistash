@@ -166,7 +166,7 @@ export function AssetDetailList({
                 <Thumbnail asset={asset} />
               </span>
               <span className="detail-value detail-name">{asset.original_filename}</span>
-              <span className="detail-value">{asset.folders.join("、")}</span>
+              <span className="detail-value">{asset.folder ?? "未分类"}</span>
               <span className="detail-value">{asset.tags.join("、")}</span>
               <span className="detail-value detail-mono">
                 {asset.width} × {asset.height}

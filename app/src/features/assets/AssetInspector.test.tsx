@@ -43,6 +43,7 @@ function makeAsset(overrides: Partial<AssetRow> = {}): AssetRow {
     height: 1080,
     imported_at: "2026-08-21T08:30:00Z",
     original_filename: "人物参考.png",
+    display_filename: "人物参考.png",
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -52,7 +53,7 @@ function makeAsset(overrides: Partial<AssetRow> = {}): AssetRow {
     note: "构图说明第一行\n第二行",
     favorite: false,
     tags: ["人物"],
-    folders: ["参考"],
+    folder: "参考",
     colors: [
       { hex: "#112233", role: "dominant", share: 0.6, oklab_l: 0.2, oklab_a: 0.01, oklab_b: -0.02 },
       { hex: "#445566", role: "accent", share: 0.2, oklab_l: 0.4, oklab_a: -0.01, oklab_b: -0.04 },
@@ -62,13 +63,13 @@ function makeAsset(overrides: Partial<AssetRow> = {}): AssetRow {
 }
 
 type Handlers = {
-  onSetFolders?: (hash: string, folders: string[]) => void;
+  onMoveAsset?: (hash: string, folder: string | null) => void;
   onSetTags?: (hash: string, tags: string[]) => void;
   onDeleteAsset?: (hash: string) => void;
   onRestoreAsset?: (hash: string) => void;
   onToggleFavorite?: (hash: string, favorite: boolean) => void;
   // 批量动作（任务 11.2）：只记录意图，写入与报告由工作区测试覆盖。
-  onBatchFolders?: (hashes: string[], path: string, add: boolean) => void;
+  onBatchMove?: (hashes: string[], folder: string | null) => void;
   onBatchTags?: (hashes: string[], tag: string, add: boolean) => void;
   onBatchFavorite?: (hashes: string[], favorite: boolean) => void;
   onBatchLinkToPrompt?: (promptId: string, hashes: string[]) => void;
@@ -125,10 +126,10 @@ async function setupInspector(
           folders={["参考", "参考/构图"]}
           mutating={false}
           trashLocation={options.trashLocation ?? false}
-          onSetFolders={(hash, folders) => {
-            handlers.onSetFolders?.(hash, folders);
+          onMoveAsset={(hash, folder) => {
+            handlers.onMoveAsset?.(hash, folder);
             setCurrent((rows) =>
-              rows.map((asset) => (asset.hash === hash ? { ...asset, folders } : asset)),
+              rows.map((asset) => (asset.hash === hash ? { ...asset, folder } : asset)),
             );
           }}
           onSetTags={(hash, tags) => {
@@ -140,8 +141,8 @@ async function setupInspector(
           onDeleteAsset={handlers.onDeleteAsset ?? (() => {})}
           onRestoreAsset={handlers.onRestoreAsset ?? (() => {})}
           onToggleFavorite={handlers.onToggleFavorite ?? (() => {})}
-          onBatchFolders={(hashes, path, add) =>
-            handlers.onBatchFolders?.(hashes, path, add)
+          onBatchMove={(hashes, folder) =>
+            handlers.onBatchMove?.(hashes, folder)
           }
           onBatchTags={(hashes, tag, add) => handlers.onBatchTags?.(hashes, tag, add)}
           onBatchFavorite={(hashes, favorite) =>
@@ -262,22 +263,30 @@ test("色卡失败时信息分区显示稳定错误码而不是假色卡", async
   expect(failure.textContent).toContain("100");
 });
 
-test("组织分区的文件夹勾选与标签增删触发回调", async () => {
+test("组织分区的文件夹单选与标签增删触发回调", async () => {
   const asset = makeAsset();
-  const calls: Array<{ kind: string; folders?: string[]; tags?: string[] }> = [];
+  const calls: Array<{ kind: string; folder?: string | null; tags?: string[] }> = [];
   const harness = await setupInspector([asset], {
-    onSetFolders: (_hash, folders) => calls.push({ kind: "folders", folders }),
+    onMoveAsset: (_hash, folder) => calls.push({ kind: "folder", folder }),
     onSetTags: (_hash, tags) => calls.push({ kind: "tags", tags }),
   });
   await act(async () => harness.proxy(0).click());
 
-  // 勾选"参考/构图"：在既有归属上追加。
-  const checkbox = harness.section("organization").querySelector<HTMLInputElement>(
-    'input[type="checkbox"][value="参考/构图"]',
+  // 点选"参考/构图"：单归属下移动是替换语义。
+  const radio = harness.section("organization").querySelector<HTMLInputElement>(
+    'input[type="radio"][value="参考/构图"]',
   );
-  if (checkbox === null) throw new Error("缺少文件夹复选框");
-  await act(async () => checkbox.click());
-  expect(calls).toEqual([{ kind: "folders", folders: ["参考", "参考/构图"] }]);
+  if (radio === null) throw new Error("缺少文件夹单选钮");
+  await act(async () => radio.click());
+  expect(calls).toEqual([{ kind: "folder", folder: "参考/构图" }]);
+
+  // 未分类是显式选项：点选即清除唯一归属。
+  const unclassified = harness.section("organization").querySelector<HTMLInputElement>(
+    'input[type="radio"][value=""]',
+  );
+  if (unclassified === null) throw new Error("缺少未分类单选钮");
+  await act(async () => unclassified.click());
+  expect(calls.at(-1)).toEqual({ kind: "folder", folder: null });
 
   // 添加标签 夜景。
   const tagInput = harness.root.querySelector<HTMLInputElement>("#new-tag");
@@ -378,17 +387,17 @@ test("多选时检查器只呈现数量摘要而不呈现单件分区", async ()
 test("多选批量组织分区按共同值呈现并携带完整选中集合上报", async () => {
   const first = makeAsset();
   const second = makeAsset({ hash: "c".repeat(64) });
-  // 两项都拥有标签"人物"（共同值）；文件夹"参考/构图"只在第一项里（混合值，
-  // 呈现为待补齐的半选）。批量动作只记录意图，写入由工作区测试覆盖。
+  // 两项都拥有标签"人物"与唯一归属"参考"（共同值）。批量动作只记录意图，
+  // 写入由工作区测试覆盖。
   const batch: Array<{
     kind: string;
     hashes?: string[];
-    target?: string;
+    target?: string | null;
     add?: boolean;
   }> = [];
   const harness = await setupInspector([first, second], {
-    onBatchFolders: (hashes, path, add) =>
-      batch.push({ kind: "folders", hashes, target: path, add }),
+    onBatchMove: (hashes, folder) =>
+      batch.push({ kind: "move", hashes, target: folder }),
     onBatchTags: (hashes, tag, add) =>
       batch.push({ kind: "tags", hashes, target: tag, add }),
     onBatchFavorite: (hashes, favorite) =>
@@ -400,17 +409,20 @@ test("多选批量组织分区按共同值呈现并携带完整选中集合上�
     harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
   });
 
-  // 文件夹三态：两项都没有"参考/构图"，勾选即批量加入。
-  const joinFolder = harness.root.querySelector<HTMLInputElement>(
-    '[aria-label="批量加入文件夹 参考/构图"]',
+  // 文件夹单归属：摘要行呈现共同归属，点选目标即整体移动。
+  const summaryLine = [...harness.root.querySelectorAll(".batch-organizer .muted")].find(
+    (line) => line.textContent?.includes("当前共同归属"),
   );
-  if (joinFolder === null) throw new Error("缺少批量加入文件夹复选框");
-  await act(async () => joinFolder.click());
+  expect(summaryLine?.textContent).toContain("参考");
+  const moveTarget = harness.root.querySelector<HTMLInputElement>(
+    '[aria-label="批量移动到文件夹 参考/构图"]',
+  );
+  if (moveTarget === null) throw new Error("缺少批量移动文件夹单选钮");
+  await act(async () => moveTarget.click());
   expect(batch.at(-1)).toEqual({
-    kind: "folders",
+    kind: "move",
     hashes: [first.hash, second.hash],
     target: "参考/构图",
-    add: true,
   });
 
   // 标签并集：共同值"人物"以按下状态呈现，点击即批量移除。

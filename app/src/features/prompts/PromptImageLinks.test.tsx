@@ -32,6 +32,7 @@ function makeAsset(hash: string, filename: string): AssetRow {
     height: 600,
     imported_at: "2026-08-20T00:00:00Z",
     original_filename: filename,
+    display_filename: filename,
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -41,7 +42,7 @@ function makeAsset(hash: string, filename: string): AssetRow {
     note: "",
     favorite: false,
     tags: [],
-    folders: [],
+    folder: null,
     colors: [],
   };
 }

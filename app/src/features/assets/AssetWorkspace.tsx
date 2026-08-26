@@ -6,22 +6,21 @@ import {
 } from "react";
 
 import {
-  batchAddAssetFolder,
   batchAddAssetTag,
   batchDeleteAssets,
   batchLinkToPrompt,
-  batchRemoveAssetFolder,
+  batchMoveAssetsToFolder,
   batchRemoveAssetTag,
   batchSetAssetFavorite,
   catalogSnapshot,
   createFolder,
   deleteAsset,
   deleteFolder,
+  moveAssetToFolder,
   purgeTrash,
   renameFolder,
   restoreAsset,
   setAssetFavorite,
-  setAssetFolders,
   setAssetTags,
 } from "../../shared/ipc";
 import { asAppError } from "../../shared/errors";
@@ -647,8 +646,8 @@ export function AssetWorkspace({
             folders={snapshot?.folders ?? []}
             mutating={mutating}
             trashLocation={location === "trash"}
-            onSetFolders={(hash, nextFolders) =>
-              void runMutation(() => setAssetFolders(hash, nextFolders), true)
+            onMoveAsset={(hash, target) =>
+              void runMutation(() => moveAssetToFolder(hash, target), true)
             }
             onSetTags={(hash, nextTags) =>
               void runMutation(() => setAssetTags(hash, nextTags), true)
@@ -671,14 +670,8 @@ export function AssetWorkspace({
             onToggleFavorite={(hash, favorite) =>
               void runMutation(() => setAssetFavorite(hash, favorite), true)
             }
-            onBatchFolders={(hashes, path, add) =>
-              runBatch(
-                (progress) =>
-                  add
-                    ? batchAddAssetFolder(hashes, path, progress)
-                    : batchRemoveAssetFolder(hashes, path, progress),
-                true,
-              )
+            onBatchMove={(hashes, target) =>
+              runBatch((progress) => batchMoveAssetsToFolder(hashes, target, progress), true)
             }
             onBatchTags={(hashes, tag, add) =>
               runBatch(

@@ -523,7 +523,7 @@ fn invalid_filename_text(value: &str) -> bool {
             .any(|character| character.is_control() || "\\/:*?\"<>|".contains(character))
 }
 
-fn normalize_folder_path(raw: &str) -> Result<String> {
+pub(crate) fn normalize_folder_path(raw: &str) -> Result<String> {
     if raw.is_empty() {
         return Err(invalid_folder_path(raw));
     }
@@ -551,10 +551,13 @@ fn invalid_folder_path(raw: &str) -> AppError {
 
 /// 生产路径使用的侧车格式。
 ///
-/// 用别名而不是把 v2 直接命名为 `AssetSidecar`：库格式版本会继续往前走，而"生产用哪一版"
+/// 用别名而不是把当前版直接命名为 `AssetSidecar`：库格式版本会继续往前走，而"生产用哪一版"
 /// 这件事应当只在一处改写。索引、导入与编目全部引用这个名字，因此下一次格式升级只需要
 /// 改这一行，而不是再一次全仓库改名。
-pub type AssetSidecar = AssetSidecarV2;
+///
+/// 任务 3.7 起（迁移提交门禁与恢复入口均已就位）生产切换为 v3：显式来源、必填显示
+/// 文件名与单一可选文件夹归属。
+pub type AssetSidecar = AssetSidecarV3;
 
 #[cfg(test)]
 mod tests {

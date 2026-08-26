@@ -14,20 +14,21 @@ import { AssetPromptLinks } from "./AssetPromptLinks";
 type AssetInspectorProps = {
   /** 当前查询的有序结果：活动项在这里解析成素材。 */
   assets: readonly AssetRow[];
-  /** 库内全部逻辑文件夹：组织分区按它渲染复选框。 */
+  /** 库内全部逻辑文件夹：组织分区按它渲染单选列表。 */
   folders: readonly string[];
   mutating: boolean;
   /** 当前处于回收站位置：组织编辑让位给还原入口。 */
   trashLocation: boolean;
-  onSetFolders: (hash: string, folders: string[]) => void;
+  /** 单归属移动（v3）：folder 为 null 表示移回未分类。 */
+  onMoveAsset: (hash: string, folder: string | null) => void;
   onSetTags: (hash: string, tags: string[]) => void;
   onDeleteAsset: (hash: string) => void;
   onRestoreAsset: (hash: string) => void;
   /** 收藏快捷开关（任务 9.4）：只表示二值状态，不扩展为评级。 */
   onToggleFavorite: (hash: string, favorite: boolean) => void;
   // 批量动作（任务 11.2）：选中集合由本组件经 SelectionModel 解析后随回调上报，
-  // 写入、报告与权威刷新由工作区统一协调。
-  onBatchFolders: (hashes: string[], folder: string, add: boolean) => void;
+  // 写入、报告与权威刷新由工作区统一协调。批量文件夹在单归属下只有"整体移动"。
+  onBatchMove: (hashes: string[], folder: string | null) => void;
   onBatchTags: (hashes: string[], tag: string, add: boolean) => void;
   onBatchFavorite: (hashes: string[], favorite: boolean) => void;
   onBatchLinkToPrompt: (promptId: string, hashes: string[]) => void;
@@ -46,12 +47,12 @@ export function AssetInspector({
   folders,
   mutating,
   trashLocation,
-  onSetFolders,
+  onMoveAsset,
   onSetTags,
   onDeleteAsset,
   onRestoreAsset,
   onToggleFavorite,
-  onBatchFolders,
+  onBatchMove,
   onBatchTags,
   onBatchFavorite,
   onBatchLinkToPrompt,
@@ -89,7 +90,7 @@ export function AssetInspector({
             items={selected}
             folders={folders}
             mutating={mutating}
-            onBatchFolders={(folder, add) => onBatchFolders(hashes, folder, add)}
+            onBatchMove={(folder) => onBatchMove(hashes, folder)}
             onBatchTags={(tag, add) => onBatchTags(hashes, tag, add)}
             onBatchFavorite={(favorite) => onBatchFavorite(hashes, favorite)}
           />
@@ -161,7 +162,7 @@ export function AssetInspector({
         </div>
         <dl className="info-grid">
           <dt>文件名</dt>
-          <dd>{active.original_filename}</dd>
+          <dd>{active.display_filename}</dd>
           <dt>尺寸</dt>
           <dd className="detail-mono">
             {active.width} × {active.height}
@@ -221,27 +222,38 @@ export function AssetInspector({
         ) : (
           <>
             <fieldset>
-              <legend>逻辑文件夹</legend>
+              {/* 单归属（v3）：一张图至多属于一个文件夹，单选组 + 未分类。
+                  点选即移动；选中当前值再次点击不产生多余写入。 */}
+              <legend>所在文件夹</legend>
               {folders.length === 0 ? (
                 <p className="muted">尚未创建文件夹。</p>
               ) : (
-                folders.map((folder) => (
-                  <label key={folder} className="check-row">
+                <div role="radiogroup" aria-label="选择素材所在的文件夹">
+                  <label className="check-row">
                     <input
-                      type="checkbox"
-                      value={folder}
-                      checked={active.folders.includes(folder)}
+                      type="radio"
+                      name={`asset-folder-${active.hash}`}
+                      value=""
+                      checked={active.folder === null}
                       disabled={mutating}
-                      onChange={() => {
-                        const next = active.folders.includes(folder)
-                          ? active.folders.filter((item) => item !== folder)
-                          : [...active.folders, folder];
-                        onSetFolders(active.hash, next);
-                      }}
+                      onChange={() => onMoveAsset(active.hash, null)}
                     />
-                    <span>{folder}</span>
+                    <span>未分类</span>
                   </label>
-                ))
+                  {folders.map((folder) => (
+                    <label key={folder} className="check-row">
+                      <input
+                        type="radio"
+                        name={`asset-folder-${active.hash}`}
+                        value={folder}
+                        checked={active.folder === folder}
+                        disabled={mutating}
+                        onChange={() => onMoveAsset(active.hash, folder)}
+                      />
+                      <span>{folder}</span>
+                    </label>
+                  ))}
+                </div>
               )}
             </fieldset>
             <div className="tag-editor">
