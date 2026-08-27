@@ -118,6 +118,7 @@ async function setupList(
       <SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
         <Probe />
         <PromptDetailList
+          onOpenFocused={() => {}}
           prompts={prompts}
           scrollKey="prompts-list"
           savedOffset={0}
@@ -261,6 +262,7 @@ test("卡片瀑布流与详情列表在同一 Provider 下选择等价互通", a
       <SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
         <Probe />
         <PromptCardWaterfall
+          onOpenFocused={() => {}}
           prompts={prompts}
           scrollKey="equivalence-card"
           savedOffset={0}
@@ -270,6 +272,7 @@ test("卡片瀑布流与详情列表在同一 Provider 下选择等价互通", a
         <PromptDetailList
           prompts={prompts}
           scrollKey="equivalence-list"
+          onOpenFocused={() => {}}
           savedOffset={0}
           onScrollOffset={() => {}}
           sort={{ column: "updatedAt", direction: "desc" }}

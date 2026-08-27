@@ -78,6 +78,14 @@ export function PromptBodyFocus({
   const [status, setStatus] = useState<SaveStatus>({ kind: "idle" });
   const [confirmClose, setConfirmClose] = useState(false);
   const pendingContinuationRef = useRef<(() => void) | null>(null);
+  const focusRegionRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const region = focusRegionRef.current;
+    if (region === null) throw new Error("聚焦阅读区域未挂载");
+    // 集合项目已卸载，必须显式接住键盘焦点，Esc 才会到达当前阅读上下文。
+    region.focus({ preventScroll: true });
+  }, []);
 
   const dirty = editing && isDirty(prompt, drafts);
   // 脏探针镜像：全局守卫在事件回调里查询，不能依赖渲染期闭包。
@@ -160,6 +168,8 @@ export function PromptBodyFocus({
 
   return (
     <section
+      ref={focusRegionRef}
+      tabIndex={-1}
       className="prompt-body-focus"
       aria-label="聚焦阅读"
       onKeyDown={(event) => {

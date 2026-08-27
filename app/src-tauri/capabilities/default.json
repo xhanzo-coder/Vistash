@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Vistash 主窗口所需的最小权限集合",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "core:window:allow-close", "core:window:allow-destroy", "dialog:allow-open"]
 }

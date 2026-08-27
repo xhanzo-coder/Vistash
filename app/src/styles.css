@@ -109,6 +109,15 @@
   --z-skip: 60;
 }
 
+/* 框线只表达选择范围，既不接管命中也不改变虚拟项布局。 */
+.waterfall-selection-box {
+  position: absolute;
+  z-index: var(--z-sticky);
+  pointer-events: none;
+  border: 1px solid var(--focus-ring);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
 * {
   box-sizing: border-box;
 }

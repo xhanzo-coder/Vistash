@@ -24,6 +24,8 @@ type PromptDetailListProps = {
   sort: PromptSort;
   /** 点击可排序列头时报告列；升/降切换由持有排序状态的父级决定。 */
   onSortChange: (column: PromptSortColumn) => void;
+  /** 双击或项目上的 Enter 显式进入聚焦阅读。 */
+  onOpenFocused: (id: string) => void;
 };
 
 /** 标题之外的可排序列。多值列与派生列不排序。 */
@@ -47,6 +49,7 @@ export function PromptDetailList({
   onScrollOffset,
   sort,
   onSortChange,
+  onOpenFocused,
 }: PromptDetailListProps) {
   const { state, onItemClick, handleKeyDown } = useSelection();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -150,6 +153,13 @@ export function PromptDetailList({
               aria-rowindex={item.index + 1}
               tabIndex={state.focusedId === prompt.id ? 0 : -1}
               className={`detail-row${selected ? " is-selected" : ""}${active ? " is-active" : ""}`}
+              onDoubleClick={() => onOpenFocused(prompt.id)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                event.stopPropagation();
+                onOpenFocused(prompt.id);
+              }}
               style={{ height: item.size, transform: `translateY(${item.start}px)` }}
               onClick={(event) => {
                 // 显式移交焦点：Safari 点击按钮不产生原生聚焦，键盘巡游依赖它。

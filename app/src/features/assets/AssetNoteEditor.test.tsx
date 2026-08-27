@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { AssetNoteEditor } from "./AssetNoteEditor";
+
+const mountedRoots: ReturnType<typeof createRoot>[] = [];
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
@@ -17,6 +19,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  act(() => { for (const root of mountedRoots.splice(0)) root.unmount(); });
   clearMocks();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -48,8 +51,10 @@ async function setupEditor(initialNote = ""): Promise<{
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  mountedRoots.push(root);
   await act(async () => {
-    root.render(<AssetNoteEditor hash={HASH} note={initialNote} />);
+    // 与真实应用入口一致，回归 effect 重放后保存状态不再更新的问题。
+    root.render(<StrictMode><AssetNoteEditor hash={HASH} note={initialNote} /></StrictMode>);
   });
   return {
     root: container,

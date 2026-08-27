@@ -44,6 +44,8 @@ type SelectionContextValue = {
   selectAll: () => void;
   /** 显式清选：批量工具条的"清除选择"按钮与 Esc 同一动作（保留活动项）。 */
   clearSelection: () => void;
+  /** 框选提交完整命中集合；活动项、范围锚点和键盘焦点保持不变。 */
+  selectBox: (ids: readonly string[]) => void;
 };
 
 const SelectionContext = createContext<SelectionContextValue | null>(null);
@@ -121,6 +123,9 @@ export function SelectionProvider({
       },
       clearSelection: () => {
         dispatch({ kind: "clear" });
+      },
+      selectBox: (selectedIds) => {
+        dispatch({ kind: "boxSelect", ids: selectedIds, additive: false });
       },
     };
   }, [state]);

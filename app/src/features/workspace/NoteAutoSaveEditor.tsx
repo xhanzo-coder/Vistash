@@ -151,8 +151,10 @@ export function NoteAutoSaveEditor({
 
   // 卸载时还有未落盘草稿：保留草稿并补写。失败进入注册表，返回同一素材时
   // 恢复原文与稳定错误；成功才删除，绝不静默丢弃。
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode 会执行 setup→cleanup→setup；每次 setup 都重新取得界面状态更新资格。
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       if (dirtyRef.current && inFlightRef.current === null) {
@@ -171,9 +173,8 @@ export function NoteAutoSaveEditor({
           },
         );
       }
-    },
-    [draftKey],
-  );
+    };
+  }, [draftKey]);
 
   return (
     <div className="note-editor">

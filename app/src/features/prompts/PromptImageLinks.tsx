@@ -89,6 +89,7 @@ export function PromptImageLinks({
   const [states, setStates] = useState<LinkedImageState[] | null>(null);
   const [loadError, setLoadError] = useState<AppError | null>(null);
   const [actionError, setActionError] = useState<AppError | null>(null);
+  const [dropError, setDropError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<ImportAndLinkReport | null>(null);
 
@@ -156,8 +157,7 @@ export function PromptImageLinks({
   // 落点处理器经 ref 取到最新的导入实现，挂载 effect 因此可以保持空依赖。
   const importDroppedRef = useRef<(paths: string[]) => Promise<void>>(async () => {});
 
-  // 拖放认领：登记本分区几何范围并接住窗口级拖动事件。纯浏览器/测试环境没有
-  // Tauri 拖放事件可接，注册失败退化为只有"从本地导入"按钮可用。
+  // 拖放认领：订阅失败明确提示，不把真实平台错误当作测试环境缺失吞掉。
   useEffect(() => {
     setPromptDropZone({
       rect: () => dropZoneRef.current?.getBoundingClientRect() ?? null,
@@ -173,8 +173,11 @@ export function PromptImageLinks({
           return;
         }
         unlisten = fn;
-      } catch {
-        // 无 Tauri 运行时：没有拖放事件流，按钮入口仍然完整。
+      } catch (raw) {
+        if (!cancelled) {
+          setPromptDropZone(null);
+          setDropError(String(raw));
+        }
       }
     })();
     return () => {
@@ -308,9 +311,13 @@ export function PromptImageLinks({
         ref={dropZoneRef}
         className={`link-drop-zone${hovering ? " is-hover" : ""}`}
         data-drop-zone="prompt-images"
-        aria-label="拖入本地图片以导入并关联"
+        aria-label={dropError === null ? "拖入本地图片以导入并关联" : "图片拖放不可用"}
       >
-        <p className="muted">把本地图片拖到这里，导入并关联到这条提示词</p>
+        {dropError === null ? (
+          <p className="muted">把本地图片拖到这里，导入并关联到这条提示词</p>
+        ) : (
+          <p role="alert">拖放不可用，请使用“从本地导入”。原因：{dropError}</p>
+        )}
       </div>
 
       {pickerOpen && (
@@ -392,7 +399,7 @@ export function PromptImageLinks({
       {states === null ? (
         loadError === null && <p role="status">正在读取关联…</p>
       ) : states.length === 0 ? (
-        <p className="muted">还没有关联图片。可从图片库选择，或拖入本地文件导入。</p>
+        <p className="muted">还没有关联图片。可从图片库选择，或使用“从本地导入”。</p>
       ) : (
         <ul className="linked-thumbs" aria-label={`关联 ${states.length} 张图片`}>
           {states.map((state, index) => {

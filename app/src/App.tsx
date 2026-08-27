@@ -30,6 +30,7 @@ import type {
 export function App() {
   const [status, setStatus] = useState<LibraryStatus | null>(null);
   const [statusError, setStatusError] = useState<AppError | null>(null);
+  const [closeProtectionError, setCloseProtectionError] = useState<string | null>(null);
   const [section, setSection] = useState<WorkspaceSection>("assets");
   const [assetsError, setAssetsError] = useState<AppError | null>(null);
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null);
@@ -143,17 +144,25 @@ export function App() {
       try {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const currentWindow = getCurrentWindow();
+        const reportCloseFailure = (raw: unknown) => {
+          if (!cancelled) setCloseProtectionError(String(raw));
+        };
         const fn = await currentWindow.onCloseRequested((event) => {
-          const continueClose = () => void currentWindow.close();
-          if (blockIfPromptDraftDirty(continueClose)) event.preventDefault();
+          // SDK 默认在回调后直接 destroy；由本层接管才能呈现该阶段的权限/平台错误。
+          event.preventDefault();
+          const continueClose = () => { void currentWindow.close().catch(reportCloseFailure); };
+          if (!blockIfPromptDraftDirty(continueClose)) {
+            void currentWindow.destroy().catch(reportCloseFailure);
+          }
         });
         if (cancelled) {
           fn();
           return;
         }
         unlisten = fn;
-      } catch {
-        // 无 Tauri 运行时或事件不可用：退化为不拦截，工作区内的导航闸口仍然生效。
+      } catch (raw) {
+        // 原生订阅失败不能与“当前没有草稿”混同；提示贯穿选库和工作台，不被导入清除。
+        if (!cancelled) setCloseProtectionError(String(raw));
       }
     })();
 
@@ -196,10 +205,17 @@ export function App() {
     );
   }, []);
 
+  const closeProtectionNotice = closeProtectionError !== null ? (
+    <p role="alert">
+      关闭保护不可用，请先保存正文再关闭窗口。原因：{closeProtectionError}
+    </p>
+  ) : null;
+
   if (statusError !== null) {
     return (
       <main>
         <h1>Vistash</h1>
+        {closeProtectionNotice}
         <p>读取应用状态失败。</p>
         <ErrorLine error={statusError} />
       </main>
@@ -210,6 +226,7 @@ export function App() {
     return (
       <main>
         <h1>Vistash</h1>
+        {closeProtectionNotice}
         <p>正在启动…</p>
       </main>
     );
@@ -217,7 +234,9 @@ export function App() {
 
   if (status.path === null) {
     return (
-      <LibraryPicker
+      <>
+        {closeProtectionNotice}
+        <LibraryPicker
         problem={status.problem}
         recordedPath={status.recorded_path}
         onOpened={(next) => {
@@ -225,12 +244,14 @@ export function App() {
           setOutcome(null);
           setCatalogVersion((version) => version + 1);
         }}
-      />
+        />
+      </>
     );
   }
 
   return (
     <div className="app-shell">
+      {closeProtectionNotice}
       <a className="skip-link" href="#main-content">跳到主内容</a>
 
       {/*

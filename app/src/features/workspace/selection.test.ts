@@ -17,6 +17,17 @@ import {
 
 const IDS = ["a", "b", "c", "d", "e"] as const;
 
+test("万项全范围框选保留合法身份并在 50ms 内完成状态更新", () => {
+  const ids = Array.from({ length: 10_000 }, (_, index) => String(index).padStart(64, "0"));
+  const state = initialSelection(ids);
+  const start = performance.now();
+  const selected = selectionReducer(state, { kind: "boxSelect", ids: [...ids, "unknown"] });
+  const elapsed = performance.now() - start;
+  expect(selected.selectedIds.size).toBe(10_000);
+  expect(selected.selectedIds.has("unknown")).toBe(false);
+  expect(elapsed).toBeLessThan(50);
+});
+
 function started(ids: readonly string[] = IDS): SelectionState {
   return selectionReducer(initialSelection(ids), { kind: "selectOne", id: "b" });
 }

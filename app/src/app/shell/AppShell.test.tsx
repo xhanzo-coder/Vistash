@@ -155,7 +155,10 @@ describe("AppShell 全局搜索", () => {
     if (input === undefined || input === null) throw new Error("全局搜索缺少输入框");
 
     await act(async () => setInputValue(input, "电影感"));
-    await vi.waitFor(() => expect(run).toHaveBeenCalledWith("电影感"));
+    // 请求开始不等于结果已提交到 DOM；把防抖及异步结果更新一并交给 act 冲刷。
+    await act(async () => {
+      await vi.waitFor(() => expect(run).toHaveBeenCalledWith("电影感"));
+    });
     const result = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.includes("雨夜构图提示词"),
     );
