@@ -126,6 +126,18 @@ function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+test("进入聚焦阅读立即取得键盘焦点，真实焦点上的 Esc 返回集合", async () => {
+  const close = vi.fn();
+  const harness = await setupFocus(makePrompt(), { onClose: close });
+  try {
+    expect(harness.section().contains(document.activeElement)).toBe(true);
+    await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    await harness.unmount();
+  }
+});
+
 test("只读呈现完整正文，编辑入口预填权威值", async () => {
   const prompt = makePrompt();
   const harness = await setupFocus(prompt);

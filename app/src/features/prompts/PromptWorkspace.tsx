@@ -50,6 +50,7 @@ import {
   workspacePanePresentation,
 } from "../workspace/workspacePaneLayout";
 import { PromptBodyFocus } from "./PromptBodyFocus";
+import { blockIfPromptDraftDirty } from "./draftGuard";
 import { promptDisplayTitle } from "./promptDisplay";
 import { PromptCardWaterfall } from "./PromptCardWaterfall";
 import { PromptDetailList } from "./PromptDetailList";
@@ -113,7 +114,7 @@ export function PromptWorkspace({
   } = useWorkspaceQueryController(libraryId, "prompts", locate);
   const [newFolderName, setNewFolderName] = useState("");
   const [renameValue, setRenameValue] = useState("");
-  // 聚焦阅读：只由检查器的显式按钮进入；单击仅更新右检查器。
+  // 聚焦阅读：由双击、Enter 或检查器的显式按钮进入；单击仅更新右检查器。
   // bodyFocusEdit 区分"聚焦阅读"与"编辑主字段"两种进入方式（任务 10.4）。
   const [bodyFocusId, setBodyFocusId] = useState<string | null>(null);
   const [bodyFocusEdit, setBodyFocusEdit] = useState(false);
@@ -160,21 +161,38 @@ export function PromptWorkspace({
   const bodyFocus =
     bodyFocusId === null
       ? null
-      : (sortedPrompts.find((prompt) => prompt.id === bodyFocusId) ?? null);
+       : (sortedPrompts.find((prompt) => prompt.id === bodyFocusId) ?? null);
+
+  /** 查询切换必须先解决正文草稿；继续动作捕获最初意图而不是对话框关闭后的事件。 */
+  function changeQuery(action: () => void) {
+    const proceed = () => {
+      setBodyFocusId(null);
+      action();
+    };
+    if (!blockIfPromptDraftDirty(proceed)) proceed();
+  }
 
   async function runMutation(operation: () => Promise<void>, refreshCurrentQuery: boolean) {
     if (mutating) return;
-    setMutating(true);
-    setNotice(null);
-    try {
-      await operation();
-      if (refreshCurrentQuery) await refresh();
-      setError(null);
-    } catch (raw) {
-      setError(asAppError(raw));
-    } finally {
-      setMutating(false);
-    }
+    const execute = async () => {
+      setMutating(true);
+      setNotice(null);
+      try {
+        await operation();
+        if (refreshCurrentQuery) await refresh();
+        setError(null);
+      } catch (raw) {
+        setError(asAppError(raw));
+      } finally {
+        setMutating(false);
+      }
+    };
+    // 文件夹/标签/收藏等写入也会让当前查询排除编辑目标，必须在权威写入前守卫。
+    if (blockIfPromptDraftDirty(() => {
+      setBodyFocusId(null);
+      void execute();
+    })) return;
+    await execute();
   }
 
   function requestPromptDelete(prompt: PromptRow) {
@@ -286,9 +304,11 @@ export function PromptWorkspace({
   }
 
   function selectFolder(next: FolderFilter) {
-    setLocation("active");
-    setFolder(next);
-    setRenameValue(next.kind === "path" ? next.path.split("/").at(-1) ?? "" : "");
+    changeQuery(() => {
+      setLocation("active");
+      setFolder(next);
+      setRenameValue(next.kind === "path" ? next.path.split("/").at(-1) ?? "" : "");
+    });
   }
 
   async function submitFolder(event: React.FormEvent<HTMLFormElement>) {
@@ -327,9 +347,11 @@ export function PromptWorkspace({
   }
 
   function toggleTag(tag: string) {
-    setSelectedTags((current) =>
-      current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
-    );
+    changeQuery(() => {
+      setSelectedTags((current) =>
+        current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
+      );
+    });
   }
 
   if (libraryId !== null && !ready) {
@@ -409,11 +431,11 @@ export function PromptWorkspace({
               type="button"
               aria-label="回收站"
               aria-current={location === "trash" ? "page" : undefined}
-              onClick={() => {
+              onClick={() => changeQuery(() => {
                 setLocation("trash");
                 setFolder({ kind: "all" });
                 setSelectedTags([]);
-              }}
+              })}
             >
               <span>回收站</span>
               <span>{snapshot?.trash_count ?? 0}</span>
@@ -540,7 +562,10 @@ export function PromptWorkspace({
               aria-label="按标题或正文搜索"
               placeholder="搜索标题或正文…"
               value={text}
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => {
+                const nextText = event.target.value;
+                changeQuery(() => setText(nextText));
+              }}
             />
           </label>
           {/* 收藏筛选入口：中央视图只返回 favorite=true 的正常提示词。 */}
@@ -548,7 +573,7 @@ export function PromptWorkspace({
             type="button"
             className={`favorite-filter${favoriteOnly ? " is-on" : ""}`}
             aria-pressed={favoriteOnly}
-            onClick={() => setFavoriteOnly((current) => !current)}
+            onClick={() => changeQuery(() => setFavoriteOnly(!favoriteOnly))}
           >
             ★ 只看收藏
           </button>
@@ -556,7 +581,10 @@ export function PromptWorkspace({
         </header>
 
         {/* 已应用条件的可移除呈现（任务 11.1）：无条件时不渲染任何东西。 */}
-        <AppliedFilterChips chips={chips} />
+        <AppliedFilterChips chips={chips.map((chip) => ({
+          ...chip,
+          onRemove: () => changeQuery(chip.onRemove),
+        }))} />
 
         {location === "active" && (snapshot?.tags.length ?? 0) > 0 && (
           <div className="tag-filter" aria-label="标签筛选">
@@ -666,6 +694,7 @@ export function PromptWorkspace({
               }
               sort={sort}
               onSortChange={changeSort}
+              onOpenFocused={(id) => { setBodyFocusEdit(false); setBodyFocusId(id); }}
             />
           ) : (
             <PromptCardWaterfall
@@ -681,6 +710,7 @@ export function PromptWorkspace({
               onToggleFavorite={(id, favorite) =>
                 void runMutation(() => setPromptFavorite(id, favorite), true)
               }
+              onOpenFocused={(id) => { setBodyFocusEdit(false); setBodyFocusId(id); }}
             />
           )
         )}

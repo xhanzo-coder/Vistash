@@ -62,6 +62,7 @@ export function makePrompts(count) {
     tags: [`主题${i % 35}`],
     linked_image_hashes: i % 5 === 0 ? [String(i).padStart(64, "0")] : [],
     cover_image_hash: i % 5 === 0 ? String(i).padStart(64, "0") : null,
+    resolved_cover_hash: i % 5 === 0 ? String(i).padStart(64, "0") : null,
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-20T00:00:00Z",
     deleted_at: null,
@@ -101,6 +102,11 @@ export function buildBootstrap(itemCount) {
         write_layout: () => undefined,
         asset_thumbnail: () => new Uint8Array(data.thumb).buffer,
         linked_image_states: () => [],
+        image_detail: ({ hash }) => {
+          const asset = data.assets.find(item => item.hash === hash);
+          if (asset === undefined) throw new Error("性能 fixture 中不存在该图片：" + hash);
+          return { asset, linked_prompts: [] };
+        },
         global_search: () => ({ assets: [], prompts: [] }),
         "plugin:event|listen": () => ++eventId,
         "plugin:event|unlisten": () => undefined,

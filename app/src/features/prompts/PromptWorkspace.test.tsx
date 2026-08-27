@@ -66,6 +66,10 @@ let linkFailureIds: string[];
 let catalogReply: CatalogSnapshot | null;
 /** 分库布局偏好存储：read_layout 的应答源，write_layout 原样写入（任务 11.2）。 */
 let savedLayouts: Record<string, unknown>;
+let excludeFilteredPrompts: boolean;
+let failPromptSave: boolean;
+let simulateFolderMutation: boolean;
+let liveFolder: string | null;
 
 class DormantIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -146,6 +150,10 @@ beforeEach(() => {
   linkFailureIds = [];
   catalogReply = null;
   savedLayouts = {};
+  excludeFilteredPrompts = false;
+  failPromptSave = false;
+  simulateFolderMutation = false;
+  liveFolder = "人像";
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:vistash-test"),
@@ -160,6 +168,12 @@ beforeEach(() => {
       const query = payload.query;
       if (!isPromptQuery(query)) throw new TypeError("query 不是合法对象");
       queries.push(query);
+      if (simulateFolderMutation && query.folder.kind === "path" && query.folder.path !== liveFolder) {
+        return { ...SNAPSHOT, prompts: [] };
+      }
+      if (excludeFilteredPrompts && (query.favorite === true || query.text !== "" || query.tags.length > 0 || query.folder.kind !== "all")) {
+        return { ...SNAPSHOT, prompts: [] };
+      }
       return query.location === "trash"
         ? { ...SNAPSHOT, prompts: trashPrompts, trash_count: SNAPSHOT.trash_count }
         : SNAPSHOT;
@@ -174,8 +188,8 @@ beforeEach(() => {
       return undefined;
     }
     if (command === "create_prompt_folder") return "人像/室外";
-    if (command === "rename_prompt_folder") return "肖像";
-    if (command === "delete_prompt_folder") return undefined;
+    if (command === "rename_prompt_folder") { liveFolder = "肖像"; return "肖像"; }
+    if (command === "delete_prompt_folder") { liveFolder = null; return undefined; }
     if (command === "restore_prompt") return restoreOutcome;
     if (command === "purge_prompt_trash") return purgeReply;
     // 多选分区的批量关联选择器自取图片候选（任务 11.2）：默认空库。
@@ -222,6 +236,7 @@ beforeEach(() => {
       return undefined;
     }
     if (command === "update_prompt") {
+      if (failPromptSave) throw { code: "library.prompt_write_failed", detail: "磁盘只读" };
       return { format_version: 2, ...makePrompt(2) };
     }
     if (command === "asset_thumbnail") return new ArrayBuffer(8);
@@ -235,6 +250,185 @@ beforeEach(() => {
     }
     throw new Error(`未预期的 IPC：${command}`);
   });
+});
+
+test("收藏筛选先解决正文草稿：取消不切换，保存失败保留原文，重试成功才继续", async () => {
+  excludeFilteredPrompts = true;
+  const harness = await setupWorkspace();
+  try {
+    const card = harness.container.querySelector<HTMLButtonElement>('[data-prompt-card][data-id="prompt-2"]');
+    if (card === null) throw new Error("缺少提示词卡片");
+    await act(async () => card.click());
+    await act(async () => buttonWithText(harness.container, "编辑主字段").click());
+    const editor = harness.container.querySelector<HTMLTextAreaElement>('textarea[name="prompt-body"]');
+    if (editor === null) throw new Error("缺少正文编辑器");
+    await act(async () => setInputValue(editor, "筛选前尚未保存的正文"));
+    const queryCount = queries.length;
+    await act(async () => buttonWithText(harness.container, "★ 只看收藏").click());
+    await flush();
+    expect(harness.container.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(editor.isConnected).toBe(true);
+    expect(queries).toHaveLength(queryCount);
+    await act(async () => buttonWithText(harness.container, "留在当前页").click());
+    expect(editor.value).toBe("筛选前尚未保存的正文");
+    expect(queries).toHaveLength(queryCount);
+
+    await act(async () => buttonWithText(harness.container, "★ 只看收藏").click());
+    failPromptSave = true;
+    await act(async () => buttonWithText(harness.container, "保存并离开").click());
+    expect(harness.container.querySelector('[data-error-code="library.prompt_write_failed"]')).not.toBeNull();
+    expect(editor.isConnected).toBe(true);
+    expect(editor.value).toBe("筛选前尚未保存的正文");
+    expect(queries).toHaveLength(queryCount);
+
+    failPromptSave = false;
+    await act(async () => buttonWithText(harness.container, "★ 只看收藏").click());
+    await act(async () => buttonWithText(harness.container, "保存并离开").click());
+    await flush();
+    expect(harness.container.querySelector('textarea[name="prompt-body"]')).toBeNull();
+    expect(queries.at(-1)?.favorite).toBe(true);
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test.each(["搜索", "文件夹", "标签", "回收站", "移除条件"])("%s 查询入口放弃草稿后才执行原始意图", async (entry) => {
+  const harness = await setupWorkspace();
+  try {
+    const search = harness.container.querySelector<HTMLInputElement>('input[name="prompt-search"]');
+    if (search === null) throw new Error("缺少搜索框");
+    if (entry === "移除条件") {
+      await act(async () => setInput(search, "旧搜索"));
+      await flush();
+    }
+    const card = harness.container.querySelector<HTMLButtonElement>('[data-prompt-card][data-id="prompt-2"]');
+    if (card === null) throw new Error("缺少提示词卡片");
+    await act(async () => card.click());
+    await act(async () => buttonWithText(harness.container, "编辑主字段").click());
+    const editor = harness.container.querySelector<HTMLTextAreaElement>('textarea[name="prompt-body"]');
+    if (editor === null) throw new Error("缺少正文编辑器");
+    await act(async () => setInputValue(editor, "待确认的草稿"));
+    const queryCount = queries.length;
+    excludeFilteredPrompts = true;
+    await act(async () => {
+      if (entry === "搜索") setInput(search, "新搜索");
+      else {
+        const selector = entry === "文件夹" ? 'button[data-folder="人像"]'
+          : entry === "标签" ? '.tag-filter button'
+          : entry === "回收站" ? 'button[aria-label="回收站"]'
+          : 'button[aria-label="移除搜索条件 旧搜索"]';
+        const trigger = harness.container.querySelector<HTMLButtonElement>(selector);
+        if (trigger === null) throw new Error(`缺少 ${entry} 入口`);
+        trigger.click();
+      }
+    });
+    await flush();
+    expect(harness.container.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(editor.isConnected).toBe(true);
+    expect(queries).toHaveLength(queryCount);
+    await act(async () => buttonWithText(harness.container, "放弃修改").click());
+    await flush();
+    expect(harness.container.querySelector('textarea[name="prompt-body"]')).toBeNull();
+    const nextQuery = queries.at(-1);
+    if (entry === "搜索") expect(nextQuery?.text).toBe("新搜索");
+    if (entry === "文件夹") expect(nextQuery?.folder).toEqual({ kind: "path", path: "人像" });
+    if (entry === "标签") expect(nextQuery?.tags).toEqual(["夜景"]);
+    if (entry === "回收站") expect(nextQuery?.location).toBe("trash");
+    if (entry === "移除条件") expect(nextQuery?.text).toBe("");
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test.each(["卡片瀑布流", "详情列表"])("%s 支持双击和 Enter 聚焦，Esc 恢复原集合选择", async (viewName) => {
+  const harness = await setupWorkspace();
+  try {
+    if (viewName === "详情列表") await act(async () => buttonWithText(harness.container, viewName).click());
+    const selector = viewName === "详情列表" ? '[data-list-item][data-id="prompt-2"]' : '[data-prompt-card][data-id="prompt-2"]';
+    const item = harness.container.querySelector<HTMLButtonElement>(selector);
+    if (item === null) throw new Error("缺少提示词项目");
+    await act(async () => item.click());
+    await act(async () => item.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    const focus = harness.container.querySelector<HTMLElement>('[aria-label="聚焦阅读"]');
+    if (focus === null) throw new Error("双击没有进入聚焦阅读");
+    expect(focus.textContent).toContain(makePrompt(2).body);
+    await act(async () => focus.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    const restored = harness.container.querySelector<HTMLButtonElement>(selector);
+    if (restored === null) throw new Error("退出聚焦后没有恢复集合");
+    expect(restored.getAttribute("aria-selected")).toBe("true");
+    await act(async () => restored.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(harness.container.querySelector('[aria-label="聚焦阅读"]')).not.toBeNull();
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("卡片复制和收藏按钮的 Enter 不连带进入聚焦阅读", async () => {
+  const harness = await setupWorkspace();
+  try {
+    const item = harness.container.querySelector<HTMLButtonElement>('[data-prompt-card][data-id="prompt-2"]');
+    if (item === null) throw new Error("缺少提示词项目");
+    await act(async () => item.click());
+    const controls = item.parentElement?.querySelectorAll<HTMLButtonElement>('.prompt-card-actions button');
+    if (controls === undefined) throw new Error("缺少卡片附属操作");
+    expect(controls.length).toBe(2);
+    for (const control of controls) {
+      await act(async () => control.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+      expect(harness.container.querySelector('[aria-label="聚焦阅读"]')).toBeNull();
+    }
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test.each(["重命名", "删除"])("%s 当前文件夹在任何权威写入之前解决正文草稿", async (operation) => {
+  simulateFolderMutation = true;
+  const harness = await setupWorkspace();
+  try {
+    const folder = harness.container.querySelector<HTMLButtonElement>('button[data-folder="人像"]');
+    if (folder === null) throw new Error("缺少文件夹");
+    await act(async () => folder.click());
+    await flush();
+    const card = harness.container.querySelector<HTMLButtonElement>('[data-prompt-card][data-id="prompt-2"]');
+    if (card === null) throw new Error("缺少提示词项目");
+    await act(async () => card.click());
+    await act(async () => buttonWithText(harness.container, "编辑主字段").click());
+    const editor = harness.container.querySelector<HTMLTextAreaElement>('textarea[name="prompt-body"]');
+    if (editor === null) throw new Error("缺少正文编辑器");
+    await act(async () => setInputValue(editor, "文件夹变更前的草稿"));
+    const trigger = async () => {
+      if (operation === "重命名") {
+        const name = harness.container.querySelector<HTMLInputElement>('input[name="rename-prompt-folder"]');
+        if (name === null) throw new Error("缺少名称输入框");
+        await act(async () => setInput(name, "肖像"));
+        await act(async () => buttonWithText(harness.container, "保存名称").click());
+      } else {
+        await act(async () => buttonWithText(harness.container, "删除文件夹").click());
+        const dialog = harness.container.querySelector('[role="dialog"]');
+        if (dialog === null) throw new Error("缺少危险操作确认");
+        await act(async () => buttonWithText(dialog, "删除文件夹").click());
+      }
+      await flush();
+    };
+    const command = operation === "重命名" ? "rename_prompt_folder" : "delete_prompt_folder";
+    await trigger();
+    expect(ipcCalls.some((call) => call.command === command)).toBe(false);
+    expect(editor.isConnected).toBe(true);
+    await act(async () => buttonWithText(harness.container, "留在当前页").click());
+    expect(liveFolder).toBe("人像");
+    await trigger();
+    failPromptSave = true;
+    await act(async () => buttonWithText(harness.container, "保存并离开").click());
+    expect(liveFolder).toBe("人像");
+    expect(editor.value).toBe("文件夹变更前的草稿");
+    await trigger();
+    await act(async () => buttonWithText(harness.container, "放弃修改").click());
+    await flush();
+    expect(ipcCalls.filter((call) => call.command === command)).toHaveLength(1);
+    expect(liveFolder).toBe(operation === "重命名" ? "肖像" : null);
+  } finally {
+    await harness.unmount();
+  }
 });
 
 afterEach(() => {

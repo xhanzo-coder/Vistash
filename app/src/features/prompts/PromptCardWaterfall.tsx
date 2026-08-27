@@ -15,6 +15,7 @@ import { promptDisplayTitle } from "./promptDisplay";
 import { useRovingFocus } from "../workspace/rovingFocus";
 import { useScrollRestore } from "../workspace/scrollRestore";
 import { useSelection } from "../workspace/selectionContext";
+import { useWaterfallBoxSelection } from "../workspace/waterfallBoxSelection";
 import type { PromptRow } from "../../shared/types";
 
 /** 列间与行间距（CSS px），与图片瀑布流共用同一节奏。 */
@@ -30,6 +31,8 @@ type PromptCardWaterfallProps = {
   onScrollOffset: (offset: number) => void;
   /** 收藏开关上报目标状态；写入与快照刷新由工作区负责。 */
   onToggleFavorite: (id: string, favorite: boolean) => void;
+  /** 显式进入聚焦阅读，附属按钮不触发。 */
+  onOpenFocused: (id: string) => void;
   /** 密度旋钮：期望卡片宽度。 */
   targetTileWidth?: number;
 };
@@ -57,6 +60,7 @@ export function PromptCardWaterfall({
   savedOffset,
   onScrollOffset,
   onToggleFavorite,
+  onOpenFocused,
   targetTileWidth = 280,
 }: PromptCardWaterfallProps) {
   const { state, onItemClick, handleKeyDown } = useSelection();
@@ -95,6 +99,7 @@ export function PromptCardWaterfall({
   });
 
   useScrollRestore(scrollRef, scrollKey, savedOffset);
+  const boxSelection = useWaterfallBoxSelection(virtualizer, laneWidth, GAP);
 
   // 键盘导航后把活动项滚进窗口并把焦点交给对应卡片；回调随行数组与虚拟化实例
   // 保持稳定，避免无关渲染反复触发聚焦。
@@ -151,7 +156,18 @@ export function PromptCardWaterfall({
       role="listbox"
       aria-multiselectable="true"
       aria-orientation="vertical"
-      onScroll={(event: UIEvent<HTMLDivElement>) => onScrollOffset(event.currentTarget.scrollTop)}
+      tabIndex={-1}
+      onPointerDown={boxSelection.onPointerDown}
+      onPointerMove={boxSelection.onPointerMove}
+      onPointerUp={boxSelection.onPointerUp}
+      onPointerCancel={boxSelection.onPointerCancel}
+      onLostPointerCapture={boxSelection.onPointerCancel}
+      onKeyDownCapture={boxSelection.onKeyDownCapture}
+      onClickCapture={boxSelection.onClickCapture}
+      onScroll={(event: UIEvent<HTMLDivElement>) => {
+        boxSelection.onScroll();
+        onScrollOffset(event.currentTarget.scrollTop);
+      }}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         if (handleKeyDown(event)) {
           event.preventDefault();
@@ -159,6 +175,8 @@ export function PromptCardWaterfall({
       }}
     >
       <div className="prompt-waterfall-canvas" style={{ height: virtualizer.getTotalSize() }}>
+        {boxSelection.box !== null && <div data-selection-box="" aria-hidden="true" className="waterfall-selection-box"
+          style={{ left: boxSelection.box.x, top: boxSelection.box.y, width: boxSelection.box.width, height: boxSelection.box.height }} />}
         {copyProblem !== null && (
           <p role="alert" className="prompt-copy-problem">
             {copyProblem}
@@ -194,6 +212,13 @@ export function PromptCardWaterfall({
                 }
                 tabIndex={state.focusedId === prompt.id ? 0 : -1}
                 className={`prompt-card-hit${selected ? " is-selected" : ""}${active ? " is-active" : ""}`}
+                onDoubleClick={() => onOpenFocused(prompt.id)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenFocused(prompt.id);
+                }}
                 onClick={(event) => {
                   // 显式移交焦点：Safari 点击按钮不产生原生聚焦，键盘巡游依赖它。
                   event.currentTarget.focus();

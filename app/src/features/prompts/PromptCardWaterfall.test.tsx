@@ -131,6 +131,7 @@ async function setupWaterfall(
       <SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
         <Probe />
         <PromptCardWaterfall
+          onOpenFocused={() => {}}
           prompts={prompts}
           scrollKey="prompts-waterfall"
           savedOffset={savedOffset}

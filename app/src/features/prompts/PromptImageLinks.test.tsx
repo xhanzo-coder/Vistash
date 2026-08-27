@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 // 对话框在组件里经 shared/ipc 间接调用；这里把插件模块整个换掉。
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(async () => null),
@@ -86,10 +86,15 @@ beforeEach(() => {
   ];
   candidates = [];
   changedCount = 0;
+  mockWindows("main");
+  Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
+    configurable: true,
+    value: { unregisterListener: vi.fn() },
+  });
   mockIPC((command, payload) => {
     if (command === "plugin:event|listen" || command === "plugin:event|unlisten") {
-      // 组件尝试订阅 Tauri 拖放事件：mock 环境没有真实事件流，静默应答即可。
-      return undefined;
+      // 模拟原生事件注册与释放；不可依赖生产代码吞掉缺失的测试环境。
+      return 1;
     }
     ipcCalls.push({ command, payload });
     if (command === "linked_image_states") {
@@ -121,6 +126,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearMocks();
+  Reflect.deleteProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__");
   vi.restoreAllMocks();
   document.body.replaceChildren();
 });
@@ -160,6 +166,24 @@ async function setupLinks(
       }),
   };
 }
+
+test("拖放订阅失败持续呈现原因且不再宣称可拖入", async () => {
+  mockWindows("main");
+  mockIPC((command) => {
+    if (command === "linked_image_states") return [];
+    if (command === "plugin:event|listen") throw new Error("拖放事件权限被拒绝");
+    throw new Error(`未预期的 IPC：${command}`);
+  });
+  const harness = await setupLinks(makePrompt({ linked_image_hashes: [] }));
+  try {
+    expect(harness.container.textContent).toContain("拖放不可用");
+    expect(harness.container.textContent).toContain("拖放事件权限被拒绝");
+    expect(harness.container.textContent).not.toContain("把本地图片拖到这里");
+    expect(harness.buttonByText("从本地导入").disabled).toBe(false);
+  } finally {
+    await harness.unmount();
+  }
+});
 
 test("挂载读取关联状态：回收站项显式标记已删除，缺省封面落在第一张正常图", async () => {
   const harness = await setupLinks();

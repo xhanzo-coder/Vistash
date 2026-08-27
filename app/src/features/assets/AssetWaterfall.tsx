@@ -13,6 +13,7 @@ import { Thumbnail } from "./Thumbnail";
 import { useRovingFocus } from "../workspace/rovingFocus";
 import { useScrollRestore } from "../workspace/scrollRestore";
 import { useSelection } from "../workspace/selectionContext";
+import { useWaterfallBoxSelection } from "../workspace/waterfallBoxSelection";
 import type { AssetRow } from "../../shared/types";
 
 /** 列间与行间距（CSS px）。 */
@@ -82,6 +83,7 @@ export function AssetWaterfall({
   });
 
   useScrollRestore(scrollRef, scrollKey, savedOffset);
+  const boxSelection = useWaterfallBoxSelection(virtualizer, laneWidth, GAP);
 
   // 键盘导航后把活动项滚进窗口并把焦点交给对应卡片；回调随资产数组与虚拟化
   // 实例保持稳定，避免无关渲染反复触发聚焦。
@@ -114,7 +116,18 @@ export function AssetWaterfall({
       role="listbox"
       aria-multiselectable="true"
       aria-orientation="vertical"
-      onScroll={(event: UIEvent<HTMLDivElement>) => onScrollOffset(event.currentTarget.scrollTop)}
+      tabIndex={-1}
+      onPointerDown={boxSelection.onPointerDown}
+      onPointerMove={boxSelection.onPointerMove}
+      onPointerUp={boxSelection.onPointerUp}
+      onPointerCancel={boxSelection.onPointerCancel}
+      onLostPointerCapture={boxSelection.onPointerCancel}
+      onKeyDownCapture={boxSelection.onKeyDownCapture}
+      onClickCapture={boxSelection.onClickCapture}
+      onScroll={(event: UIEvent<HTMLDivElement>) => {
+        boxSelection.onScroll();
+        onScrollOffset(event.currentTarget.scrollTop);
+      }}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         if (handleKeyDown(event)) {
           event.preventDefault();
@@ -128,6 +141,8 @@ export function AssetWaterfall({
       }}
     >
       <div className="asset-waterfall-canvas" style={{ height: virtualizer.getTotalSize() }}>
+        {boxSelection.box !== null && <div data-selection-box="" aria-hidden="true" className="waterfall-selection-box"
+          style={{ left: boxSelection.box.x, top: boxSelection.box.y, width: boxSelection.box.width, height: boxSelection.box.height }} />}
         {virtualizer.getVirtualItems().map((item) => {
           const asset = assets[item.index];
           if (asset === undefined) return null;

@@ -100,7 +100,9 @@ export function selectionReducer(state: SelectionState, action: SelectionAction)
 
     case "boxSelect": {
       // 框选只改变选中集合：键盘活动项、锚点与聚焦不属于指针手势的语义。
-      const boxed = new Set(action.ids.filter((id) => indexOf(state, id) !== -1));
+      // 框选按帧提交，不能对每个命中项再次线性扫描万项查询。
+      const domain = new Set(state.orderedIds);
+      const boxed = new Set(action.ids.filter((id) => domain.has(id)));
       const selectedIds = action.additive === true
         ? new Set([...state.selectedIds, ...boxed])
         : boxed;
