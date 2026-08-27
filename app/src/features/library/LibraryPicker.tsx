@@ -4,6 +4,10 @@ import { asAppError } from "../../shared/errors";
 import { openLibrary, pickLibraryDirectory } from "../../shared/ipc";
 import type { AppError, LibraryStatus } from "../../shared/types";
 import { ErrorLine } from "./ErrorLine";
+import { LibraryMigration } from "./LibraryMigration";
+
+/** 待迁移旧库的稳定错误码。开库与启动恢复都可能带着它回来。 */
+const FORMAT_TOO_OLD = "library.format_too_old";
 
 /**
  * 选库界面。
@@ -13,31 +17,54 @@ import { ErrorLine } from "./ErrorLine";
  * 没有"使用推荐位置"按钮，也不预填任何路径。
  *
  * `problem` 是上次记录的库路径不可用时的原因。它必须被呈现出来：只把人送回选择界面而不
- * 说明原因，使用者会以为素材丢了。
+ * 说明原因，使用者会以为素材丢了。当原因是"待迁移的旧库"时，界面直接进入迁移阻塞页，
+ * 而不是让使用者对着损坏样式的文案发懵（设计第四条）。
  */
 export function LibraryPicker({
   problem,
+  recordedPath,
   onOpened,
 }: {
   problem: AppError | null;
+  recordedPath: string | null;
   onOpened: (status: LibraryStatus) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AppError | null>(null);
+  const [migrationPath, setMigrationPath] = useState<string | null>(
+    problem?.code === FORMAT_TOO_OLD ? recordedPath : null,
+  );
 
   async function choose() {
     setError(null);
     setBusy(true);
+    let picked: string | null = null;
     try {
-      const path = await pickLibraryDirectory();
+      picked = await pickLibraryDirectory();
       // 取消选择不是失败，因此不留下任何错误提示。
-      if (path === null) return;
-      onOpened(await openLibrary(path));
+      if (picked !== null) {
+        onOpened(await openLibrary(picked));
+      }
     } catch (raw) {
-      setError(asAppError(raw));
+      const appError = asAppError(raw);
+      if (picked !== null && appError.code === FORMAT_TOO_OLD) {
+        setMigrationPath(picked);
+      } else {
+        setError(appError);
+      }
     } finally {
       setBusy(false);
     }
+  }
+
+  if (migrationPath !== null) {
+    return (
+      <LibraryMigration
+        path={migrationPath}
+        problem={problem?.code === FORMAT_TOO_OLD ? problem : null}
+        onOpened={onOpened}
+      />
+    );
   }
 
   return (

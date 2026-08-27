@@ -9,10 +9,13 @@ pub mod catalog;
 pub mod colorcard;
 pub mod error;
 pub mod hashing;
+pub mod ids;
 pub mod import;
 pub mod index;
 pub mod library;
 pub mod media;
+pub mod migration;
+pub mod prompt;
 pub mod settings;
 pub mod sidecar;
 

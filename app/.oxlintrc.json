@@ -38,5 +38,13 @@
     // 警告同样使命令以非零码退出。否则 lint 会变成一条"看起来通过"的命令。
     "denyWarnings": true
   },
-  "ignorePatterns": ["dist", "target", "src-tauri", "node_modules"]
+  "ignorePatterns": [
+    "dist",
+    "target",
+    "src-tauri",
+    "node_modules",
+    // 性能基线的 Node 测量脚本（任务 11.4）：依赖无类型上下文的第三方与浏览器
+    // 全局，类型感知规则在此只会产生噪声；产品代码不受影响。
+    "scripts"
+  ]
 }

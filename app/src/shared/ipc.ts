@@ -15,11 +15,25 @@ import { asAppError, IpcError } from "./errors";
 import type {
   AssetQuery,
   AssetRow,
+  BatchProgress,
+  BatchReport,
   CatalogSnapshot,
   FolderMutationProgress,
+  GlobalSearchResult,
+  ImageDetail,
+  ImportAndLinkReport,
   ImportOutcome,
   ImportProgress,
   LibraryStatus,
+  LinkedImageState,
+  MigrationProgress,
+  NewPromptInput,
+  PromptAsset,
+  PromptEditInput,
+  PromptPurgeReport,
+  PromptQuery,
+  PromptRestoreOutcome,
+  PromptSnapshot,
   PurgeReport,
   RestoreOutcome,
 } from "./types";
@@ -55,6 +69,36 @@ export async function pickLibraryDirectory(): Promise<string | null> {
 /** 打开选中的目录；该目录还不是库时创建一个。 */
 export function openLibrary(path: string): Promise<LibraryStatus> {
   return call<LibraryStatus>("open_library", { path });
+}
+
+/**
+ * 弹出多选图片文件对话框；取消时返回空数组。
+ *
+ * 扩展名清单与核心导入层支持的格式一致——对话框放行的类型后端不会再拒第二遍，
+ * 两份清单必须同步修改。
+ */
+export async function pickImageFiles(): Promise<string[]> {
+  try {
+    const picked = await openDialog({
+      multiple: true,
+      title: "选择要导入并关联的图片",
+      filters: [
+        { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] },
+      ],
+    });
+    return picked ?? [];
+  } catch (raw) {
+    throw new IpcError(asAppError(raw));
+  }
+}
+
+/** 对旧版本格式的库执行一次性迁移，成功后该库成为当前库。 */
+export function migrateLibrary(
+  path: string,
+  onProgress: (progress: MigrationProgress) => void,
+): Promise<LibraryStatus> {
+  const progress = new Channel<MigrationProgress>(onProgress);
+  return call<LibraryStatus>("migrate_library", { path, onProgress: progress });
 }
 
 /** 网格用的素材列表，不含回收站中的素材。 */
@@ -113,6 +157,19 @@ export function importPaths(
 }
 
 /**
+ * 把二进制 IPC 的返回值归一成 ArrayBuffer。
+ *
+ * 任务 11.5 的 release 验收发现：开发模式经 HTTP 传输时 `tauri::ipc::Response` 到达前端
+ * 是 ArrayBuffer，而 release（自定义协议内嵌）经 postMessage JSON 传输时是**数字数组**——
+ * 字节本身无损，只是序列化形态不同。直接把数组交给 `Blob` 会得到 `"82,73,70,70…"` 这样的
+ * 十进制文本，`<img>` 静默解码失败。因此这里显式归一，不轻信传输层给哪种形态。
+ */
+function asArrayBuffer(bytes: ArrayBuffer | number[]): ArrayBuffer {
+  if (bytes instanceof ArrayBuffer) return bytes;
+  return Uint8Array.from(bytes).buffer;
+}
+
+/**
  * 后端返回的原始字节包成 blob: URL。
  *
  * 走字节而不是 base64：base64 会把体积放大三分之一，而网格一次要取上百张缩略图。
@@ -127,9 +184,9 @@ function toObjectUrl(bytes: ArrayBuffer, mime: string): string {
 
 /** 素材缩略图的 blob: URL。缺失时后端会按需重新生成。 */
 export async function loadThumbnail(hash: string): Promise<string> {
-  const bytes = await call<ArrayBuffer>("asset_thumbnail", { hash });
+  const bytes = await call<ArrayBuffer | number[]>("asset_thumbnail", { hash });
   // 缩略图一律是 WebP，与素材本体的格式无关。
-  return toObjectUrl(bytes, "image/webp");
+  return toObjectUrl(asArrayBuffer(bytes), "image/webp");
 }
 
 /**
@@ -141,8 +198,8 @@ export async function loadThumbnail(hash: string): Promise<string> {
  * MIME 交给浏览器嗅探。`<img>` 按内容判定格式，因此这里不需要（也不该）自己猜。
  */
 export async function loadOriginal(hash: string): Promise<string> {
-  const bytes = await call<ArrayBuffer>("asset_original", { hash });
-  return toObjectUrl(bytes, "");
+  const bytes = await call<ArrayBuffer | number[]>("asset_original", { hash });
+  return toObjectUrl(asArrayBuffer(bytes), "");
 }
 
 /**
@@ -164,4 +221,293 @@ export async function onPathsDropped(
     }
   });
   return unlisten;
+}
+
+/**
+ * 窗口级文件拖放的完整事件流（任务 10.5）。
+ *
+ * `onPathsDropped` 只回答"放下了什么"，而关联图片区还需要"悬停在哪里"才能呈现
+ * 命中高亮并在落点上与整库导入分流。位置是物理像素，逻辑像素换算由消费方按
+ * `devicePixelRatio` 自行完成。
+ */
+export type FileDragEvent =
+  | { type: "enter"; paths: string[]; x: number; y: number }
+  | { type: "move"; paths: string[]; x: number; y: number }
+  | { type: "leave" }
+  | { type: "drop"; paths: string[]; x: number; y: number };
+
+export async function onFileDragEvent(
+  handler: (event: FileDragEvent) => void,
+): Promise<() => void> {
+  const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+    const payload = event.payload;
+    if (payload.type === "leave") {
+      handler({ type: "leave" });
+      return;
+    }
+    // Tauri 把"拖动经过"报作 over 且不带路径；本应用的语义是 move，命中
+    // 判定只需要坐标，路径以空列表占位。
+    if (payload.type === "over") {
+      handler({ type: "move", paths: [], x: payload.position.x, y: payload.position.y });
+      return;
+    }
+    handler({
+      type: payload.type,
+      paths: payload.paths,
+      x: payload.position.x,
+      y: payload.position.y,
+    });
+  });
+  return unlisten;
+}
+
+// ---------------------------------------------------------------------------
+// 提示词素材：CRUD、组织、回收站、普通关联与封面。
+// ---------------------------------------------------------------------------
+
+/** 创建提示词：正文是唯一必填项，身份由后端生成。 */
+export function createPrompt(prompt: NewPromptInput): Promise<PromptAsset> {
+  return call<PromptAsset>("create_prompt", { prompt });
+}
+
+/** 显式保存主字段（正文/标题/模型/参数），身份与组织保持不变。 */
+export function updatePrompt(id: string, edit: PromptEditInput): Promise<PromptAsset> {
+  return call<PromptAsset>("update_prompt", { id, edit });
+}
+
+/** 按需读取提示词完整详情：列表只携带轻量行，检查器打开时才调用。 */
+export function promptDetail(id: string): Promise<PromptAsset> {
+  return call<PromptAsset>("prompt_detail", { id });
+}
+
+export function promptSnapshot(query: PromptQuery): Promise<PromptSnapshot> {
+  return call<PromptSnapshot>("prompt_snapshot", { query });
+}
+
+/** 在独立的提示词文件夹树中创建一个逻辑文件夹。 */
+export function createPromptFolder(parent: string | null, name: string): Promise<string> {
+  return call<string>("create_prompt_folder", { parent, name });
+}
+
+/** 重命名提示词文件夹子树，并由核心事务同步更新成员归属。 */
+export function renamePromptFolder(path: string, newName: string): Promise<string> {
+  return call<string>("rename_prompt_folder", { path, newName });
+}
+
+/** 删除提示词文件夹子树；提示词素材本身保留并按核心语义回到根位置。 */
+export function deletePromptFolder(path: string): Promise<void> {
+  return call<void>("delete_prompt_folder", { path });
+}
+
+/** 设置提示词备注（独立自动保存流，不推进更新时间）。 */
+export function setPromptNote(id: string, note: string): Promise<void> {
+  return call<void>("set_prompt_note", { id, note });
+}
+
+export function setPromptFavorite(id: string, favorite: boolean): Promise<void> {
+  return call<void>("set_prompt_favorite", { id, favorite });
+}
+
+export function setPromptFolders(id: string, folders: string[]): Promise<void> {
+  return call<void>("set_prompt_folders", { id, folders });
+}
+
+export function setPromptTags(id: string, tags: string[]): Promise<void> {
+  return call<void>("set_prompt_tags", { id, tags });
+}
+
+/** 把提示词移入库内回收站：只移动归属，不改写任何使用者数据。 */
+export function deletePrompt(id: string): Promise<void> {
+  return call<void>("delete_prompt", { id });
+}
+
+/** 还原一条回收站提示词；缺失的原文件夹经结果说明，不作为失败。 */
+export function restorePrompt(id: string): Promise<PromptRestoreOutcome> {
+  return call<PromptRestoreOutcome>("restore_prompt", { id });
+}
+
+/** 逐项清理提示词回收站；单项失败不阻止其余条目。 */
+export function purgePromptTrash(): Promise<PromptPurgeReport> {
+  return call<PromptPurgeReport>("purge_prompt_trash");
+}
+
+/** 把图片追加到提示词的有序关联列表末尾；重复关联是幂等空操作。 */
+export function linkImages(promptId: string, hashes: string[]): Promise<void> {
+  return call<void>("link_images", { promptId, hashes });
+}
+
+/** 解除一张图的关联；解除显式封面时封面回落缺省。未关联时是幂等空操作。 */
+export function unlinkImage(promptId: string, hash: string): Promise<void> {
+  return call<void>("unlink_image", { promptId, hash });
+}
+
+/** 设置显式封面；null 清除显式值回到缺省。封面必须在关联列表中。 */
+export function setPromptCover(promptId: string, cover: string | null): Promise<void> {
+  return call<void>("set_prompt_cover", { promptId, cover });
+}
+
+/** 本地导入后关联：逐源报告 LinkedExisting/LinkedImported/失败。 */
+export function importAndLink(
+  promptId: string,
+  sources: string[],
+): Promise<ImportAndLinkReport> {
+  return call<ImportAndLinkReport>("import_and_link", { promptId, sources });
+}
+
+/** 图片检查器的按需详情：轻量行加关联提示词反查。 */
+export function imageDetail(hash: string): Promise<ImageDetail> {
+  return call<ImageDetail>("image_detail", { hash });
+}
+
+/** 提示词检查器的按需关联状态：与权威文件同序的哈希加各自回收站标记。 */
+export function linkedImageStates(promptId: string): Promise<LinkedImageState[]> {
+  return call<LinkedImageState[]>("linked_image_states", { promptId });
+}
+
+/** 图片备注与收藏（与提示词侧同一语义）。 */
+export function setAssetNote(hash: string, note: string): Promise<void> {
+  return call<void>("set_asset_note", { hash, note });
+}
+
+export function setAssetFavorite(hash: string, favorite: boolean): Promise<void> {
+  return call<void>("set_asset_favorite", { hash, favorite });
+}
+
+// ---------------------------------------------------------------------------
+// 批量组织：统一 BatchReport，逐项失败隔离，进度按项转交。
+// ---------------------------------------------------------------------------
+
+function batchCall(
+  command: string,
+  args: Record<string, unknown>,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  const progress = new Channel<BatchProgress>(onProgress);
+  return call<BatchReport>(command, { ...args, onProgress: progress });
+}
+
+export function batchAddAssetFolder(
+  hashes: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_asset_folder", { hashes, folder }, onProgress);
+}
+
+export function batchRemoveAssetFolder(
+  hashes: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_asset_folder", { hashes, folder }, onProgress);
+}
+
+export function batchAddAssetTag(
+  hashes: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_asset_tag", { hashes, tag }, onProgress);
+}
+
+export function batchRemoveAssetTag(
+  hashes: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_asset_tag", { hashes, tag }, onProgress);
+}
+
+export function batchSetAssetFavorite(
+  hashes: string[],
+  favorite: boolean,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_set_asset_favorite", { hashes, favorite }, onProgress);
+}
+
+export function batchLinkToPrompt(
+  promptId: string,
+  hashes: string[],
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_link_to_prompt", { promptId, hashes }, onProgress);
+}
+
+export function batchDeleteAssets(
+  hashes: string[],
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_delete_assets", { hashes }, onProgress);
+}
+
+export function batchAddPromptFolder(
+  ids: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_prompt_folder", { ids, folder }, onProgress);
+}
+
+export function batchRemovePromptFolder(
+  ids: string[],
+  folder: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_prompt_folder", { ids, folder }, onProgress);
+}
+
+export function batchAddPromptTag(
+  ids: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_add_prompt_tag", { ids, tag }, onProgress);
+}
+
+export function batchRemovePromptTag(
+  ids: string[],
+  tag: string,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_remove_prompt_tag", { ids, tag }, onProgress);
+}
+
+export function batchSetPromptFavorite(
+  ids: string[],
+  favorite: boolean,
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_set_prompt_favorite", { ids, favorite }, onProgress);
+}
+
+export function batchDeletePrompts(
+  ids: string[],
+  onProgress: (progress: BatchProgress) => void,
+): Promise<BatchReport> {
+  return batchCall("batch_delete_prompts", { ids }, onProgress);
+}
+
+// ---------------------------------------------------------------------------
+// 全局搜索与布局偏好。
+// ---------------------------------------------------------------------------
+
+/** 跨图片与提示词的全局搜索：结果按素材类型分组。 */
+export function globalSearch(text: string): Promise<GlobalSearchResult> {
+  return call<GlobalSearchResult>("global_search", { text });
+}
+
+/**
+ * 读取一个库的布局偏好。从未保存过时返回 null。
+ *
+ * 布局内容是前端领域的任意 JSON——后端只按键存储透传，不解释其结构，
+ * 因此布局模型的演进不需要改动 IPC 合同。
+ */
+export function readLayout(libraryId: string): Promise<unknown> {
+  return call<unknown>("read_layout", { libraryId });
+}
+
+/** 写入一个库的布局偏好（整体覆盖）。 */
+export function writeLayout(libraryId: string, layout: unknown): Promise<void> {
+  return call<void>("write_layout", { libraryId, layout });
 }

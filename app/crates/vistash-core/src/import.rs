@@ -15,7 +15,7 @@ use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
 use crate::library::Library;
 use crate::media;
-use crate::sidecar::{AssetSidecar, SIDECAR_FORMAT_VERSION};
+use crate::sidecar::{AssetSidecar, SIDECAR_FORMAT_VERSION_V2};
 use chrono::Utc;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -245,7 +245,7 @@ fn import_one_inner(
     let color_card = colorcard::analyze(&decoded.image);
 
     let sidecar = AssetSidecar {
-        format_version: SIDECAR_FORMAT_VERSION,
+        format_version: SIDECAR_FORMAT_VERSION_V2,
         hash: hash.clone(),
         hash_algo: lib.meta().hash_algo.clone(),
         media_type: decoded.media_type,
@@ -262,6 +262,10 @@ fn import_one_inner(
         folders: opts.folders.clone(),
         tags: opts.tags.clone(),
         color_card,
+        // 新入库的素材既没有备注也未被收藏。这两个字段刻意没有 serde 默认值（见
+        // `sidecar.rs`），因此必须在这里显式写出，不能靠反序列化时补齐。
+        note: String::new(),
+        favorite: false,
         deleted_at: None,
         deleted_from_folders: None,
     };

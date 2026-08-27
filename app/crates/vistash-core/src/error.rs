@@ -13,6 +13,8 @@ pub enum Domain {
     Trash,
     ColorCard,
     Library,
+    Prompt,
+    Migration,
     Observe,
     Compile,
 }
@@ -24,6 +26,8 @@ impl Domain {
             Domain::Trash => "trash",
             Domain::ColorCard => "color_card",
             Domain::Library => "library",
+            Domain::Prompt => "prompt",
+            Domain::Migration => "migration",
             Domain::Observe => "observe",
             Domain::Compile => "compile",
         }
@@ -57,6 +61,9 @@ pub enum Code {
     LibraryNotFound,
     LibraryPathUnreadable,
     LibraryFormatTooNew,
+    /// 库格式比当前数据模型旧。它不是损坏：开库入口应把它转成一次明确的迁移，
+    /// 而不是让使用者面对"元数据损坏"误以为素材丢了。
+    LibraryFormatTooOld,
     LibraryMetadataCorrupt,
     LibraryDirectoryNotEmpty,
     LibraryCreateFailed,
@@ -69,6 +76,43 @@ pub enum Code {
     LibraryFolderNotFound,
     LibraryTagInvalid,
     LibraryAssetMetadataWriteFailed,
+    // prompt 域：提示词素材及其权威文件
+    PromptMetadataCorrupt,
+    PromptFormatTooNew,
+    PromptWriteFailed,
+    PromptBodyEmpty,
+    PromptIdInvalid,
+    PromptCoverNotLinked,
+    PromptLinkedImageDuplicated,
+    /// 正常库中不存在该提示词。它与瞬时 IO 失败不同：多半意味着素材已被删除或
+    /// ID 有误，界面应引导重新查看列表而不是提示重试。
+    PromptNotFound,
+    /// 提示词文件夹清单中不存在该文件夹。提示词文件夹与图片文件夹是两棵树，
+    /// 归属必须指向自己那棵树里真实存在的路径。
+    PromptFolderNotFound,
+    /// 提示词文件夹清单中已有同名路径。与图片文件夹无关：两棵树允许同路径字面值
+    /// 各自存在，重复只发生在提示词树内部。
+    PromptFolderExists,
+    /// 把提示词移入库内提示词回收站失败。与图片侧的 `trash.delete_failed` 分开：
+    /// 两棵树的同名路径可以各自存在，失败也必须能归因到各自那一侧。
+    PromptTrashDeleteFailed,
+    /// 从库内提示词回收站还原提示词失败。分开的理由同上。
+    PromptTrashRestoreFailed,
+    /// 彻底删除一条回收站提示词失败。逐项隔离：一条失败不阻止其余条目继续清理。
+    PromptTrashPurgeFailed,
+    /// 关联目标图片不在库中。关联只能指向真实入库的图片，否则界面会把一个
+    /// 永远无法解析的引用呈现成"已删除"。
+    PromptLinkedImageNotFound,
+    // migration 域：库格式 v1 到 v2 的一次性迁移
+    MigrationJournalCorrupt,
+    MigrationJournalFormatTooNew,
+    MigrationJournalWriteFailed,
+    MigrationLockHeld,
+    MigrationInterrupted,
+    MigrationBackupFailed,
+    MigrationSidecarRewriteFailed,
+    MigrationCommitFailed,
+    MigrationRollbackFailed,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -92,6 +136,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::LibraryNotFound,
     Code::LibraryPathUnreadable,
     Code::LibraryFormatTooNew,
+    Code::LibraryFormatTooOld,
     Code::LibraryMetadataCorrupt,
     Code::LibraryDirectoryNotEmpty,
     Code::LibraryCreateFailed,
@@ -104,6 +149,29 @@ pub const ALL_CODES: &[Code] = &[
     Code::LibraryFolderNotFound,
     Code::LibraryTagInvalid,
     Code::LibraryAssetMetadataWriteFailed,
+    Code::PromptMetadataCorrupt,
+    Code::PromptFormatTooNew,
+    Code::PromptWriteFailed,
+    Code::PromptBodyEmpty,
+    Code::PromptIdInvalid,
+    Code::PromptCoverNotLinked,
+    Code::PromptLinkedImageDuplicated,
+    Code::PromptNotFound,
+    Code::PromptFolderNotFound,
+    Code::PromptFolderExists,
+    Code::PromptTrashDeleteFailed,
+    Code::PromptTrashRestoreFailed,
+    Code::PromptTrashPurgeFailed,
+    Code::PromptLinkedImageNotFound,
+    Code::MigrationJournalCorrupt,
+    Code::MigrationJournalFormatTooNew,
+    Code::MigrationJournalWriteFailed,
+    Code::MigrationLockHeld,
+    Code::MigrationInterrupted,
+    Code::MigrationBackupFailed,
+    Code::MigrationSidecarRewriteFailed,
+    Code::MigrationCommitFailed,
+    Code::MigrationRollbackFailed,
 ];
 
 impl Code {
@@ -129,6 +197,7 @@ impl Code {
             LibraryNotFound
             | LibraryPathUnreadable
             | LibraryFormatTooNew
+            | LibraryFormatTooOld
             | LibraryMetadataCorrupt
             | LibraryDirectoryNotEmpty
             | LibraryCreateFailed
@@ -141,6 +210,30 @@ impl Code {
             | LibraryFolderNotFound
             | LibraryTagInvalid
             | LibraryAssetMetadataWriteFailed => Domain::Library,
+            PromptMetadataCorrupt
+            | PromptFormatTooNew
+            | PromptWriteFailed
+            | PromptBodyEmpty
+            | PromptIdInvalid
+            | PromptCoverNotLinked
+            | PromptLinkedImageDuplicated
+            | PromptNotFound
+            | PromptFolderNotFound
+            | PromptFolderExists
+            | PromptTrashDeleteFailed
+            | PromptTrashRestoreFailed
+            | PromptTrashPurgeFailed
+            | PromptLinkedImageNotFound => Domain::Prompt,
+            MigrationJournalCorrupt
+            | MigrationJournalFormatTooNew
+            | MigrationJournalWriteFailed
+            | MigrationLockHeld
+            | MigrationInterrupted
+            | MigrationBackupFailed
+            | MigrationSidecarRewriteFailed
+            | MigrationCommitFailed
+            | MigrationRollbackFailed
+            => Domain::Migration,
         }
     }
 
@@ -166,6 +259,7 @@ impl Code {
             LibraryNotFound => "library.not_found",
             LibraryPathUnreadable => "library.path_unreadable",
             LibraryFormatTooNew => "library.format_too_new",
+            LibraryFormatTooOld => "library.format_too_old",
             LibraryMetadataCorrupt => "library.metadata_corrupt",
             LibraryDirectoryNotEmpty => "library.directory_not_empty",
             LibraryCreateFailed => "library.create_failed",
@@ -178,6 +272,29 @@ impl Code {
             LibraryFolderNotFound => "library.folder_not_found",
             LibraryTagInvalid => "library.tag_invalid",
             LibraryAssetMetadataWriteFailed => "library.asset_metadata_write_failed",
+            PromptMetadataCorrupt => "prompt.metadata_corrupt",
+            PromptFormatTooNew => "prompt.format_too_new",
+            PromptWriteFailed => "prompt.write_failed",
+            PromptBodyEmpty => "prompt.body_empty",
+            PromptIdInvalid => "prompt.id_invalid",
+            PromptCoverNotLinked => "prompt.cover_not_linked",
+            PromptLinkedImageDuplicated => "prompt.linked_image_duplicated",
+            PromptNotFound => "prompt.not_found",
+            PromptFolderNotFound => "prompt.folder_not_found",
+            PromptFolderExists => "prompt.folder_exists",
+            PromptTrashDeleteFailed => "prompt.trash_delete_failed",
+            PromptTrashRestoreFailed => "prompt.trash_restore_failed",
+            PromptTrashPurgeFailed => "prompt.trash_purge_failed",
+            PromptLinkedImageNotFound => "prompt.linked_image_not_found",
+            MigrationJournalCorrupt => "migration.journal_corrupt",
+            MigrationJournalFormatTooNew => "migration.journal_format_too_new",
+            MigrationJournalWriteFailed => "migration.journal_write_failed",
+            MigrationLockHeld => "migration.lock_held",
+            MigrationInterrupted => "migration.interrupted",
+            MigrationBackupFailed => "migration.backup_failed",
+            MigrationSidecarRewriteFailed => "migration.sidecar_rewrite_failed",
+            MigrationCommitFailed => "migration.commit_failed",
+            MigrationRollbackFailed => "migration.rollback_failed",
         }
     }
 
