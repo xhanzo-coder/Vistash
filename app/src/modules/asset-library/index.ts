@@ -9,14 +9,14 @@
  * 类型级接口（设计第二条的公开 interface 形状）。
  */
 
-import type { RequestId } from "../../app/common";
+import type { AssetId, RequestId } from "../../app/common";
 import type { AssetLocationScope } from "../../app/navigation";
 import type { OpenLibrarySession } from "../library-lifecycle";
 
 /** 应用外壳交给图片工作区的一次性入口：恢复现场，或按哈希定位到活动库/回收站。 */
 export type AssetLibraryEntry =
   | { kind: "resume" }
-  | { kind: "locate"; requestId: RequestId; hash: string; location: AssetLocationScope };
+  | { kind: "locate"; requestId: RequestId; hash: AssetId; location: AssetLocationScope };
 
 /** 图片工作区的组合属性：由应用外壳持有会话与一级导航状态后下发。 */
 export type AssetLibraryWorkspaceProps = {

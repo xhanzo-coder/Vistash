@@ -20,6 +20,8 @@ pub enum Domain {
     Export,
     /// 默认程序打开等外部集成出站（任务 5.6，设计第十二条）。
     External,
+    /// 导入与导出共享的长任务身份、状态和停止协议。
+    Transfer,
     Observe,
     Compile,
 }
@@ -36,6 +38,7 @@ impl Domain {
             Domain::Clipboard => "clipboard",
             Domain::Export => "export",
             Domain::External => "external",
+            Domain::Transfer => "transfer",
             Domain::Observe => "observe",
             Domain::Compile => "compile",
         }
@@ -153,6 +156,7 @@ pub enum Code {
     /// 把只读临时副本交给系统默认程序启动失败。副本已就绪且库内数据无损；
     /// 常见原因是该扩展名的文件关联被改动或启动被系统策略阻止。
     ExternalOpenFailed,
+    TransferTaskNotActive,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -226,6 +230,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::ExportAssetMissing,
     Code::ExportWriteFailed,
     Code::ExternalOpenFailed,
+    Code::TransferTaskNotActive,
 ];
 
 impl Code {
@@ -299,6 +304,7 @@ impl Code {
             | ClipboardWriteFailed => Domain::Clipboard,
             ExportTargetInvalid | ExportAssetMissing | ExportWriteFailed => Domain::Export,
             ExternalOpenFailed => Domain::External,
+            TransferTaskNotActive => Domain::Transfer,
         }
     }
 
@@ -374,6 +380,7 @@ impl Code {
             ExportAssetMissing => "export.asset_missing",
             ExportWriteFailed => "export.write_failed",
             ExternalOpenFailed => "external.open_failed",
+            TransferTaskNotActive => "transfer.task_not_active",
         }
     }
 

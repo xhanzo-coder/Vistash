@@ -80,6 +80,7 @@ export type ImportFailure = {
 
 /** `commands::ImportOutcome` */
 export type ImportOutcome = {
+  task_id: string | null;
   imported: number;
   skipped_non_images: number;
   /** 内容已在库内（或回收站）而未再次复制的来源数；既有素材保持原归属。 */
@@ -89,11 +90,17 @@ export type ImportOutcome = {
   failures: ImportFailure[];
 };
 
-/** `commands::ImportRunStateDto`：只有后端确认后才是 stopped。 */
-export type ImportRunState = "running" | "stopping" | "stopped";
+/** `commands::TransferRunStateDto`：只有后端确认后才是 stopped。 */
+export type TransferRunState = "running" | "stopping" | "stopped";
 
-/** `commands::ImportProgress` */
-export type ImportProgress = {
+export type TransferRunStatus = {
+  task_id: string;
+  state: TransferRunState;
+};
+
+/** `commands::TransferProgress` */
+export type TransferProgress = {
+  task_id: string;
   /** 已结束处理的素材数。 */
   done: number;
   /** 本批次展开后的素材总数。 */
@@ -104,6 +111,13 @@ export type ImportProgress = {
 
 /** `vistash_core::export::ConflictPolicy`：同名冲突的使用者决议。覆盖是破坏性操作，前端必须先取得明确确认。 */
 export type ConflictPolicy = "skip" | "overwrite" | "auto_number";
+
+/** `vistash_core::export::PlannedExport`：只读冲突规划，不写导出目录。 */
+export type PlannedExport = {
+  hash: string;
+  display_filename: string;
+  existing: boolean;
+};
 
 /** `vistash_core::export::ExportFailure` */
 export type ExportFailure = {
@@ -116,6 +130,7 @@ export type ExportFailure = {
 
 /** `commands::export_assets` 的报告：成功、冲突跳过、失败与未处理四桶数量守恒。 */
 export type ExportOutcome = {
+  task_id: string;
   /** 成功写出的文件名（相对目标目录）。 */
   exported: string[];
   skipped_existing: number;
@@ -165,6 +180,26 @@ export type MigrationProgress = {
   total: number;
   /** 当前处理的侧车文件名，不含路径。 */
   current_filename: string;
+};
+
+/** `commands::V3MigrationPlanEntryDto`：只暴露素材身份与文件夹决议，不暴露库内路径。 */
+export type V3MigrationPlanEntry = {
+  hash: string;
+  original_filename: string;
+} & (
+  | { kind: "automatic"; folder: string | null }
+  | { kind: "conflict"; candidates: string[] }
+);
+
+/** `commands::V3MigrationPlanDto`：计划是只读扫描结果，生成它不会写库。 */
+export type V3MigrationPlan = {
+  entries: V3MigrationPlanEntry[];
+};
+
+/** 使用者为一个多归属素材选定的唯一保留文件夹。 */
+export type V3FolderResolutionInput = {
+  hash: string;
+  folder: string;
 };
 
 export type RestoreOutcome = {

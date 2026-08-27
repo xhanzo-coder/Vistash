@@ -48,8 +48,8 @@ pub enum ImportStage {
 /// `after_stage` 是刻意留出的故障注入接缝。回滚不变式无法用真实故障复现——磁盘不会
 /// 按需在第三步失败——所以要么留一个注入点并真的测它，要么这条不变式永远只是注释。
 /// 生产环境由 Tauri 命令层实现进度 Channel，核心 crate 的无界面调用可使用
-/// [`NoopObserver`]，测试实现在本文件的测试模块里；接缝存在多个真实实现。
-pub trait ImportObserver {
+/// [`NoopTransferObserver`]，测试实现在本文件的测试模块里；接缝存在多个真实实现。
+pub trait TransferObserver {
     fn should_cancel(&self) -> bool {
         false
     }
@@ -67,8 +67,8 @@ pub trait ImportObserver {
 }
 
 /// 什么都不做的观察者。
-pub struct NoopObserver;
-impl ImportObserver for NoopObserver {}
+pub struct NoopTransferObserver;
+impl TransferObserver for NoopTransferObserver {}
 
 /// 一个素材的导入失败。
 #[derive(Debug, Clone, Serialize)]
@@ -180,7 +180,7 @@ pub fn import_one(
     lib: &Library,
     source: &Path,
     opts: &ImportOptions,
-    observer: &mut dyn ImportObserver,
+    observer: &mut dyn TransferObserver,
 ) -> Result<AssetSidecar> {
     let mut created = Created::new();
     match import_one_inner(lib, source, opts, observer, &mut created) {
@@ -196,7 +196,7 @@ fn import_one_inner(
     lib: &Library,
     source: &Path,
     opts: &ImportOptions,
-    observer: &mut dyn ImportObserver,
+    observer: &mut dyn TransferObserver,
     created: &mut Created,
 ) -> Result<AssetSidecar> {
     if observer.should_cancel() {
@@ -237,7 +237,7 @@ fn import_one_inner(
 }
 
 /// 读取源文件元数据并计算内容哈希。这是每条导入管线的公共前半程。
-fn probe_source(source: &Path, observer: &mut dyn ImportObserver) -> Result<(u64, ContentHash)> {
+fn probe_source(source: &Path, observer: &mut dyn TransferObserver) -> Result<(u64, ContentHash)> {
     let meta = std::fs::metadata(source).map_err(|e| {
         AppError::detailed(
             Code::ImportSourceUnreadable,
@@ -288,7 +288,7 @@ fn materialize_import(
     hash: &ContentHash,
     folder: Option<String>,
     tags: &[String],
-    observer: &mut dyn ImportObserver,
+    observer: &mut dyn TransferObserver,
     created: &mut Created,
 ) -> Result<AssetSidecar> {
     // 来源身份与解码按载荷类型分派；从这里开始两种载荷走完全相同的写入序列。
@@ -557,7 +557,7 @@ pub fn import_many(
     lib: &Library,
     sources: &[PathBuf],
     opts: &ImportOptions,
-    observer: &mut dyn ImportObserver,
+    observer: &mut dyn TransferObserver,
 ) -> ImportReport {
     let total = sources.len();
     let mut report = ImportReport {
@@ -694,9 +694,9 @@ pub struct SourceImportReport {
 /// UUIDv7 字面值：任务中心按创建时间展示，时间可排序让"按 ID 排"与"按开始时间排"
 /// 是同一个顺序。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ImportTaskId(String);
+pub struct TransferTaskId(String);
 
-impl ImportTaskId {
+impl TransferTaskId {
     fn generate() -> Self {
         Self(crate::ids::generate_canonical_uuid_v7())
     }
@@ -706,7 +706,7 @@ impl ImportTaskId {
     }
 }
 
-impl std::fmt::Display for ImportTaskId {
+impl std::fmt::Display for TransferTaskId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
@@ -718,13 +718,13 @@ impl std::fmt::Display for ImportTaskId {
 /// （asset-transfer 规格），调用方提前宣布同样算冒充。`stopping` 表示停止命令已被
 /// 接受但协调器还没在安全边界退出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportRunState {
+pub enum TransferRunState {
     Running,
     Stopping,
     Stopped,
 }
 
-impl ImportRunState {
+impl TransferRunState {
     fn from_u8(value: u8) -> Self {
         match value {
             1 => Self::Stopping,
@@ -736,18 +736,18 @@ impl ImportRunState {
 
 /// 一次统一导入的运行句柄：任务身份、库级槽位与停止信号的载体（设计第十条）。
 ///
-/// 停止是协作式的：[`ImportRun::request_stop`] 只把状态推进到 stopping，真正的
+/// 停止是协作式的：[`TransferRun::request_stop`] 只把状态推进到 stopping，真正的
 /// 退出由 [`import_sources`] 在扫描循环与单素材事务边界轮询观察；协调器确认返回时
 /// 才进入 stopped。
 #[derive(Debug)]
-pub struct ImportRun {
-    id: ImportTaskId,
+pub struct TransferRun {
+    id: TransferTaskId,
     concurrency_key: String,
     state: AtomicU8,
 }
 
-impl ImportRun {
-    pub fn id(&self) -> &ImportTaskId {
+impl TransferRun {
+    pub fn id(&self) -> &TransferTaskId {
         &self.id
     }
 
@@ -755,16 +755,16 @@ impl ImportRun {
         &self.concurrency_key
     }
 
-    pub fn state(&self) -> ImportRunState {
-        ImportRunState::from_u8(self.state.load(Ordering::SeqCst))
+    pub fn state(&self) -> TransferRunState {
+        TransferRunState::from_u8(self.state.load(Ordering::SeqCst))
     }
 
     /// 提交停止请求。幂等；对已经确认结束的任务无效果。
     pub fn request_stop(&self) {
         // 只从 Running 推进：已确认结束的任务不得被拉回 stopping。
         let _ = self.state.compare_exchange(
-            ImportRunState::Running as u8,
-            ImportRunState::Stopping as u8,
+            TransferRunState::Running as u8,
+            TransferRunState::Stopping as u8,
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
@@ -772,25 +772,25 @@ impl ImportRun {
 
     /// 停止信号是否已提交。crate 内的协调器（导入与导出）在单文件边界观察。
     pub(crate) fn should_cancel(&self) -> bool {
-        self.state() != ImportRunState::Running
+        self.state() != TransferRunState::Running
     }
 
     pub(crate) fn confirm_stopped(&self) {
-        self.state.store(ImportRunState::Stopped as u8, Ordering::SeqCst);
+        self.state.store(TransferRunState::Stopped as u8, Ordering::SeqCst);
     }
 }
 
 /// 库级导入运行注册表：同一时刻一座库最多一个进行中的导入（设计第十条）。
 ///
-/// 生产环境由 Tauri 应用状态持有一份；停止命令经 [`ImportRuns::lookup`] 按并发键
+/// 生产环境由 Tauri 应用状态持有一份；停止命令经 [`TransferRuns::lookup`] 按并发键
 /// 定位运行中的任务提交停止。已确认结束的残留条目在下一次 begin 时被替换，
 /// 不需要显式清理。
 #[derive(Default)]
-pub struct ImportRuns {
-    active: Mutex<HashMap<String, Arc<ImportRun>>>,
+pub struct TransferRuns {
+    active: Mutex<HashMap<String, Arc<TransferRun>>>,
 }
 
-impl ImportRuns {
+impl TransferRuns {
     pub fn new() -> Self {
         Self {
             active: Mutex::new(HashMap::new()),
@@ -798,21 +798,21 @@ impl ImportRuns {
     }
 
     /// 占用该库的导入槽位。已有未结束的任务时报 `import.already_running`。
-    pub fn begin(&self, library: &Library) -> Result<Arc<ImportRun>> {
+    pub fn begin(&self, library: &Library) -> Result<Arc<TransferRun>> {
         let key = import_concurrency_key(library);
         let mut active = lock_runs(&self.active);
         if let Some(existing) = active.get(&key) {
-            if existing.state() != ImportRunState::Stopped {
+            if existing.state() != TransferRunState::Stopped {
                 return Err(AppError::detailed(
                     Code::ImportAlreadyRunning,
                     format!("库已有进行中的导入或导出任务：{key}"),
                 ));
             }
         }
-        let run = Arc::new(ImportRun {
-            id: ImportTaskId::generate(),
+        let run = Arc::new(TransferRun {
+            id: TransferTaskId::generate(),
             concurrency_key: key.clone(),
-            state: AtomicU8::new(ImportRunState::Running as u8),
+            state: AtomicU8::new(TransferRunState::Running as u8),
         });
         active.insert(key, run.clone());
         Ok(run)
@@ -820,8 +820,28 @@ impl ImportRuns {
 
     /// 按并发键查找任务，供停止命令定位。已确认结束的任务也会被找到；
     /// 是否还能停止由其状态决定。
-    pub fn lookup(&self, concurrency_key: &str) -> Option<Arc<ImportRun>> {
+    pub fn lookup(&self, concurrency_key: &str) -> Option<Arc<TransferRun>> {
         lock_runs(&self.active).get(concurrency_key).cloned()
+    }
+
+    /// 只对同一库槽位中 ID 精确匹配的当前任务提交停止请求。
+    pub fn request_stop(&self, library: &Library, task_id: &str) -> Result<TransferRunState> {
+        let key = import_concurrency_key(library);
+        let active = lock_runs(&self.active);
+        let run = active.get(&key).ok_or_else(|| {
+            AppError::detailed(
+                Code::TransferTaskNotActive,
+                format!("库当前没有可停止的传输任务：{task_id}"),
+            )
+        })?;
+        if run.id().as_str() != task_id || run.state() == TransferRunState::Stopped {
+            return Err(AppError::detailed(
+                Code::TransferTaskNotActive,
+                format!("任务 {task_id} 已不是库槽位中的当前任务"),
+            ));
+        }
+        run.request_stop();
+        Ok(run.state())
     }
 }
 
@@ -835,7 +855,7 @@ pub fn import_concurrency_key(library: &Library) -> String {
 
 /// 锁中毒只可能来自持锁线程 panic；注册表操作本身不 panic，直接取回内层数据，
 /// 不让一次历史 panic 永久堵死导入入口。
-fn lock_runs(active: &Mutex<HashMap<String, Arc<ImportRun>>>) -> std::sync::MutexGuard<'_, HashMap<String, Arc<ImportRun>>> {
+fn lock_runs(active: &Mutex<HashMap<String, Arc<TransferRun>>>) -> std::sync::MutexGuard<'_, HashMap<String, Arc<TransferRun>>> {
     active.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -931,8 +951,8 @@ pub fn import_sources(
     lib: &Library,
     request: &ImportRequest,
     tags: &[String],
-    run: &ImportRun,
-    observer: &mut dyn ImportObserver,
+    run: &TransferRun,
+    observer: &mut dyn TransferObserver,
 ) -> Result<SourceImportReport> {
     let result = import_sources_inner(lib, request, tags, run, observer);
     // 无论正常结束还是整体出错（例如目标文件夹非法），协调器返回即后端确认：
@@ -945,8 +965,8 @@ fn import_sources_inner(
     lib: &Library,
     request: &ImportRequest,
     tags: &[String],
-    run: &ImportRun,
-    observer: &mut dyn ImportObserver,
+    run: &TransferRun,
+    observer: &mut dyn TransferObserver,
 ) -> Result<SourceImportReport> {
     let base = request
         .current_folder
@@ -1008,7 +1028,7 @@ fn import_sources_inner(
 fn plan_sources(
     sources: &[ImportSource],
     base: &Option<String>,
-    run: &ImportRun,
+    run: &TransferRun,
 ) -> Result<(Vec<PlannedFile>, usize, Vec<ImportFailure>)> {
     let mut planned = Vec::new();
     let mut skipped = 0usize;
@@ -1055,7 +1075,7 @@ fn plan_sources(
 fn collect_directory(
     root: &Path,
     base: &Option<String>,
-    run: &ImportRun,
+    run: &TransferRun,
     planned: &mut Vec<PlannedFile>,
     skipped: &mut usize,
     failed: &mut Vec<ImportFailure>,
@@ -1080,7 +1100,7 @@ fn collect_directory(
 fn walk_directory(
     dir: &Path,
     logical_prefix: &str,
-    run: &ImportRun,
+    run: &TransferRun,
     planned: &mut Vec<PlannedFile>,
     skipped: &mut usize,
     failed: &mut Vec<ImportFailure>,
@@ -1193,8 +1213,8 @@ fn import_planned(
     lib: &Library,
     file: &PlannedFile,
     tags: &[String],
-    run: &ImportRun,
-    observer: &mut dyn ImportObserver,
+    run: &TransferRun,
+    observer: &mut dyn TransferObserver,
 ) -> Result<PlannedOutcome> {
     if run.should_cancel() || observer.should_cancel() {
         return Err(AppError::new(Code::ImportCancelled));
@@ -1249,7 +1269,7 @@ mod tests {
 
     /// 在指定阶段之后注入失败的观察者。
     struct FailAt(ImportStage);
-    impl ImportObserver for FailAt {
+    impl TransferObserver for FailAt {
         fn after_stage(&mut self, stage: ImportStage) -> Result<()> {
             if stage == self.0 {
                 Err(AppError::detailed(Code::ImportCopyFailed, "注入的故障"))
@@ -1264,7 +1284,7 @@ mod tests {
         limit: usize,
         started: usize,
     }
-    impl ImportObserver for CancelAfter {
+    impl TransferObserver for CancelAfter {
         fn should_cancel(&self) -> bool {
             self.started > self.limit
         }
@@ -1278,7 +1298,7 @@ mod tests {
     struct Recorder {
         calls: Vec<(usize, usize)>,
     }
-    impl ImportObserver for Recorder {
+    impl TransferObserver for Recorder {
         fn on_progress(&mut self, done: usize, total: usize, _current: &str) {
             self.calls.push((done, total));
         }
@@ -1352,7 +1372,7 @@ mod tests {
         assert_eq!(e.sources, vec![odd.clone()]);
         assert_eq!(e.skipped_non_images, 0);
 
-        let report = import_many(&f.lib, &e.sources, &ImportOptions::default(), &mut NoopObserver);
+        let report = import_many(&f.lib, &e.sources, &ImportOptions::default(), &mut NoopTransferObserver);
         assert_eq!(report.failed.len(), 1);
         assert_eq!(report.failed[0].error.code, Code::ImportUnsupportedMediaType);
     }
@@ -1391,7 +1411,7 @@ mod tests {
         // 直接读回旧格式的字节，库里混着两代缩略图却不报任何错。
         let f = fixture();
         let p = write_png(&f.src, "样例.png", 40, 20, [10, 120, 200, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入");
         let thumb = f.lib.thumbnail_path(&s.hash);
         assert!(thumb.is_file());
@@ -1416,7 +1436,7 @@ mod tests {
         let f = fixture();
         ensure_thumbnail_format(&f.lib).expect("首次写入标记");
         let p = write_png(&f.src, "样例.png", 40, 20, [10, 120, 200, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入");
         let before = std::fs::read(f.lib.thumbnail_path(&s.hash)).expect("读取缩略图");
         ensure_thumbnail_format(&f.lib).expect("再次校验");
@@ -1432,7 +1452,7 @@ mod tests {
         // 规格：缩略图缺失时必须按需重新生成，不得以占位图代替；全部缺失也不算库损坏。
         let f = fixture();
         let p = write_png(&f.src, "样例.png", 40, 20, [10, 120, 200, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入");
         let thumb = f.lib.thumbnail_path(&s.hash);
         let original = std::fs::read(&thumb).expect("读取缩略图");
@@ -1447,7 +1467,7 @@ mod tests {
     fn an_existing_thumbnail_is_read_not_regenerated() {
         let f = fixture();
         let p = write_png(&f.src, "样例.png", 40, 20, [10, 120, 200, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入");
         // 往缩略图里写入一段可辨认的内容。若实现擅自重算，读回的就不是这段内容。
         let marker = "这不是真的 WebP".as_bytes().to_vec();
@@ -1463,7 +1483,7 @@ mod tests {
     fn regenerating_a_thumbnail_without_a_body_reports_the_thumbnail_code() {
         let f = fixture();
         let p = write_png(&f.src, "样例.png", 40, 20, [10, 120, 200, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入");
         std::fs::remove_file(f.lib.thumbnail_path(&s.hash)).expect("删除缩略图");
         std::fs::remove_file(f.lib.body_path(&s.hash, &s.ext)).expect("删除本体");
@@ -1475,7 +1495,7 @@ mod tests {
     fn a_successful_import_writes_body_thumbnail_and_sidecar() {
         let f = fixture();
         let p = write_png(&f.src, "样例.png", 40, 20, [200, 30, 30, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入应成功");
         assert!(f.lib.body_path(&s.hash, "png").is_file(), "缺少本体");
         assert!(f.lib.sidecar_path(&s.hash).is_file(), "缺少侧车");
@@ -1490,7 +1510,7 @@ mod tests {
             folder: Some("参考/构图".to_owned()),
             tags: vec!["草稿".to_owned()],
         };
-        let s = import_one(&f.lib, &p, &opts, &mut NoopObserver).expect("导入应成功");
+        let s = import_one(&f.lib, &p, &opts, &mut NoopTransferObserver).expect("导入应成功");
         assert_eq!(s.hash, ContentHash::of_file(&p).expect("计算摘要"));
         assert_eq!((s.width, s.height), (40, 20));
         assert_eq!(s.media_type, MediaType::Png);
@@ -1524,7 +1544,7 @@ mod tests {
         DynamicImage::ImageRgba8(RgbaImage::from_pixel(30, 30, Rgba([90, 90, 200, 255])))
             .save_with_format(&p, ImageFormat::Jpeg)
             .expect("写入 JPEG");
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入应成功");
         assert_eq!(s.media_type, MediaType::Jpeg);
         assert_eq!(s.ext, "jpg");
@@ -1536,11 +1556,11 @@ mod tests {
     fn re_importing_the_same_content_reports_a_library_duplicate() {
         let f = fixture();
         let p = write_png(&f.src, "一.png", 40, 20, [1, 2, 3, 255]);
-        import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver).expect("首次导入");
+        import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver).expect("首次导入");
         // 换个文件名，内容相同：查重按内容而不是按文件名。
         let q = f.src.join("二.png");
         std::fs::copy(&p, &q).expect("复制来源");
-        let err = import_one(&f.lib, &q, &ImportOptions::default(), &mut NoopObserver)
+        let err = import_one(&f.lib, &q, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect_err("本应报告库内重复");
         assert_eq!(err.code, Code::ImportDuplicateInLibrary);
     }
@@ -1551,7 +1571,7 @@ mod tests {
         // 而不是以为自己弄错了文件。
         let f = fixture();
         let p = write_png(&f.src, "已删.png", 40, 20, [7, 7, 7, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("首次导入");
         // 手工把素材搬进回收站树，模拟删除后的状态。
         let (tb, ts) = (
@@ -1562,7 +1582,7 @@ mod tests {
         std::fs::rename(f.lib.body_path(&s.hash, "png"), &tb).expect("移动本体");
         std::fs::rename(f.lib.sidecar_path(&s.hash), &ts).expect("移动侧车");
 
-        let err = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let err = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect_err("本应报告回收站重复");
         assert_eq!(err.code, Code::ImportDuplicateInTrash);
     }
@@ -1572,7 +1592,7 @@ mod tests {
         let f = fixture();
         let p = f.src.join("图层.psd");
         std::fs::write(&p, b"8BPS").expect("写入样本");
-        let err = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let err = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect_err("本应拒绝");
         assert_eq!(err.code, Code::ImportUnsupportedMediaType);
         assert_eq!(count_files(&f.lib.objects_dir()), 0);
@@ -1586,7 +1606,7 @@ mod tests {
             &f.lib,
             &f.src.join("不存在.png"),
             &ImportOptions::default(),
-            &mut NoopObserver,
+            &mut NoopTransferObserver,
         )
         .expect_err("本应失败");
         assert_eq!(err.code, Code::ImportSourceUnreadable);
@@ -1631,7 +1651,7 @@ mod tests {
             &mut FailAt(ImportStage::SidecarWritten),
         )
         .expect_err("首次应因注入失败");
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("重试应成功");
         assert!(f.lib.sidecar_path(&s.hash).is_file());
     }
@@ -1673,7 +1693,7 @@ mod tests {
             &f.lib,
             &sources,
             &ImportOptions::default(),
-            &mut NoopObserver,
+            &mut NoopTransferObserver,
         );
         assert_eq!(report.total(), sources.len(), "报告未覆盖全部输入");
         assert_eq!(report.imported.len(), 1);
@@ -1738,7 +1758,7 @@ mod tests {
         // 复制入库模型的前提：库内副本就是权威副本。
         let f = fixture();
         let p = write_png(&f.src, "样例.png", 64, 48, [123, 45, 67, 255]);
-        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver)
+        let s = import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver)
             .expect("导入应成功");
         let body = f.lib.body_path(&s.hash, "png");
         assert_eq!(
@@ -1752,7 +1772,7 @@ mod tests {
     fn no_part_files_survive_a_successful_import() {
         let f = fixture();
         let p = write_png(&f.src, "样例.png", 40, 20, [3, 3, 3, 255]);
-        import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopObserver).expect("导入应成功");
+        import_one(&f.lib, &p, &ImportOptions::default(), &mut NoopTransferObserver).expect("导入应成功");
         for dir in [f.lib.objects_dir(), f.lib.thumbnails_dir()] {
             let mut stack = vec![dir];
             while let Some(d) = stack.pop() {

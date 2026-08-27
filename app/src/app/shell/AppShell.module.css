@@ -1,0 +1,49 @@
+.shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+}
+
+.skipLink {
+  position: fixed;
+  z-index: var(--z-skip);
+  inset-block-start: var(--space-2);
+  inset-inline-start: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: var(--radius-control);
+  transform: translateY(-200%);
+}
+
+.skipLink:focus-visible {
+  transform: translateY(0);
+}
+
+.workspaceStack,
+.workspace {
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspaceStack {
+  position: relative;
+  overflow: hidden;
+}
+
+.workspace {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skipLink {
+    transition: none;
+  }
+}

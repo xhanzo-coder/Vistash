@@ -6,7 +6,7 @@
 //! 全部落在文件移动与原子写入上，假掉文件系统等于假掉被测对象。
 
 use super::Catalog;
-use crate::import::{import_one, ImportOptions, NoopObserver};
+use crate::import::{import_one, ImportOptions, NoopTransferObserver};
 use crate::library::Library;
 use crate::sidecar::AssetSidecar;
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
@@ -66,7 +66,7 @@ pub(super) fn import_with(
         tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
     };
     let sidecar =
-        import_one(catalog.library(), source, &options, &mut NoopObserver).expect("导入素材");
+        import_one(catalog.library(), source, &options, &mut NoopTransferObserver).expect("导入素材");
     catalog
         .index_imported(std::slice::from_ref(&sidecar))
         .expect("写入索引");

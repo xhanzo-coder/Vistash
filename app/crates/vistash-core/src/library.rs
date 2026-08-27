@@ -245,11 +245,9 @@ impl LibraryMetaV3 {
     }
 }
 
-/// 打开门禁判为"当前代"的库级元数据：v2 与 v3 都能被程序打开。
+/// 库格式探测保留的版本化元数据。
 ///
-/// 刻意是枚举而不是抹平版本的结构体：v2→v3 迁移的规划与提交门禁必须只接受 v2 输入
-/// （对 v3 库再跑一次迁移会用垃圾字段顶替权威字节），而"没有工作可做"的短路又要同时
-/// 认得两代。这个区分只能由类型承载，丢掉它就会变成散落各处的运行时判断。
+/// v2 只供迁移规划与旧迁移器短路使用，生产 [`Library::open`] 只放行 v3。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CurrentLibraryMeta {
     V2(LibraryMetaV2),
@@ -458,7 +456,10 @@ impl Library {
             )
         })?;
         match probe.format_version {
-            LIBRARY_FORMAT_VERSION_V2 => LibraryMetaV2::from_bytes(path, &bytes),
+            LIBRARY_FORMAT_VERSION_V2 => Err(AppError::detailed(
+                Code::LibraryFormatTooOld,
+                format!("v2 库必须迁移到 v3 后才能打开：{}", path.display()),
+            )),
             LIBRARY_FORMAT_VERSION_V3 => Ok(LibraryMetaV3::from_bytes(path, &bytes)?.into()),
             version if version > LIBRARY_FORMAT_VERSION_V3 => Err(AppError::detailed(
                 Code::LibraryFormatTooNew,

@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
-use crate::import::{ImportObserver, ImportRun, ImportRuns};
+use crate::import::{TransferObserver, TransferRun, TransferRuns};
 use crate::library::Library;
 use crate::sidecar::AssetSidecarV3;
 
@@ -175,8 +175,8 @@ pub fn export_assets(
     lib: &Library,
     hashes: &[ContentHash],
     request: &ExportRequest,
-    run: &ImportRun,
-    observer: &mut dyn ImportObserver,
+    run: &TransferRun,
+    observer: &mut dyn TransferObserver,
 ) -> Result<ExportReport> {
     let result = export_assets_inner(lib, hashes, request, run, observer);
     run.confirm_stopped();
@@ -187,8 +187,8 @@ fn export_assets_inner(
     lib: &Library,
     hashes: &[ContentHash],
     request: &ExportRequest,
-    run: &ImportRun,
-    observer: &mut dyn ImportObserver,
+    run: &TransferRun,
+    observer: &mut dyn TransferObserver,
 ) -> Result<ExportReport> {
     ensure_target_dir(&request.target_dir)?;
     let target = &request.target_dir;
@@ -332,12 +332,12 @@ fn decide_target(
     }
 }
 
-impl ImportRuns {
+impl TransferRuns {
     /// 占用该库的导出槽位。
     ///
     /// 与导入共用同一把库级闸（设计第十条）：导入与导出都依赖"运行期间库内
     /// 对象集合稳定"，互斥是最便宜的保证。
-    pub fn begin_export(&self, library: &Library) -> Result<Arc<ImportRun>> {
+    pub fn begin_export(&self, library: &Library) -> Result<Arc<TransferRun>> {
         self.begin(library)
     }
 }

@@ -185,7 +185,7 @@ impl Catalog {
                 self.library(),
                 source,
                 &options,
-                &mut crate::import::NoopObserver,
+                &mut crate::import::NoopTransferObserver,
             ) {
                 Ok(sidecar) => {
                     self.index_imported(std::slice::from_ref(&sidecar))?;

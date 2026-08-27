@@ -15,7 +15,7 @@ use vistash_core::error::{AppError, Code};
 use vistash_core::export::{export_assets, plan_export, ConflictPolicy, ExportRequest};
 use vistash_core::hashing::ContentHash;
 use vistash_core::import::{
-    ImportObserver, ImportOptions, ImportRun, ImportRunState, ImportRuns, NoopObserver,
+    TransferObserver, ImportOptions, TransferRun, TransferRunState, TransferRuns, NoopTransferObserver,
 };
 use vistash_core::library::Library;
 
@@ -48,7 +48,7 @@ fn fixture() -> Fixture {
             &library,
             &src.join(name),
             &ImportOptions::default(),
-            &mut NoopObserver,
+            &mut NoopTransferObserver,
         )
         .unwrap_or_else(|e| panic!("导入 {name} 失败：{e}"));
         if sidecar.ext == "png" {
@@ -75,7 +75,7 @@ fn write_image(path: &Path, format: ImageFormat, color: [u8; 3]) {
 }
 
 /// 占用一次导出运行：与导入共用同一长任务注册表和库级闸（设计第十条统一语义）。
-fn begin_run(runs: &ImportRuns, library: &Library) -> Arc<ImportRun> {
+fn begin_run(runs: &TransferRuns, library: &Library) -> Arc<TransferRun> {
     runs.begin_export(library).expect("库空闲时应能开始导出")
 }
 
@@ -95,7 +95,7 @@ fn body_bytes(f: &Fixture, hash: &ContentHash, ext: &str) -> Vec<u8> {
 #[test]
 fn exports_copy_original_bytes_under_display_filenames() {
     let f = fixture();
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let request = skip_request(f.target.clone());
 
@@ -104,7 +104,7 @@ fn exports_copy_original_bytes_under_display_filenames() {
         &[f.png_hash.clone(), f.jpeg_hash.clone()],
         &request,
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导出整体成功");
 
@@ -140,7 +140,7 @@ fn exporting_never_modifies_library_objects() {
     let sidecar_before =
         std::fs::read(f.library.sidecar_path(&f.png_hash)).expect("读取 PNG 侧车");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let request = ExportRequest {
         target_dir: f.target.clone(),
@@ -151,7 +151,7 @@ fn exporting_never_modifies_library_objects() {
         &[f.png_hash.clone(), f.jpeg_hash.clone()],
         &request,
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导出整体成功");
 
@@ -211,14 +211,14 @@ fn skip_policy_leaves_existing_files_and_reports_them() {
     let conflicting = f.target.join("风景.png");
     std::fs::write(&conflicting, b"stale-target-bytes").expect("预置冲突文件");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let report = export_assets(
         &f.library,
         &[f.png_hash.clone(), f.jpeg_hash.clone()],
         &skip_request(f.target.clone()),
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导出整体成功");
 
@@ -238,7 +238,7 @@ fn overwrite_policy_replaces_the_target_with_original_bytes() {
     let conflicting = f.target.join("风景.png");
     std::fs::write(&conflicting, b"stale-target-bytes").expect("预置冲突文件");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     // 覆盖是破坏性操作；规格要求使用者在界面上明确确认后才进入本策略，
     // core 层收到的 Overwrite 即代表确认已经发生。
@@ -251,7 +251,7 @@ fn overwrite_policy_replaces_the_target_with_original_bytes() {
         std::slice::from_ref(&f.png_hash),
         &request,
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导出整体成功");
 
@@ -269,7 +269,7 @@ fn auto_number_policy_writes_a_numbered_copy_without_touching_the_original() {
     let conflicting = f.target.join("风景.png");
     std::fs::write(&conflicting, b"stale-target-bytes").expect("预置冲突文件");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let request = ExportRequest {
         target_dir: f.target.clone(),
@@ -280,7 +280,7 @@ fn auto_number_policy_writes_a_numbered_copy_without_touching_the_original() {
         std::slice::from_ref(&f.png_hash),
         &request,
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导出整体成功");
 
@@ -303,7 +303,7 @@ fn auto_number_finds_the_first_free_number_in_a_dense_directory() {
     std::fs::write(f.target.join("风景.png"), b"stale-one").expect("预置原名冲突");
     std::fs::write(f.target.join("风景 (2).png"), b"stale-two").expect("预置二号冲突");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let request = ExportRequest {
         target_dir: f.target.clone(),
@@ -314,7 +314,7 @@ fn auto_number_finds_the_first_free_number_in_a_dense_directory() {
         std::slice::from_ref(&f.png_hash),
         &request,
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导出整体成功");
 
@@ -333,14 +333,14 @@ fn one_failed_asset_does_not_block_the_rest() {
     // 孤儿哈希：库里没有对应本体与侧车，导出必须单独失败而不拖垮其余项。
     let orphan = ContentHash::of_bytes(b"orphan-asset-that-does-not-exist");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let report = export_assets(
         &f.library,
         &[orphan.clone(), f.png_hash.clone(), f.jpeg_hash.clone()],
         &skip_request(f.target.clone()),
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("存在单项失败时导出整体仍算完成");
 
@@ -359,10 +359,10 @@ fn one_failed_asset_does_not_block_the_rest() {
 struct StopAtProgress<'a> {
     limit: usize,
     seen: usize,
-    run: &'a ImportRun,
+    run: &'a TransferRun,
 }
 
-impl ImportObserver for StopAtProgress<'_> {
+impl TransferObserver for StopAtProgress<'_> {
     fn on_progress(&mut self, _done: usize, _total: usize, _current: &str) {
         self.seen += 1;
         if self.seen == self.limit {
@@ -374,7 +374,7 @@ impl ImportObserver for StopAtProgress<'_> {
 #[test]
 fn stopping_at_a_file_boundary_keeps_finished_and_counts_pending() {
     let f = fixture();
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let hashes = [f.png_hash.clone(), f.jpeg_hash.clone()];
     let mut observer = StopAtProgress {
@@ -393,7 +393,7 @@ fn stopping_at_a_file_boundary_keeps_finished_and_counts_pending() {
     .expect("停止不是整体失败");
 
     // 只有协调器确认退出才进入 stopped（asset-transfer 规格）。
-    assert_eq!(run.state(), ImportRunState::Stopped);
+    assert_eq!(run.state(), TransferRunState::Stopped);
     assert_eq!(
         report.exported.len() + report.skipped_existing + report.failed.len(),
         1,
@@ -423,7 +423,7 @@ fn stopping_at_a_file_boundary_keeps_finished_and_counts_pending() {
 #[test]
 fn export_run_shares_the_library_scoped_concurrency_gate() {
     let f = fixture();
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
 
     // 活跃导出期间：第二个导出与导入都必须等待同一把库级闸。
     let exporter = begin_run(&runs, &f.library);
@@ -439,7 +439,7 @@ fn export_run_shares_the_library_scoped_concurrency_gate() {
         std::slice::from_ref(&f.png_hash),
         &skip_request(f.target.clone()),
         &exporter,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导出整体成功");
     assert_eq!(report.pending_count, 0);
@@ -453,7 +453,7 @@ fn export_run_shares_the_library_scoped_concurrency_gate() {
 #[test]
 fn exporting_into_a_missing_directory_is_a_stable_error() {
     let f = fixture();
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     let request = ExportRequest {
         target_dir: f.src.join("不存在的导出目录"),
@@ -464,12 +464,12 @@ fn exporting_into_a_missing_directory_is_a_stable_error() {
         std::slice::from_ref(&f.png_hash),
         &request,
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect_err("目标目录不存在必须报错");
 
     // 即使整体出错，协调器返回即确认退出，槽位随之释放。
-    assert_eq!(run.state(), ImportRunState::Stopped);
+    assert_eq!(run.state(), TransferRunState::Stopped);
     assert!(
         err.detail.as_deref().is_some_and(|d| !d.is_empty()),
         "错误必须带可读说明"

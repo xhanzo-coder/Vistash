@@ -7,7 +7,7 @@
  * 图片模块与提示词模块都不需要知道搜索的存在——它们只消费自己的导航条目。
  */
 
-import { createRequestId } from "./common";
+import { createRequestId, parseAssetId } from "./common";
 import type { AssetLocationScope, LocateEntry } from "./navigation";
 import type { AssetRow, GlobalSearchResult, PromptRow } from "../shared/types";
 
@@ -34,7 +34,7 @@ export function locateRequestFromSelection(selection: GlobalSearchSelection): Lo
     return {
       kind: "locate_asset",
       requestId,
-      hash: selection.row.hash,
+      hash: parseAssetId(selection.row.hash),
       location: assetLocationScope(selection.row),
     };
   }

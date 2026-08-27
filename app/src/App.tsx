@@ -17,7 +17,7 @@ import { shouldClaimPaste } from "./features/assets/pasteClaim";
 import type {
   AppError,
   ImportOutcome,
-  ImportProgress,
+  TransferProgress,
   LibraryStatus,
 } from "./shared/types";
 
@@ -34,7 +34,7 @@ export function App() {
   const [assetsError, setAssetsError] = useState<AppError | null>(null);
   const [outcome, setOutcome] = useState<ImportOutcome | null>(null);
   const [importing, setImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const [importProgress, setTransferProgress] = useState<TransferProgress | null>(null);
   const [catalogVersion, setCatalogVersion] = useState(0);
   const importingRef = useRef(false);
   // 全局搜索的定位请求（任务 11.1）：nonce 单调递增，同一目标重复进入也能再次生效。
@@ -61,14 +61,14 @@ export function App() {
       if ((paths !== null && paths.length === 0) || importingRef.current) return;
       importingRef.current = true;
       setImporting(true);
-      setImportProgress(null);
+      setTransferProgress(null);
       try {
         // 整窗口拖放暂不带当前文件夹（落点接线随任务 10.2）：后端按 null 落入
         // 未分类。按钮与目录选择接入时传各自的具体文件夹即可复用同一协调器。
         setOutcome(
           paths === null
-            ? await pasteImport(null, setImportProgress)
-            : await importSources(paths, null, setImportProgress),
+            ? await pasteImport(null, setTransferProgress)
+            : await importSources(paths, null, setTransferProgress),
         );
         setCatalogVersion((version) => version + 1);
       } catch (raw) {
@@ -76,7 +76,7 @@ export function App() {
       } finally {
         importingRef.current = false;
         setImporting(false);
-        setImportProgress(null);
+        setTransferProgress(null);
       }
     },
     [],

@@ -21,8 +21,8 @@ import type {
   ConflictPolicy,
   ExportOutcome,
   ImportOutcome,
-  ImportProgress,
-  ImportRunState,
+  TransferProgress,
+  TransferRunStatus,
 } from "../shared/types";
 
 /**
@@ -71,15 +71,15 @@ export interface PlatformPort {
   importSources(
     paths: string[],
     currentFolder: string | null,
-    onProgress: (progress: ImportProgress) => void,
+    onProgress: (progress: TransferProgress) => void,
   ): Promise<ImportOutcome>;
   /** 窗口级 Ctrl+V 的剪贴板导入意图：分流在后端裁决，前端不见像素。无可导入内容时全零报告。 */
   pasteImport(
     currentFolder: string | null,
-    onProgress: (progress: ImportProgress) => void,
+    onProgress: (progress: TransferProgress) => void,
   ): Promise<ImportOutcome>;
   /** 请求停止当前库级传输任务；解析为提交后的后端任务状态（只有它确认 stopped）。 */
-  stopTransfer(): Promise<ImportRunState>;
+  stopTransfer(taskId: string): Promise<TransferRunStatus>;
 
   // --- 出站传输 -----------------------------------------------------------
 
@@ -88,7 +88,7 @@ export interface PlatformPort {
     hashes: string[],
     targetDir: string,
     policy: ConflictPolicy,
-    onProgress: (progress: ImportProgress) => void,
+    onProgress: (progress: TransferProgress) => void,
   ): Promise<ExportOutcome>;
   /** 把单张图片的位图写入系统剪贴板。入参是单个哈希——多选不合成由形状锁死。 */
   copyImageToClipboard(hash: string): Promise<void>;

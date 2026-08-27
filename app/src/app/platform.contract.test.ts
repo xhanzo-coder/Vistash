@@ -118,6 +118,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const EMPTY_IMPORT: ImportOutcome = {
+  task_id: null,
   imported: 0,
   skipped_non_images: 0,
   duplicates: 0,
@@ -126,6 +127,7 @@ const EMPTY_IMPORT: ImportOutcome = {
 };
 
 const EMPTY_EXPORT: ExportOutcome = {
+  task_id: "contract-export-task",
   exported: [],
   skipped_existing: 0,
   failed: [],
@@ -188,7 +190,8 @@ function tauriFixture(): PlatformFixture {
       case "import_stop": {
         const failure = takeFailure("stopTransfer");
         if (failure !== undefined) throw failure;
-        return "stopped";
+        const taskId = isRecord(payload) ? payload.taskId : undefined;
+        return { task_id: taskId, state: "stopped" };
       }
       case "export_assets": {
         const failure = takeFailure("exportAssets");

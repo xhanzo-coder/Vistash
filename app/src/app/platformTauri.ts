@@ -77,7 +77,7 @@ export function createTauriPlatform(): PlatformPort {
 
     importSources,
     pasteImport,
-    stopTransfer: () => importStop(),
+    stopTransfer: (taskId) => importStop(taskId),
 
     exportAssets,
     copyImageToClipboard: (hash) => copyAssetToClipboard(hash),

@@ -29,7 +29,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // 库级导入运行注册表（设计第十条）：begin 在 import_sources 内占用槽位，
         // import_stop 经它按并发键定位运行中的任务。命令层只克隆 Arc 句柄。
-        .manage(std::sync::Arc::new(vistash_core::import::ImportRuns::new()))
+        .manage(commands::managed_transfer_runs())
         .setup(|app| {
             // 设置文件与分库布局都放在应用配置目录，不放在库目录内——理由见
             // `settings` 模块的文档。目录由平台决定，因此这段平台相关的解析留在
@@ -45,7 +45,7 @@ pub fn run() {
                 app.path().app_cache_dir()?.join("external-open").join("v1"),
                 vistash_core::external_open::ExternalOpenManager::new_session_id(),
             );
-            let _report = external_open.cleanup(chrono::Utc::now());
+            let _report = external_open.cleanup(chrono::Utc::now())?;
             app.manage(Mutex::new(commands::AppState::restore(
                 settings_path,
                 layouts_dir,
@@ -65,6 +65,7 @@ pub fn run() {
             commands::rename_folder,
             commands::delete_folder,
             commands::move_asset_to_folder,
+            commands::rename_asset_display_filename,
             commands::set_asset_tags,
             commands::delete_asset,
             commands::restore_asset,
@@ -72,6 +73,7 @@ pub fn run() {
             commands::import_sources,
             commands::import_stop,
             commands::paste_import,
+            commands::plan_export,
             commands::export_assets,
             commands::copy_asset_to_clipboard,
             commands::open_with_default_app,
@@ -118,4 +120,22 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("启动 Vistash 失败");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn import_stop_and_builder_share_the_same_managed_run_type() {
+        let commands = include_str!("commands.rs");
+        let assembly = include_str!("lib.rs");
+
+        assert!(
+            commands.contains("State<'_, ManagedTransferRuns>"),
+            "import_stop 必须请求装配层注册的精确 managed type"
+        );
+        assert!(
+            assembly.contains(".manage(commands::managed_transfer_runs())"),
+            "Builder 必须通过 commands 暴露的同一工厂注册运行表"
+        );
+    }
 }

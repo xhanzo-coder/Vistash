@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use vistash_core::error::Code;
 use vistash_core::import::{
-    ImportObserver, ImportOptions, ImportRequest, ImportRun, ImportRunState, ImportRuns,
-    ImportSource, NoopObserver, import_one, import_sources,
+    TransferObserver, ImportOptions, ImportRequest, TransferRun, TransferRunState, TransferRuns,
+    ImportSource, NoopTransferObserver, import_one, import_sources,
 };
 use vistash_core::library::{FolderList, Library, LIBRARY_FORMAT_VERSION};
 use vistash_core::sidecar::AssetSidecarV3;
@@ -80,7 +80,7 @@ fn imported_with_stem<'a>(
 }
 
 /// 占用一次导入运行。除并发拒绝测试外，所有用例都经它取得运行句柄。
-fn begin_run(runs: &ImportRuns, library: &Library) -> std::sync::Arc<ImportRun> {
+fn begin_run(runs: &TransferRuns, library: &Library) -> std::sync::Arc<TransferRun> {
     runs.begin(library).expect("库空闲时应能开始导入")
 }
 
@@ -89,10 +89,10 @@ fn begin_run(runs: &ImportRuns, library: &Library) -> std::sync::Arc<ImportRun> 
 /// 停止经真实的运行句柄提交——与生产后端命令同一条通路，而不是测试私有的开关。
 struct StopAtProgress<'a> {
     limit: usize,
-    run: &'a ImportRun,
+    run: &'a TransferRun,
 }
 
-impl ImportObserver for StopAtProgress<'_> {
+impl TransferObserver for StopAtProgress<'_> {
     fn on_progress(&mut self, done: usize, _total: usize, _current: &str) {
         if done == self.limit {
             self.run.request_stop();
@@ -111,7 +111,7 @@ fn files_land_in_the_current_folder_or_unclassified() {
             folders: vec!["参考".to_owned()],
         })
         .expect("写入文件夹清单");
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
 
     // 当前是具体文件夹：两张都落到那里。
@@ -126,7 +126,7 @@ fn files_land_in_the_current_folder_or_unclassified() {
         },
         &[],
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("协调器应完成导入");
     assert_eq!(placed.imported.len(), 2, "两张都应入库");
@@ -150,7 +150,7 @@ fn files_land_in_the_current_folder_or_unclassified() {
         },
         &[],
         &next_run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("没有当前文件夹时协调器也应完成导入");
     assert_eq!(
@@ -169,7 +169,7 @@ fn a_directory_keeps_its_own_name_and_relative_levels() {
     write_png(&travel, "beach.png", [10, 20, 30, 255]);
     write_png(&travel, "city/night.png", [40, 50, 60, 255]);
     std::fs::write(travel.join("notes.txt"), "不是图片").expect("写入非图片");
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
 
     let report = import_sources(
@@ -180,7 +180,7 @@ fn a_directory_keeps_its_own_name_and_relative_levels() {
         },
         &[],
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("目录导入应完成");
 
@@ -224,7 +224,7 @@ fn a_directory_nests_under_the_current_folder_when_present() {
     let travel = f.src.join("travel");
     write_png(&travel, "beach.png", [11, 22, 33, 255]);
     write_png(&travel, "city/night.png", [44, 55, 66, 255]);
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
 
     let report = import_sources(
@@ -235,7 +235,7 @@ fn a_directory_nests_under_the_current_folder_when_present() {
         },
         &[],
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("目录导入应完成");
 
@@ -268,7 +268,7 @@ fn a_directory_nests_under_the_current_folder_when_present() {
 #[test]
 fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
     let f = fixture();
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
 
     // 第一次：导入磁盘位置一的同名目录。
@@ -282,7 +282,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
         },
         &[],
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("第一次目录导入应完成");
     assert_eq!(first.imported.len(), 1);
@@ -300,7 +300,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
         },
         &[],
         &next_run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("同路径第二次导入应整批继续而不是拒绝");
     assert_eq!(second.imported.len(), 1, "新内容应照常入库");
@@ -331,7 +331,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
         },
         &[],
         &third_run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("重复内容的导入请求不应整体失败");
     assert!(again.imported.is_empty(), "重复内容不得再次复制入库");
@@ -351,7 +351,7 @@ fn same_logical_paths_merge_and_duplicates_keep_their_membership() {
         folder: Some("配色".to_owned()),
         tags: vec![],
     };
-    assert!(import_one(&f.library, &beta, &opts, &mut NoopObserver).is_err());
+    assert!(import_one(&f.library, &beta, &opts, &mut NoopTransferObserver).is_err());
 }
 
 // —— 组五：任务身份与库级并发 ——
@@ -361,9 +361,9 @@ fn each_run_has_a_unique_task_id_and_one_slot_per_library() {
     let f = fixture();
     let second_library = Library::create(&f.src.join("second-library")).expect("建立第二座库");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let first = begin_run(&runs, &f.library);
-    assert_eq!(first.state(), ImportRunState::Running);
+    assert_eq!(first.state(), TransferRunState::Running);
 
     // 同一座库：槽位已被占用。
     let refused = runs
@@ -389,24 +389,53 @@ fn each_run_has_a_unique_task_id_and_one_slot_per_library() {
         },
         &[],
         &first,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("空请求应正常完成");
-    assert_eq!(first.state(), ImportRunState::Stopped, "只有后端确认才进入 stopped");
+    assert_eq!(first.state(), TransferRunState::Stopped, "只有后端确认才进入 stopped");
     let again = begin_run(&runs, &f.library);
     assert_ne!(first.id(), again.id(), "新任务必须拿到新的 TaskId");
 }
 
 #[test]
+fn an_old_task_id_cannot_stop_the_new_run_in_the_same_library_slot() {
+    let f = fixture();
+    let runs = TransferRuns::new();
+    let first = begin_run(&runs, &f.library);
+    let old_task_id = first.id().as_str().to_owned();
+    import_sources(
+        &f.library,
+        &ImportRequest {
+            sources: vec![],
+            current_folder: None,
+        },
+        &[],
+        &first,
+        &mut NoopTransferObserver,
+    )
+    .expect("首个任务正常结束");
+    let current = begin_run(&runs, &f.library);
+
+    let error = runs
+        .request_stop(&f.library, &old_task_id)
+        .expect_err("旧任务 ID 不得停止新任务");
+
+    assert_eq!(
+        (error.code, current.state()),
+        (Code::TransferTaskNotActive, TransferRunState::Running),
+    );
+}
+
+#[test]
 fn a_requested_stop_is_not_confirmed_until_the_coordinator_returns() {
     let f = fixture();
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
 
     run.request_stop();
     assert_eq!(
         run.state(),
-        ImportRunState::Stopping,
+        TransferRunState::Stopping,
         "请求停止只是意图，不得冒充已完成"
     );
     let refused = runs
@@ -422,10 +451,10 @@ fn a_requested_stop_is_not_confirmed_until_the_coordinator_returns() {
         },
         &[],
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("空请求应确认停止并正常返回");
-    assert_eq!(run.state(), ImportRunState::Stopped);
+    assert_eq!(run.state(), TransferRunState::Stopped);
 }
 
 // —— 组六：扫描阶段停止 ——
@@ -437,7 +466,7 @@ fn a_stop_before_the_scan_starts_writes_nothing_and_owes_no_failures() {
     write_png(&travel, "beach.png", [12, 24, 36, 255]);
     write_png(&travel, "city/night.png", [48, 60, 72, 255]);
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
     run.request_stop();
 
@@ -449,7 +478,7 @@ fn a_stop_before_the_scan_starts_writes_nothing_and_owes_no_failures() {
         },
         &[],
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("扫描前的停止应让协调器干净地返回");
 
@@ -468,7 +497,7 @@ fn a_stop_before_the_scan_starts_writes_nothing_and_owes_no_failures() {
         "扫描中止不得创建任何逻辑文件夹：实际 {:?}",
         folder_paths(&f.library)
     );
-    assert_eq!(run.state(), ImportRunState::Stopped, "协调器返回即后端确认");
+    assert_eq!(run.state(), TransferRunState::Stopped, "协调器返回即后端确认");
 }
 
 // —— 组七：单素材事务边界停止 ——
@@ -483,7 +512,7 @@ fn processing_stops_at_the_next_boundary_and_counts_the_rest_as_pending() {
         write_png(&f.src, "丁.png", [4, 40, 40, 255]),
         write_png(&f.src, "戊.png", [5, 50, 50, 255]),
     ];
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = begin_run(&runs, &f.library);
 
     // 第三个素材开跑前进度回调触发停止：前两个完整成功，其余停在边界外。
@@ -532,5 +561,5 @@ fn processing_stops_at_the_next_boundary_and_counts_the_rest_as_pending() {
         report.imported.len(),
         "盘上侧车数量必须与已成功素材一致"
     );
-    assert_eq!(run.state(), ImportRunState::Stopped, "协调器返回即后端确认");
+    assert_eq!(run.state(), TransferRunState::Stopped, "协调器返回即后端确认");
 }

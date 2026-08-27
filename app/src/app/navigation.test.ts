@@ -8,8 +8,9 @@ import {
   type WorkspaceId,
   type WorkspaceNavigation,
 } from "./navigation";
+import { parseAssetId } from "./common";
 
-const HASH_A = "a".repeat(64);
+const HASH_A = parseAssetId("a".repeat(64));
 const PROMPT_ID = "018f3c9e-6c00-7000-8000-000000000001";
 
 function locateAsset(requestId: string): LocateEntry {

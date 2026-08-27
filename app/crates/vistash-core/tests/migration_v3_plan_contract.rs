@@ -4,7 +4,10 @@ use vistash_core::error::Code;
 use vistash_core::hashing::{ContentHash, HASH_ALGO_ID};
 use vistash_core::library::Library;
 use vistash_core::media::MediaType;
-use vistash_core::migration::{V3FolderPlan, V3FolderResolution, V3MigrationPlan};
+use vistash_core::migration::{
+    detect_library_format, LibraryFormatState, V3FolderPlan, V3FolderResolution,
+    V3MigrationPlan,
+};
 use vistash_core::sidecar::{AssetSidecarV2, SIDECAR_FORMAT_VERSION_V2};
 
 fn v2_sidecar(seed: &[u8], folders: &[&str]) -> AssetSidecarV2 {
@@ -49,6 +52,26 @@ fn library_with_sidecar(sidecar: &AssetSidecarV2) -> (tempfile::TempDir, Library
         .write_atomic(&library.sidecar_path(&sidecar.hash))
         .expect("写入 v2 侧车");
     (directory, library)
+}
+
+#[test]
+fn v2_library_is_reported_as_needing_v3_migration() {
+    let sidecar = v2_sidecar(b"v2-open-gate", &["参考"]);
+    let (_directory, library) = library_with_sidecar(&sidecar);
+
+    let state = detect_library_format(library.root()).expect("识别 v2 库格式");
+
+    assert!(matches!(state, LibraryFormatState::NeedsV3Migration(_)));
+}
+
+#[test]
+fn production_library_open_refuses_v2_before_catalog_rebuild() {
+    let sidecar = v2_sidecar(b"v2-production-open", &["参考"]);
+    let (_directory, library) = library_with_sidecar(&sidecar);
+
+    let error = Library::open(library.root()).expect_err("v2 库必须先迁移到 v3");
+
+    assert_eq!(error.code, Code::LibraryFormatTooOld);
 }
 
 #[test]

@@ -1,0 +1,130 @@
+.button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  font-family: var(--font-ui);
+  font-size: var(--text-size-sm);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+}
+
+.button > span[aria-hidden="true"],
+.button > svg {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.button > span[aria-hidden="true"] > svg,
+.spinner {
+  width: 1rem;
+  height: 1rem;
+}
+
+.button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.button:disabled {
+  opacity: 0.48;
+}
+
+.default {
+  min-height: 2rem;
+  padding-inline: 0.75rem;
+}
+
+.compact {
+  min-height: 1.75rem;
+  padding-inline: 0.625rem;
+  font-size: var(--text-size-xs);
+}
+
+.primary {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.primary:not(:disabled):hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.secondary {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border-color: var(--border-subtle);
+}
+
+.secondary:not(:disabled):hover {
+  background: var(--surface-sunken);
+  border-color: var(--border-strong);
+}
+
+.ghost {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.ghost:not(:disabled):hover {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border-color: var(--border-subtle);
+}
+
+.danger {
+  color: var(--text-danger);
+  background: var(--status-danger-surface);
+  border-color: var(--status-danger);
+}
+
+.danger:not(:disabled):hover {
+  color: var(--text-primary);
+  border-color: var(--text-danger);
+}
+
+.iconButton {
+  width: 2rem;
+  padding: 0;
+}
+
+.iconButton.compact {
+  width: 1.75rem;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spinner {
+  animation: button-spin 0.8s linear infinite;
+}
+
+@keyframes button-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button:not(:disabled):active {
+    transform: none;
+  }
+
+  .spinner {
+    animation: none;
+  }
+}

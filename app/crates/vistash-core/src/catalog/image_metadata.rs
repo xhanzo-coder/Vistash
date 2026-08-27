@@ -260,6 +260,26 @@ impl Catalog {
         Ok(())
     }
 
+    /// 修改图片显示文件名，同时保持来源身份和内容哈希对象不变。
+    pub fn rename_asset_display_filename(
+        &mut self,
+        hash: &ContentHash,
+        stem: &str,
+    ) -> Result<()> {
+        let (path, mut sidecar) = self.load_editable_sidecar(hash, "显示文件名")?;
+        sidecar.rename_display_filename(stem)?;
+        sidecar.write_atomic(&path).map_err(|error| {
+            AppError::detailed(
+                Code::LibraryAssetMetadataWriteFailed,
+                format!("写入素材显示文件名失败：{error:?}"),
+            )
+        })?;
+        if let Err(error) = self.index_mut()?.upsert_asset(&sidecar) {
+            return self.rebuild_after_index_failure(error);
+        }
+        Ok(())
+    }
+
     pub fn set_asset_tags(&mut self, hash: &ContentHash, tags: &[Tag]) -> Result<()> {
         let (path, mut sidecar) = self.load_editable_sidecar(hash, "标签")?;
         let mut canonical: Vec<String> = tags.iter().map(|tag| tag.as_str().to_owned()).collect();

@@ -1,0 +1,382 @@
+.welcome {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(20rem, 0.9fr);
+  width: 100%;
+  min-height: 100dvh;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+}
+
+.welcomeCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(2rem, 7vw, 7rem);
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: clamp(3rem, 9vh, 6rem);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.wordmark img {
+  border-radius: var(--radius-control);
+}
+
+.eyebrow {
+  margin: 0 0 var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  letter-spacing: 0.15em;
+}
+
+.welcome h1 {
+  max-width: 12ch;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2.75rem, 6vw, 5.5rem);
+  font-weight: 400;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.lead {
+  max-width: 38rem;
+  margin: var(--space-5) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-md);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.promises {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-6) 0 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+  list-style: none;
+}
+
+.promises li {
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--accent);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+}
+
+.welcomeMark {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: var(--space-5);
+  padding: var(--space-8);
+  color: var(--text-secondary);
+  background: var(--surface-panel);
+  border-inline-start: 1px solid var(--border-subtle);
+  text-align: center;
+}
+
+.welcomeMark svg {
+  width: min(16rem, 42vw);
+  height: min(16rem, 42vw);
+  color: var(--accent);
+  stroke-width: 0.75;
+}
+
+.welcomeMark span {
+  max-width: 28ch;
+  font-size: var(--text-size-sm);
+  line-height: 1.55;
+}
+
+.centered {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--surface-canvas);
+}
+
+.failurePage {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--space-6);
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+}
+
+.failureCard {
+  display: grid;
+  width: min(38rem, 100%);
+  justify-items: start;
+  gap: var(--space-4);
+  padding: clamp(1.5rem, 5vw, 3.5rem);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+.failureIcon {
+  width: 2rem;
+  height: 2rem;
+  color: var(--status-danger);
+}
+
+.failureCard h1,
+.failureCard p {
+  margin: 0;
+}
+
+.failureCard h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-size-xl);
+  font-weight: 400;
+  text-wrap: balance;
+}
+
+.path {
+  width: 100%;
+  padding: var(--space-3);
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: var(--text-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.error {
+  color: var(--text-danger);
+  font-size: var(--text-size-sm);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.migrationProgressPage,
+.migrationPage {
+  min-height: 100dvh;
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+}
+
+.migrationProgressPage {
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.migrationProgressCard {
+  display: grid;
+  width: min(36rem, 100%);
+  gap: var(--space-4);
+  padding: clamp(1.5rem, 5vw, 3rem);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+.migrationProgressCard h1,
+.migrationProgressCard p {
+  margin: 0;
+}
+
+.migrationProgressCard h1,
+.migrationHeader h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-size-xl);
+  font-weight: 400;
+  text-wrap: balance;
+}
+
+.migrationProgressCard > p:not(.eyebrow),
+.migrationHeader p,
+.noConflicts {
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+  line-height: 1.55;
+}
+
+.currentFile {
+  overflow: hidden;
+  color: var(--text-tertiary) !important;
+  font-family: var(--font-mono);
+  font-size: var(--text-size-xs) !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.migrationPage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.migrationHeader,
+.migrationFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) clamp(1rem, 4vw, 3rem);
+  background: var(--surface-panel);
+}
+
+.migrationHeader {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.migrationHeader h1,
+.migrationHeader p {
+  margin: 0;
+}
+
+.migrationHeader .eyebrow {
+  margin-bottom: var(--space-2);
+}
+
+.migrationHeader p:last-child {
+  margin-top: var(--space-2);
+}
+
+.conflictList {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5) clamp(1rem, 4vw, 3rem);
+}
+
+.conflict {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  content-visibility: auto;
+  contain-intrinsic-block-size: 7rem;
+}
+
+.conflict legend {
+  max-width: 100%;
+  padding-inline: var(--space-1);
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-size-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conflict p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+}
+
+.candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.candidates label {
+  position: relative;
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  padding-inline: var(--space-3);
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.candidates label:has(input:checked) {
+  color: var(--text-primary);
+  border-color: var(--selection-edge);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.candidates label:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.candidates input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.migrationFooter {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.migrationFooter > span {
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.noConflicts {
+  margin: 0;
+  padding: var(--space-6);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+
+@media (max-width: 780px) {
+  .welcome {
+    grid-template-columns: 1fr;
+  }
+
+  .welcomeCopy {
+    padding: var(--space-6);
+  }
+
+  .wordmark {
+    margin-bottom: var(--space-8);
+  }
+
+  .welcome h1 {
+    font-size: clamp(2.5rem, 12vw, 4rem);
+  }
+
+  .welcomeMark {
+    display: none;
+  }
+
+  .migrationHeader,
+  .migrationFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .migrationFooter > button {
+    width: 100%;
+  }
+}

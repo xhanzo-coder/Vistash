@@ -48,14 +48,23 @@
 - [x] 6.2 实现 Tauri/Memory platform adapters，并用共享 contract tests 验证错误码、媒体租约、文件对话框、拖放和取消监听
 - [x] 6.3 实现任务中心 store、并发键、节流进度、真实停止确认和完成报告保留规则
 - [x] 6.4 建立 `library-lifecycle`、`asset-library`、`prompt-library` 唯一公共出口，并添加禁止跨模块导入 `internal/` 的 lint 或结构检查
+- [x] 6.5 为 v2→v3 开库门禁和 Tauri managed-state 精确类型编写失败回归测试
+- [x] 6.6 修复 v2 库迁移信号与 `import_stop` 的 `Arc<TransferRuns>` State 接线，保证旧库不进入 v3 Catalog
+- [x] 6.7 为显示文件名修改和导出冲突只读规划的 Catalog/Tauri/TypeScript IPC 编写失败合同测试
+- [x] 6.8 实现显示文件名修改与 `plan_export` IPC，注册命令并补齐前端 DTO/封装
+- [x] 6.9 为任务 ID 跨进度、结果和停止 IPC 的一致性编写失败测试，覆盖旧任务不能误停新任务
+- [x] 6.10 把任务 ID 接入导入/导出 DTO 与停止命令，并把共享运行状态从 `ImportRuns` 深化为传输任务语义
+- [x] 6.11 为 external-open manifest 损坏、只读属性失败和清理清单回写失败编写失败测试
+- [x] 6.12 修复 external-open 静默 fallback，只允许 manifest 不存在表示空，其余失败显式返回稳定错误
+- [x] 6.13 为模块公开 interface 引入 `LibraryId` 与 `AssetId` 品牌类型，并用类型检查与模块边界测试防止身份混传
 
 ## 7. UI 基础、主题与应用外壳
 
-- [ ] 7.1 安装经原型批准的 Radix Primitives、TanStack Query 和唯一图标依赖，配置 QueryClient 的无重试、无焦点全刷与有限缓存策略
-- [ ] 7.2 实现 reset、批准的品牌字体与语义 design token、CSS Modules 基础、system/dark/light 主题切换和 Tauri 全尺寸图标资产，并用测试验证减少动态效果
-- [ ] 7.3 实现经原型批准的 Button、Dialog、Menu、Popover、Tooltip、SearchField、Progress、Toast 等无业务 UI 模块
-- [ ] 7.4 实现原生标题栏下的紧凑顶栏、一级入口、全局搜索、导入、任务中心和设置 Dialog
-- [ ] 7.5 实现欢迎、开库失败、迁移冲突和兼容库会话的 `library-lifecycle` 界面，并验证无首页直接恢复工作现场
+- [x] 7.1 安装经原型批准的 Radix Primitives、TanStack Query 和唯一图标依赖，配置 QueryClient 的无重试、无焦点全刷与有限缓存策略
+- [x] 7.2 实现 reset、批准的品牌字体与语义 design token、CSS Modules 基础、system/dark/light 主题切换和 Tauri 全尺寸图标资产，并用测试验证减少动态效果
+- [x] 7.3 实现经原型批准的 Button、Dialog、Menu、Popover、Tooltip、SearchField、Progress、Toast 等无业务 UI 模块
+- [x] 7.4 实现原生标题栏下的紧凑顶栏、一级入口、全局搜索、导入、任务中心和设置 Dialog
+- [x] 7.5 实现欢迎、开库失败、迁移冲突和兼容库会话的 `library-lifecycle` 界面，并验证无首页直接恢复工作现场
 
 ## 8. 图片集合、查询与选择
 

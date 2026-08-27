@@ -266,7 +266,7 @@ mod tests {
     use crate::catalog::image_metadata::FolderName;
     use crate::catalog::testing::{fixture, import_with, write_png};
     use crate::error::Code;
-    use crate::import::{import_one, ImportOptions, NoopObserver};
+    use crate::import::{import_one, ImportOptions, NoopTransferObserver};
     use crate::library::{FolderList, LIBRARY_FORMAT_VERSION};
     use crate::prompt::{PromptAsset, PromptId, PromptFolderList, PROMPT_FORMAT_VERSION};
     #[cfg(not(debug_assertions))]
@@ -492,7 +492,7 @@ mod tests {
             fixture.catalog.library(),
             &source,
             &ImportOptions::default(),
-            &mut NoopObserver,
+            &mut NoopTransferObserver,
         )
         .expect_err("回收站重复本应被拒绝");
 

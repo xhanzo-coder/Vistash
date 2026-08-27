@@ -1175,7 +1175,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 mod tests {
     use super::*;
     use crate::hashing::ContentHash;
-    use crate::import::{self, ImportOptions, NoopObserver};
+    use crate::import::{self, ImportOptions, NoopTransferObserver};
     use crate::prompt::{PromptId, PROMPT_FORMAT_VERSION};
     use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 
@@ -1294,7 +1294,7 @@ mod tests {
             "起点必须是空索引"
         );
 
-        let report = import::import_many(&f.lib, &sources, &opts, &mut NoopObserver);
+        let report = import::import_many(&f.lib, &sources, &opts, &mut NoopTransferObserver);
         assert!(
             report.failed.is_empty(),
             "导入不应失败：{:?}",

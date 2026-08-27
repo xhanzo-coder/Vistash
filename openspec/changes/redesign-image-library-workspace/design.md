@@ -266,6 +266,12 @@ Rust 测试覆盖新侧车序列化、旧库迁移、恢复日志、单归属事
 
 前端 lint、类型检查、Vitest、Rust Clippy 与 Rust test 按仓库规则串行运行；前端和 Rust 全量门禁禁止并行争抢 CPU。高保真原型通过截图与交互检查，生产界面再使用 `webapp-testing` 和 `web-design-guidelines` 验证。
 
+### 17. 正式前端启动前冻结后端 IPC
+
+2026-08-26 的两轴审查发现：后端核心测试虽全部通过，但 v2→v3 开库分派、`import_stop` managed-state 精确类型、显示文件名修改 IPC、导出冲突规划 IPC、任务 ID 跨 IPC 与 external-open 错误语义仍有接线缺口。任务 6.5—6.13 作为正式前端之前的接口冻结门禁：7.1—7.4 只在这些修复全部转绿后开始，避免生产前端围绕错误 DTO 或不可调用命令返工。
+
+修复必须从真实公开 seam 验证：库格式探测必须把 v2 导向 v3 计划；Tauri State 使用同一公开 managed type；显示名与导出规划同时具备 Rust command、注册、TypeScript DTO 与 IPC wrapper；长任务 ID 必须出现在启动/进度/结果/停止全链路；external-open 只允许 `NotFound` 清单表示空，解析、权限和回写失败不得静默降级。
+
 ## Risks / Trade-offs
 
 - [Risk] 单归属文件夹会改变既有库语义，错误迁移会永久丢失组织信息 → 迁移先只读规划，多归属必须人工选择，使用同卷暂存、恢复日志和整体回滚，提交前不修改原库。

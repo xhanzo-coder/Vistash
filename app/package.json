@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:ui-kit": "vite --open /?dev=ui-kit",
+    "dev:app-shell": "vite --open /?dev=app-shell",
+    "dev:library-lifecycle": "vite --open /?dev=library-lifecycle&state=welcome",
     "prototype:image-library": "vite --open /?prototype=image-library&variant=A",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "oxlint --type-aware",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && node --test scripts/e2e-app-config.test.mjs scripts/module-boundaries.test.mjs",
+    "test": "vitest run && node --test scripts/e2e-app-config.test.mjs scripts/icon-assets.test.mjs scripts/module-boundaries.test.mjs scripts/native-window-shell.test.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {
@@ -28,6 +31,16 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@phosphor-icons/react": "2.1.10",
+    "@radix-ui/react-alert-dialog": "1.1.23",
+    "@radix-ui/react-context-menu": "2.3.7",
+    "@radix-ui/react-dialog": "1.1.23",
+    "@radix-ui/react-dropdown-menu": "2.1.24",
+    "@radix-ui/react-popover": "1.1.23",
+    "@radix-ui/react-scroll-area": "1.2.18",
+    "@radix-ui/react-select": "2.3.7",
+    "@radix-ui/react-tooltip": "1.2.16",
+    "@tanstack/react-query": "5.102.5",
     "@tanstack/react-virtual": "3.14.10",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",

@@ -25,8 +25,8 @@ import type {
   ImageDetail,
   ImportAndLinkReport,
   ImportOutcome,
-  ImportProgress,
-  ImportRunState,
+  TransferProgress,
+  TransferRunStatus,
   LibraryStatus,
   LinkedImageState,
   MigrationProgress,
@@ -37,8 +37,11 @@ import type {
   PromptQuery,
   PromptRestoreOutcome,
   PromptSnapshot,
+  PlannedExport,
   PurgeReport,
   RestoreOutcome,
+  V3FolderResolutionInput,
+  V3MigrationPlan,
 } from "./types";
 
 /** 唯一的 `invoke` 出口。所有失败都在这里收敛成 `IpcError`。 */
@@ -104,6 +107,25 @@ export function migrateLibrary(
   return call<LibraryStatus>("migrate_library", { path, onProgress: progress });
 }
 
+/** 为 v2 库生成只读的 v3 迁移计划；计划阶段不修改任何权威文件。 */
+export function planV3Migration(path: string): Promise<V3MigrationPlan> {
+  return call<V3MigrationPlan>("plan_v3_migration", { path });
+}
+
+/** 提交已完成全部冲突选择的 v3 迁移，成功后该库成为当前兼容库。 */
+export function commitV3Migration(
+  path: string,
+  resolutions: V3FolderResolutionInput[],
+  onProgress: (progress: MigrationProgress) => void,
+): Promise<LibraryStatus> {
+  const progress = new Channel<MigrationProgress>(onProgress);
+  return call<LibraryStatus>("commit_v3_migration", {
+    path,
+    resolutions,
+    onProgress: progress,
+  });
+}
+
 /** 网格用的素材列表，不含回收站中的素材。 */
 export function listAssets(): Promise<AssetRow[]> {
   return call<AssetRow[]>("list_assets");
@@ -135,6 +157,10 @@ export function moveAssetToFolder(hash: string, folder: string | null): Promise<
   return call<void>("move_asset_to_folder", { hash, folder });
 }
 
+export function renameAssetDisplayFilename(hash: string, stem: string): Promise<void> {
+  return call<void>("rename_asset_display_filename", { hash, stem });
+}
+
 export function setAssetTags(hash: string, tags: string[]): Promise<void> {
   return call<void>("set_asset_tags", { hash, tags });
 }
@@ -161,9 +187,9 @@ export function purgeTrash(): Promise<PurgeReport> {
 export function importSources(
   paths: string[],
   currentFolder: string | null,
-  onProgress: (progress: ImportProgress) => void,
+  onProgress: (progress: TransferProgress) => void,
 ): Promise<ImportOutcome> {
-  const progress = new Channel<ImportProgress>(onProgress);
+  const progress = new Channel<TransferProgress>(onProgress);
   return call<ImportOutcome>("import_sources", {
     paths,
     currentFolder,
@@ -181,9 +207,9 @@ export function importSources(
  */
 export function pasteImport(
   currentFolder: string | null,
-  onProgress: (progress: ImportProgress) => void,
+  onProgress: (progress: TransferProgress) => void,
 ): Promise<ImportOutcome> {
-  const progress = new Channel<ImportProgress>(onProgress);
+  const progress = new Channel<TransferProgress>(onProgress);
   return call<ImportOutcome>("paste_import", {
     currentFolder,
     onProgress: progress,
@@ -194,8 +220,8 @@ export function pasteImport(
  * 提交导入停止请求：真实的后端命令，返回提交后的任务状态。
  * 只有后端确认后才是 stopped——前端隐藏进度不算已停止。
  */
-export function importStop(): Promise<ImportRunState> {
-  return call<ImportRunState>("import_stop");
+export function importStop(taskId: string): Promise<TransferRunStatus> {
+  return call<TransferRunStatus>("import_stop", { taskId });
 }
 
 /**
@@ -210,15 +236,20 @@ export function exportAssets(
   hashes: string[],
   targetDir: string,
   policy: ConflictPolicy,
-  onProgress: (progress: ImportProgress) => void,
+  onProgress: (progress: TransferProgress) => void,
 ): Promise<ExportOutcome> {
-  const progress = new Channel<ImportProgress>(onProgress);
+  const progress = new Channel<TransferProgress>(onProgress);
   return call<ExportOutcome>("export_assets", {
     hashes,
     targetDir,
     policy,
     onProgress: progress,
   });
+}
+
+/** 只读导出冲突规划；使用者确认 policy 前不写目标目录。 */
+export function planExport(hashes: string[], targetDir: string): Promise<PlannedExport[]> {
+  return call<PlannedExport[]>("plan_export", { hashes, targetDir });
 }
 
 /**

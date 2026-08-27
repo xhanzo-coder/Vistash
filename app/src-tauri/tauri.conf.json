@@ -15,7 +15,7 @@
         "title": "Vistash",
         "width": 1280,
         "height": 800,
-        "minWidth": 960,
+        "minWidth": 720,
         "minHeight": 600,
         "dragDropEnabled": true
       }
@@ -27,6 +27,11 @@
   "bundle": {
     "active": true,
     "targets": ["msi"],
-    "icon": ["icons/icon.ico"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
   }
 }

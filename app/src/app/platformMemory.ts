@@ -16,7 +16,7 @@ import type {
   AppError,
   ExportOutcome,
   ImportOutcome,
-  ImportRunState,
+  TransferRunStatus,
 } from "../shared/types";
 import type { ImageLease, PlatformPort } from "./platform";
 
@@ -56,6 +56,7 @@ export function createMemoryPlatform(config: MemoryPlatformConfig = {}): MemoryP
   let libraryDirectory = config.pickedLibraryDirectory ?? null;
 
   const EMPTY_IMPORT: ImportOutcome = {
+    task_id: null,
     imported: 0,
     skipped_non_images: 0,
     duplicates: 0,
@@ -63,6 +64,7 @@ export function createMemoryPlatform(config: MemoryPlatformConfig = {}): MemoryP
     failures: [],
   };
   const EMPTY_EXPORT: ExportOutcome = {
+    task_id: "memory-export-task",
     exported: [],
     skipped_existing: 0,
     failed: [],
@@ -116,10 +118,10 @@ export function createMemoryPlatform(config: MemoryPlatformConfig = {}): MemoryP
       if (failure !== undefined) throw new IpcError(failure);
       return EMPTY_IMPORT;
     },
-    stopTransfer: async () => {
+    stopTransfer: async (taskId) => {
       const failure = takeFailure("stopTransfer");
       if (failure !== undefined) throw new IpcError(failure);
-      return "stopped" satisfies ImportRunState;
+      return { task_id: taskId, state: "stopped" } satisfies TransferRunStatus;
     },
 
     exportAssets: async () => {

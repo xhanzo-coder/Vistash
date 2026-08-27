@@ -12,7 +12,7 @@
  * 这是"两个 UI 模块不得互相导入内部组件、query key 或 store"的结构保证。
  */
 
-import { type RequestId, type Unsubscribe } from "./common";
+import { type AssetId, type RequestId, type Unsubscribe } from "./common";
 
 /** 一级工作区身份。封闭联合：新增一级入口必须显式扩展此处并补全所有匹配臂。 */
 export type WorkspaceId = "assets" | "prompts";
@@ -32,7 +32,7 @@ export type NavigationEntry =
   | {
       kind: "locate_asset";
       requestId: RequestId;
-      hash: string;
+      hash: AssetId;
       location: AssetLocationScope;
     }
   | {

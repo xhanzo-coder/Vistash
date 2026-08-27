@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, test } from "vitest";
 
 import type { ImageLease, PlatformPort } from "./platform";
-import type { ImportOutcome, ImportProgress } from "../shared/types";
+import type { ImportOutcome, TransferProgress } from "../shared/types";
 
 /**
  * 任务 6.1 只锁 port 的形状与合同基线；Tauri/Memory 双 adapter 与完整
@@ -9,6 +9,7 @@ import type { ImportOutcome, ImportProgress } from "../shared/types";
  */
 
 const EMPTY_IMPORT: ImportOutcome = {
+  task_id: null,
   imported: 0,
   skipped_non_images: 0,
   duplicates: 0,
@@ -25,8 +26,14 @@ function stubPort(): PlatformPort {
     onFileDrag: () => () => {},
     importSources: async () => EMPTY_IMPORT,
     pasteImport: async () => EMPTY_IMPORT,
-    stopTransfer: async () => "stopped",
-    exportAssets: async () => ({ exported: [], skipped_existing: 0, failed: [], pending_count: 0 }),
+    stopTransfer: async (taskId) => ({ task_id: taskId, state: "stopped" }),
+    exportAssets: async () => ({
+      task_id: "export-task",
+      exported: [],
+      skipped_existing: 0,
+      failed: [],
+      pending_count: 0,
+    }),
     copyImageToClipboard: async () => {},
     openWithDefaultApp: async () => {},
   };
@@ -37,7 +44,10 @@ describe("PlatformPort 形状", () => {
     const port = stubPort();
     await expect(port.pickImageFiles()).resolves.toEqual([]);
     await expect(port.pasteImport(null, () => {})).resolves.toEqual(EMPTY_IMPORT);
-    await expect(port.stopTransfer()).resolves.toBe("stopped");
+    await expect(port.stopTransfer("task-001")).resolves.toEqual({
+      task_id: "task-001",
+      state: "stopped",
+    });
   });
 
   test("媒体租约携带 url 并提供可调用的 release", async () => {
@@ -68,7 +78,7 @@ describe("类型锁（设计第三条与第十四条）", () => {
 
   test("进度通道是类型化回调而不是字符串主题订阅", () => {
     expectTypeOf<Parameters<PlatformPort["pasteImport"]>[1]>().toEqualTypeOf<
-      (progress: ImportProgress) => void
+      (progress: TransferProgress) => void
     >();
   });
 });

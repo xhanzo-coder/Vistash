@@ -1,7 +1,16 @@
-import { StrictMode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
+import { AppRoot } from "./app/AppRoot";
+import { createAppQueryClient } from "./app/queryClient";
+import { ThemeProvider } from "./ui/theme/ThemeProvider";
+import { createBrowserThemeController } from "./ui/theme/theme";
+import { UiProvider } from "./ui/UiProvider";
 import "./styles.css";
+import "./styles/reset.css";
+import "./styles/tokens.css";
+import "./styles/globals.css";
 
 const container = document.getElementById("root");
 if (!container) {
@@ -13,6 +22,9 @@ if (!container) {
 const search = new URLSearchParams(window.location.search);
 const showImageLibraryPrototype =
   import.meta.env.DEV && search.get("prototype") === "image-library";
+const showUiKit = import.meta.env.DEV && search.get("dev") === "ui-kit";
+const showAppShell = import.meta.env.DEV && search.get("dev") === "app-shell";
+const showLibraryLifecycle = import.meta.env.DEV && search.get("dev") === "library-lifecycle";
 const root = createRoot(container);
 
 if (showImageLibraryPrototype) {
@@ -25,9 +37,32 @@ if (showImageLibraryPrototype) {
       ),
   );
 } else {
-  root.render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  );
+  const queryClient = createAppQueryClient();
+  const themeController = createBrowserThemeController();
+  const render = (content: ReactNode): void => {
+    root.render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider controller={themeController}>
+            <UiProvider>
+              <AppRoot>{content}</AppRoot>
+            </UiProvider>
+          </ThemeProvider>
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+  };
+  if (showUiKit) {
+    void import("./dev/ui-kit/UiKitShowcase").then(({ UiKitShowcase }) => render(<UiKitShowcase />));
+  } else if (showAppShell) {
+    void import("./dev/app-shell/AppShellShowcase").then(({ AppShellShowcase }) =>
+      render(<AppShellShowcase />),
+    );
+  } else if (showLibraryLifecycle) {
+    void import("./dev/library-lifecycle/LibraryLifecycleShowcase").then(
+      ({ LibraryLifecycleShowcase }) => render(<LibraryLifecycleShowcase />),
+    );
+  } else {
+    render(<App />);
+  }
 }

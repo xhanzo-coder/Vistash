@@ -95,4 +95,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
 
   // external 域：默认程序打开（任务 5.6）
   "external.open_failed": "用系统默认程序打开这张图失败。库内素材未受影响；请检查该图片类型的默认打开方式设置后重试。",
+
+  // transfer 域：导入与导出共享的任务身份
+  "transfer.task_not_active": "这个传输任务已不是当前运行任务，停止请求未作用于其他任务。",
 };

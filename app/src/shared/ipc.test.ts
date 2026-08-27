@@ -9,6 +9,7 @@ import {
   batchMoveAssetsToFolder,
   batchSetPromptFavorite,
   catalogSnapshot,
+  commitV3Migration,
   copyAssetToClipboard,
   createFolder,
   createPrompt,
@@ -18,6 +19,8 @@ import {
   deletePrompt,
   deletePromptFolder,
   exportAssets,
+  planExport,
+  planV3Migration,
   openWithDefaultApp,
   globalSearch,
   imageDetail,
@@ -35,6 +38,7 @@ import {
   purgeTrash,
   readLayout,
   renameFolder,
+  renameAssetDisplayFilename,
   renamePromptFolder,
   restoreAsset,
   restorePrompt,
@@ -57,13 +61,16 @@ import type {
   CatalogSnapshot,
   ConflictPolicy,
   ExportOutcome,
+  PlannedExport,
   FolderMutationProgress,
   GlobalSearchResult,
   ImageDetail,
   ImportAndLinkReport,
   ImportOutcome,
-  ImportProgress,
-  ImportRunState,
+  TransferProgress,
+  TransferRunStatus,
+  V3MigrationPlan,
+  V3FolderResolutionInput,
   LibraryStatus,
   MigrationProgress,
   PromptAsset,
@@ -80,9 +87,87 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+test("v3 迁移规划只读返回冲突，提交只发送唯一选择与进度通道", async () => {
+  const plan: V3MigrationPlan = {
+    entries: [
+      {
+        hash: HASH,
+        original_filename: "雨夜街道.png",
+        kind: "conflict",
+        candidates: ["参考", "配色"],
+      },
+    ],
+  };
+  const resolutions: V3FolderResolutionInput[] = [{ hash: HASH, folder: "配色" }];
+  const progress: MigrationProgress = {
+    stage: "replaced",
+    done: 1,
+    total: 1,
+    current_filename: "雨夜街道.png",
+  };
+  const status: LibraryStatus = {
+    path: "E:\\视觉档案",
+    library_id: "018f3c9e-6c00-7000-8000-0000000000aa",
+    recorded_path: "E:\\视觉档案",
+    problem: null,
+  };
+  const calls: Array<{ command: string; payload: unknown }> = [];
+  mockIPC((command, payload) => {
+    calls.push({ command, payload });
+    if (command === "plan_v3_migration") return plan;
+    if (command === "commit_v3_migration") {
+      if (!isRecord(payload)) throw new TypeError("提交迁移参数不是对象");
+      const channel = payload.onProgress;
+      if (channel instanceof Channel) channel.onmessage(progress);
+      return status;
+    }
+    throw new TypeError(`未覆盖命令：${command}`);
+  });
+
+  await expect(planV3Migration("E:\\视觉档案")).resolves.toEqual(plan);
+  const received = vi.fn<(value: MigrationProgress) => void>();
+  await expect(commitV3Migration("E:\\视觉档案", resolutions, received)).resolves.toEqual(status);
+  expect(received).toHaveBeenCalledExactlyOnceWith(progress);
+  expect(calls[0]).toEqual({
+    command: "plan_v3_migration",
+    payload: { path: "E:\\视觉档案" },
+  });
+  expect(calls[1]?.command).toBe("commit_v3_migration");
+  expect(calls[1]?.payload).toMatchObject({
+    path: "E:\\视觉档案",
+    resolutions,
+  });
+});
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+test("显示文件名修改与导出冲突规划使用独立只读 IPC", async () => {
+  const planned: PlannedExport[] = [
+    { hash: HASH, display_filename: "雨夜街道.png", existing: true },
+  ];
+  const calls: Array<{ command: string; payload: unknown }> = [];
+  mockIPC((command, payload) => {
+    calls.push({ command, payload });
+    if (command === "plan_export") return planned;
+    return null;
+  });
+
+  await renameAssetDisplayFilename(HASH, "雨夜街道");
+  await expect(planExport([HASH], "E:\\导出")).resolves.toEqual(planned);
+
+  expect(calls).toEqual([
+    {
+      command: "rename_asset_display_filename",
+      payload: { hash: HASH, stem: "雨夜街道" },
+    },
+    {
+      command: "plan_export",
+      payload: { hashes: [HASH], targetDir: "E:\\导出" },
+    },
+  ]);
+});
 
 test("migrateLibrary 转交迁移进度并使用固定 command 名", async () => {
   const expected: MigrationProgress = {
@@ -119,12 +204,14 @@ test("migrateLibrary 转交迁移进度并使用固定 command 名", async () =>
 });
 
 test("importSources 把路径、当前文件夹与数量进度转交给调用方", async () => {
-  const expected: ImportProgress = {
+  const expected: TransferProgress = {
+    task_id: "task-import-001",
     done: 4,
     total: 10,
     current_filename: "pinterest_005.jpg",
   };
   const outcome: ImportOutcome = {
+    task_id: "task-import-001",
     imported: 10,
     skipped_non_images: 1,
     duplicates: 2,
@@ -148,7 +235,7 @@ test("importSources 把路径、当前文件夹与数量进度转交给调用方
     return outcome;
   });
 
-  const received = vi.fn<(progress: ImportProgress) => void>();
+  const received = vi.fn<(progress: TransferProgress) => void>();
   await expect(
     importSources(["E:\\素材"], "参考/构图", received),
   ).resolves.toEqual(outcome);
@@ -156,12 +243,13 @@ test("importSources 把路径、当前文件夹与数量进度转交给调用方
 });
 
 test("importStop 调用真实停止命令并转交任务状态", async () => {
-  const stopping: ImportRunState = "stopping";
-  mockIPC((command) => {
+  const stopping: TransferRunStatus = { task_id: "task-001", state: "stopping" };
+  mockIPC((command, payload) => {
     expect(command).toBe("import_stop");
+    expect(payload).toEqual({ taskId: "task-001" });
     return stopping;
   });
-  await expect(importStop()).resolves.toBe(stopping);
+  await expect(importStop("task-001")).resolves.toEqual(stopping);
 });
 
 test("pasteImport 走窗口粘贴命令且不携带任何像素参数", async () => {
@@ -169,6 +257,7 @@ test("pasteImport 走窗口粘贴命令且不携带任何像素参数", async ()
   // command 名与参数面——除当前文件夹与进度通道外不得有其他入参，更没有
   // 像素缓冲的位置。
   const outcome: ImportOutcome = {
+    task_id: "task-paste-001",
     imported: 1,
     skipped_non_images: 0,
     duplicates: 0,
@@ -189,14 +278,20 @@ test("pasteImport 走窗口粘贴命令且不携带任何像素参数", async ()
     }
     const channel = payload.onProgress;
     if (channel instanceof Channel) {
-      channel.onmessage({ done: 0, total: 1, current_filename: "剪贴板图片 2026-08-26 142530.png" });
+      channel.onmessage({
+        task_id: "task-paste-001",
+        done: 0,
+        total: 1,
+        current_filename: "剪贴板图片 2026-08-26 142530.png",
+      });
     }
     return outcome;
   });
 
-  const received = vi.fn<(progress: ImportProgress) => void>();
+  const received = vi.fn<(progress: TransferProgress) => void>();
   await expect(pasteImport(null, received)).resolves.toEqual(outcome);
   expect(received).toHaveBeenCalledExactlyOnceWith({
+    task_id: "task-paste-001",
     done: 0,
     total: 1,
     current_filename: "剪贴板图片 2026-08-26 142530.png",
@@ -206,6 +301,7 @@ test("pasteImport 走窗口粘贴命令且不携带任何像素参数", async ()
 test("pasteImport 在剪贴板无可导入内容时转交全零报告", async () => {
   // 文本/网址/空剪贴板不是错误：后端返回全零报告，前端据此提示而不是弹错。
   const empty: ImportOutcome = {
+    task_id: null,
     imported: 0,
     skipped_non_images: 0,
     duplicates: 0,
@@ -223,6 +319,7 @@ test("exportAssets 使用固定 command、参数面与类型化冲突策略", as
   // 设计第十二条：导出是只读库的出站操作；策略是类型化枚举值，
   // 覆盖（overwrite）必须由界面先取得使用者明确确认后才允许传入。
   const outcome: ExportOutcome = {
+    task_id: "task-export-001",
     exported: ["风景.png", "人像.jpg"],
     skipped_existing: 1,
     failed: [
@@ -253,17 +350,23 @@ test("exportAssets 使用固定 command、参数面与类型化冲突策略", as
     }
     const channel = payload.onProgress;
     if (channel instanceof Channel) {
-      channel.onmessage({ done: 0, total: 2, current_filename: "风景.png" });
+      channel.onmessage({
+        task_id: "task-export-001",
+        done: 0,
+        total: 2,
+        current_filename: "风景.png",
+      });
     }
     return outcome;
   });
 
-  const received = vi.fn<(progress: ImportProgress) => void>();
+  const received = vi.fn<(progress: TransferProgress) => void>();
   const policy: ConflictPolicy = "auto_number";
   await expect(
     exportAssets(["0".repeat(64)], "E:\\导出", policy, received),
   ).resolves.toEqual(outcome);
   expect(received).toHaveBeenCalledExactlyOnceWith({
+    task_id: "task-export-001",
     done: 0,
     total: 2,
     current_filename: "风景.png",

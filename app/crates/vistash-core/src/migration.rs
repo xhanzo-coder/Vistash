@@ -219,8 +219,10 @@ pub const LOCK_FILE: &str = "migration.lock";
 /// v2 解析只会得到"元数据损坏"，而真实情况是"这个库还没迁移"——两者的处理方式完全不同。
 #[derive(Debug, Clone, PartialEq)]
 pub enum LibraryFormatState {
-    /// 已经是当前程序支持的某一代（v2 或 v3），可以直接打开。
+    /// 已经是当前生产代 v3，可以直接打开。
     Current(CurrentLibraryMeta),
+    /// 完整 v2 库：只允许生成/提交 v3 迁移计划，禁止进入生产 Catalog。
+    NeedsV3Migration(LibraryMetaV2),
     /// 旧格式，需要一次一次性迁移。
     NeedsMigration { from_version: u32 },
     /// 上次迁移没有走完。必须先继续或回滚，MUST NOT 当成正常库打开。
@@ -259,8 +261,8 @@ pub fn detect_library_format(root: &Path) -> Result<LibraryFormatState> {
         LIBRARY_FORMAT_VERSION_V3 => Ok(LibraryFormatState::Current(
             CurrentLibraryMeta::V3(LibraryMetaV3::read(&meta_path)?),
         )),
-        LIBRARY_FORMAT_VERSION_V2 => Ok(LibraryFormatState::Current(
-            CurrentLibraryMeta::V2(LibraryMetaV2::read(&meta_path)?),
+        LIBRARY_FORMAT_VERSION_V2 => Ok(LibraryFormatState::NeedsV3Migration(
+            LibraryMetaV2::read(&meta_path)?,
         )),
         _ => Ok(LibraryFormatState::NeedsMigration {
             from_version: format_version,
@@ -402,7 +404,8 @@ impl V3MigrationPlan {
         match detect_library_format(root)? {
             // 只接受 v2 输入。对已是 v3 的库再规划一次，提交阶段会把 v3 侧车当 v2
             // 解析并用垃圾字段顶替权威字节——门禁必须在读第一个侧车之前就拒绝。
-            LibraryFormatState::Current(CurrentLibraryMeta::V2(_)) => {}
+            LibraryFormatState::NeedsV3Migration(_)
+            | LibraryFormatState::Current(CurrentLibraryMeta::V2(_)) => {}
             LibraryFormatState::Current(CurrentLibraryMeta::V3(_)) => {
                 return Err(AppError::detailed(
                     Code::MigrationPlanStale,
@@ -759,7 +762,8 @@ impl<'a> V3MigrationCommit<'a> {
         // 垃圾字段顶替权威字节；被中断的迁移必须先走各自的恢复入口，否则“半迁移”
         // 的输入会把两种格式的侧车混在一起提交。
         let meta = match detect_library_format(&self.root)? {
-            LibraryFormatState::Current(CurrentLibraryMeta::V2(meta)) => meta,
+            LibraryFormatState::NeedsV3Migration(meta)
+            | LibraryFormatState::Current(CurrentLibraryMeta::V2(meta)) => meta,
             LibraryFormatState::Current(CurrentLibraryMeta::V3(_)) => {
                 return Err(AppError::detailed(
                     Code::MigrationPlanStale,
@@ -1544,6 +1548,14 @@ impl Migration {
                 // 版本判断；对 v3 库同样成立——它比本次迁移的目标还要新。
                 return Ok(MigrationOutcome {
                     library_id: meta.library_id().clone(),
+                    sidecars_rewritten: 0,
+                    resumed: false,
+                });
+            }
+            LibraryFormatState::NeedsV3Migration(meta) => {
+                // 旧迁移器只负责 v1→v2；达到 v2 后由独立 v3 计划/提交入口继续。
+                return Ok(MigrationOutcome {
+                    library_id: meta.library_id,
                     sidecars_rewritten: 0,
                     resumed: false,
                 });
@@ -2498,7 +2510,7 @@ mod tests {
         assert_no_migration_residue(&f);
         assert!(matches!(
             detect_library_format(&f.root).expect("判定格式"),
-            LibraryFormatState::Current(_)
+            LibraryFormatState::NeedsV3Migration(_)
         ));
     }
 
@@ -3122,7 +3134,7 @@ mod tests {
         assert_authoritative_bytes_untouched(&f, "索引重建失败");
         assert_no_v3_residue(&f, "索引重建失败");
         match detect_library_format(&f.root).expect("判定格式") {
-            LibraryFormatState::Current(CurrentLibraryMeta::V2(meta)) => {
+            LibraryFormatState::NeedsV3Migration(meta) => {
                 assert_eq!(meta.library_id, f.library_id, "库仍应按原 v2 身份打开");
             }
             other => panic!("回滚后的库被判成了 {other:?}"),
@@ -3175,9 +3187,9 @@ mod tests {
             assert!(
                 matches!(
                     detect_library_format(&f.root).expect("判定格式"),
-                    LibraryFormatState::Current(_)
+                    LibraryFormatState::NeedsV3Migration(_)
                 ),
-                "回滚后的库必须是可直接打开的纯 v2"
+                "回滚后的库必须是可重新规划 v3 迁移的纯 v2"
             );
             V3MigrationPlan::inspect(&f.root)
                 .expect("回滚后应能重新生成迁移计划");

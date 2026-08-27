@@ -11,7 +11,7 @@ use std::path::Path;
 use chrono::{TimeZone, Utc};
 use vistash_core::clipboard::{bitmap_to_png, clipboard_image_display_name, BitmapImage};
 use vistash_core::import::{
-    classify_paths, import_sources, ImportRequest, ImportRuns, ImportSource, NoopObserver,
+    classify_paths, import_sources, ImportRequest, TransferRuns, ImportSource, NoopTransferObserver,
 };
 use vistash_core::library::Library;
 use vistash_core::sidecar::{AssetSource, AssetSidecarV3};
@@ -97,7 +97,7 @@ fn pasted_bitmap_becomes_a_new_png_asset_via_the_coordinator() {
     // 生产侧由 Tauri 命令生成本地时间名；这里直接给出同一冻结形态。
     let filename = "剪贴板图片 2026-08-26 142530.png";
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = runs.begin(&f.library).expect("库空闲时应能开始导入");
     let request = ImportRequest {
         sources: vec![ImportSource::PngBytes {
@@ -109,7 +109,7 @@ fn pasted_bitmap_becomes_a_new_png_asset_via_the_coordinator() {
     };
 
     let report =
-        import_sources(&f.library, &request, &[], &run, &mut NoopObserver).expect("协调器不整体失败");
+        import_sources(&f.library, &request, &[], &run, &mut NoopTransferObserver).expect("协调器不整体失败");
 
     assert_eq!(report.imported.len(), 1, "一次粘贴恰好入库一张");
     assert!(report.duplicates.is_empty());
@@ -151,14 +151,14 @@ fn repasting_the_same_bitmap_reports_a_duplicate_not_a_second_copy() {
         .single()
         .expect("构造第二次粘贴时刻");
 
-    let runs = ImportRuns::new();
+    let runs = TransferRuns::new();
     let run = runs.begin(&f.library).expect("开始第一次导入");
     import_sources(
         &f.library,
         &request_for("剪贴板图片 2026-08-26 142530.png", first_at),
         &[],
         &run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("第一次导入成功");
 
@@ -169,7 +169,7 @@ fn repasting_the_same_bitmap_reports_a_duplicate_not_a_second_copy() {
         &request_for("剪贴板图片 2026-08-26 143000.png", second_at),
         &[],
         &second_run,
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("第二次导入整体成功");
 

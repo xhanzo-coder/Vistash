@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use vistash_core::external_open::ExternalOpenManager;
 use vistash_core::hashing::ContentHash;
-use vistash_core::import::{ImportOptions, NoopObserver};
+use vistash_core::import::{ImportOptions, NoopTransferObserver};
 use vistash_core::library::Library;
 
 struct Fixture {
@@ -36,7 +36,7 @@ fn fixture() -> Fixture {
         &library,
         &src,
         &ImportOptions::default(),
-        &mut NoopObserver,
+        &mut NoopTransferObserver,
     )
     .expect("导入样本图");
 
@@ -95,8 +95,38 @@ fn read_manifest_json(path: &Path) -> ManifestMap {
 
 fn write_manifest_json(path: &Path, manifest: &ManifestMap) {
     std::fs::create_dir_all(path.parent().expect("清单必有父目录")).ok();
-    std::fs::write(path, serde_json::to_string_pretty(manifest).expect("序列化清单"))
-        .expect("写清单");
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(manifest).expect("序列化清单"),
+    )
+    .expect("写清单");
+}
+
+#[test]
+fn corrupt_manifest_is_an_explicit_error_not_an_empty_cache() {
+    let f = fixture();
+    std::fs::create_dir_all(&f.root).expect("建立缓存根");
+    std::fs::write(f.root.join("manifest.json"), b"{ corrupt manifest").expect("写入损坏清单");
+    let manager = ExternalOpenManager::new(f.root, "sess-now".into());
+
+    let error = manager.cleanup(at(12)).expect_err("损坏清单必须显式失败");
+
+    assert_eq!(error.code, vistash_core::error::Code::ExternalOpenFailed);
+}
+
+#[cfg(windows)]
+#[test]
+fn manifest_rewrite_failure_is_reported_after_cleanup() {
+    let f = fixture();
+    seed_session(&f.root, "sess-expired", "2026-08-20T00:00:00Z", false);
+    make_readonly(&f.root.join("manifest.json"));
+    let manager = ExternalOpenManager::new(f.root, "sess-now".into());
+
+    let error = manager
+        .cleanup(at(12))
+        .expect_err("只读清单回写必须显式失败");
+
+    assert_eq!(error.code, vistash_core::error::Code::ExternalOpenFailed);
 }
 
 // —— 组一：副本准备 ——
@@ -106,7 +136,9 @@ fn prepared_copy_uses_display_filename_and_is_readonly() {
     let f = fixture();
     let manager = ExternalOpenManager::new(f.root.clone(), "sess-a".into());
 
-    let copy = manager.prepare(&f.library, &f.png_hash).expect("准备副本应成功");
+    let copy = manager
+        .prepare(&f.library, &f.png_hash)
+        .expect("准备副本应成功");
 
     assert_eq!(
         copy.file_name().map(|n| n.to_string_lossy().into_owned()),
@@ -171,7 +203,7 @@ fn cleanup_removes_only_expired_recorded_sessions() {
     std::fs::write(stray_dir.join("x.txt"), b"stray").expect("写入清单外文件");
 
     let manager = ExternalOpenManager::new(f.root.clone(), "sess-current-old".into());
-    let report = manager.cleanup(at(12));
+    let report = manager.cleanup(at(12)).expect("清理过期会话");
 
     assert_eq!(report.removed_sessions, vec!["sess-expired".to_string()]);
     assert!(!expired_dir.exists(), "过期且已记录的会话目录应被删除");
@@ -198,7 +230,7 @@ fn cleanup_clears_readonly_attributes_before_delete() {
     let stale = seed_session(&f.root, "sess-locked", "2026-08-20T00:00:00Z", true);
 
     let manager = ExternalOpenManager::new(f.root.clone(), "sess-now".into());
-    let report = manager.cleanup(at(12));
+    let report = manager.cleanup(at(12)).expect("清理只读会话");
 
     assert_eq!(report.removed_sessions, vec!["sess-locked".to_string()]);
     assert!(!stale.exists(), "清掉只读后整个会话目录应可删除");
@@ -213,7 +245,7 @@ fn cleanup_without_a_manifest_touches_nothing() {
     std::fs::write(lookalike.join("a.png"), b"x").expect("写入文件");
 
     let manager = ExternalOpenManager::new(f.root.clone(), "sess-now".into());
-    let report = manager.cleanup(at(12));
+    let report = manager.cleanup(at(12)).expect("无清单清理应成功");
 
     assert!(report.removed_sessions.is_empty());
     assert!(lookalike.exists(), "无清单时不得猜测性删除任何目录");
@@ -282,7 +314,7 @@ fn files_in_use_defer_their_session_to_next_startup() {
     let held = open_without_delete_sharing(&busy_dir.join("风景.png"));
 
     let manager = ExternalOpenManager::new(f.root.clone(), "sess-now".into());
-    let report = manager.cleanup(at(12));
+    let report = manager.cleanup(at(12)).expect("占用会话应延后");
 
     assert_eq!(report.deferred_sessions, vec!["sess-busy".to_string()]);
     assert!(report.removed_sessions.is_empty());
@@ -295,7 +327,7 @@ fn files_in_use_defer_their_session_to_next_startup() {
 
     // 释放句柄后再跑一轮清理——即"下次启动重试"的语义。
     drop(held);
-    let retried = manager.cleanup(at(13));
+    let retried = manager.cleanup(at(13)).expect("释放占用后重试清理");
     assert_eq!(retried.removed_sessions, vec!["sess-busy".to_string()]);
     assert!(!busy_dir.exists());
 }

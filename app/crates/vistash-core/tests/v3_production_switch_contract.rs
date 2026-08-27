@@ -554,3 +554,36 @@ fn trashed_assets_refuse_folder_moves() {
 
     assert_eq!(error.code, Code::LibraryAssetMetadataWriteFailed);
 }
+
+#[test]
+fn renaming_display_filename_preserves_source_identity_and_updates_the_index() {
+    let source = v2_sidecar(b"rename-display", "IMG_0042.PNG", &[]);
+    let hash = source.hash.clone();
+    let (_directory, library) = migrated_library(&[source], &[]);
+    let before = AssetSidecarV3::read(&library.sidecar_path(&hash)).expect("读取改名前侧车");
+    let original_source = before.source.clone();
+    let mut catalog = Catalog::open(library.clone()).expect("打开编目");
+
+    catalog
+        .rename_asset_display_filename(&hash, "雨夜街道")
+        .expect("修改显示文件名");
+    let after = AssetSidecarV3::read(&library.sidecar_path(&hash)).expect("读取改名后侧车");
+    let snapshot = catalog
+        .snapshot(&AssetQuery {
+            text: "雨夜街道".to_owned(),
+            tags: vec![],
+            folder: FolderFilter::All,
+            favorite: None,
+            location: AssetLocation::Active,
+        })
+        .expect("按新显示名查询");
+
+    assert_eq!(
+        (
+            after.display_filename.as_str(),
+            after.source,
+            snapshot.assets[0].display_filename.as_str(),
+        ),
+        ("雨夜街道.png", original_source, "雨夜街道.png"),
+    );
+}
