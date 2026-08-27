@@ -18,7 +18,7 @@
 - `pnpm lint`、`pnpm typecheck`：通过。
 - `pnpm test`：37 个 Vitest 文件、255 项测试与 4 项 Node 测试通过。
 - `pnpm build`：通过；最终前端 JS gzip 约 105.87 kB。
-- Rust Clippy、278 项核心与 6 项 Tauri 测试已通过；最终正常标识构建后的重跑结果在完成任务 2.1 时再次确认。
+- 最终正常标识 `pnpm tauri build --no-bundle` 构建通过，随后串行重跑 Rust Clippy、278 项核心与 6 项 Tauri 测试全部通过；核心测试耗时 267.85s，doc tests 零失败。
 - 已知非阻断构建提示：Tauri window 同时被静态/动态导入；既有 `com.vistash.app` 标识的 macOS 后缀建议。本轮 Windows 优先，不改动既有应用身份。
 
 ## 真实浏览器

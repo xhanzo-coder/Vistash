@@ -8,6 +8,6 @@
 
 ## 2. 验收与归档准备
 
-- [ ] 2.1 串行通过前端 lint、类型检查、全部测试和构建，以及 Rust Clippy/全部测试
+- [x] 2.1 串行通过前端 lint、类型检查、全部测试和构建，以及 Rust Clippy/全部测试
 - [x] 2.2 完成 Windows release 聚焦、草稿保护、框选与万项虚拟化交互验收并记录结果
-- [ ] 2.3 完成双轴 code-review、OpenSpec 严格校验和文档状态同步
+- [x] 2.3 完成双轴 code-review、OpenSpec 严格校验和文档状态同步
