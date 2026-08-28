@@ -7,7 +7,7 @@ import {
 } from "../../modules/library-lifecycle";
 import styles from "./LibraryLifecycleShowcase.module.css";
 
-type ShowcaseState = "welcome" | "failure" | "migration" | "ready";
+type ShowcaseState = "welcome" | "failure" | "migration" | "migration-many" | "ready";
 
 const READY: LibraryStatus = {
   path: "E:\\视觉档案",
@@ -46,9 +46,19 @@ const PLAN: V3MigrationPlan = {
   ],
 };
 
+/** 真实组件长列表验收 fixture；只由开发入口使用，不调用磁盘或原生迁移。 */
+const MANY_CONFLICTS_PLAN: V3MigrationPlan = {
+  entries: Array.from({ length: 60 }, (_value, index) => ({
+    hash: index.toString(16).padStart(64, "0"),
+    original_filename: `迁移参考-${index + 1}.png`,
+    kind: "conflict",
+    candidates: ["构图参考", "配色参考"],
+  })),
+};
+
 function currentShowcaseState(): ShowcaseState {
   const value = new URLSearchParams(window.location.search).get("state") ?? "welcome";
-  if (value === "welcome" || value === "failure" || value === "migration" || value === "ready") {
+  if (value === "welcome" || value === "failure" || value === "migration" || value === "migration-many" || value === "ready") {
     return value;
   }
   throw new TypeError(`未知 library-lifecycle 展台状态：${value}`);
@@ -66,6 +76,7 @@ function initialStatus(state: ShowcaseState): LibraryStatus {
         problem: { code: "library.path_unreadable", detail: "目录不存在" },
       };
     case "migration":
+    case "migration-many":
       return OLD;
     case "ready":
       return READY;
@@ -87,7 +98,7 @@ function createShowcasePort(state: ShowcaseState): LibraryLifecyclePort {
       onProgress(progress("sidecars_rewritten"));
       return OLD;
     },
-    planV3: async () => PLAN,
+    planV3: async () => state === "migration-many" ? MANY_CONFLICTS_PLAN : PLAN,
     commitV3: async (path, _resolutions, onProgress) => {
       onProgress(progress("replaced"));
       return { ...READY, path, recorded_path: path };

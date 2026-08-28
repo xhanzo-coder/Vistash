@@ -1,5 +1,6 @@
 .page {
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   overflow: auto;
   padding: var(--space-6);
   color: var(--text-primary);
@@ -80,6 +81,8 @@
 }
 
 .scrollPanel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   height: 19rem;
 }
 

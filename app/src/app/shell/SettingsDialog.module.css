@@ -70,24 +70,42 @@
   width: 100%;
 }
 
-.themeOptions button {
+.themeOptions label {
+  position: relative;
+  display: grid;
+  place-items: center;
   min-height: 4.25rem;
   color: var(--text-secondary);
   background: var(--surface-sunken);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-control);
   font-size: var(--text-size-sm);
+  cursor: pointer;
 }
 
-.themeOptions button:hover {
+.themeOptions label:hover {
   color: var(--text-primary);
   border-color: var(--border-strong);
 }
 
-.themeOptions button[aria-checked="true"] {
+.themeOptions label:has(input:checked) {
   color: var(--text-primary);
   border-color: var(--selection-edge);
   box-shadow: inset 0 -2px var(--accent);
+}
+
+.themeOptions label:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* 保留原生单选组的方向键和 Tab 行为，焦点由所在选项卡呈现。 */
+.themeOptions input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
 }
 
 .libraryDetails,

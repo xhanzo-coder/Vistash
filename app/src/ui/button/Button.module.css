@@ -47,7 +47,7 @@
 .compact {
   min-height: 1.75rem;
   padding-inline: 0.625rem;
-  font-size: var(--text-size-xs);
+  font-size: var(--text-size-sm);
 }
 
 .primary {

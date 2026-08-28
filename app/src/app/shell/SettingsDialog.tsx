@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { GearIcon } from "@phosphor-icons/react/dist/csr/Gear";
 
 import { Button, IconButton } from "../../ui/button/Button";
@@ -35,6 +35,7 @@ function SettingsContent({
   section: SettingsSection;
 }): ReactNode {
   const { setPreference, snapshot } = useTheme();
+  const themeGroupName = useId();
   switch (section) {
     case "appearance":
       return (
@@ -43,15 +44,18 @@ function SettingsContent({
           <p>主题会立即应用，不改变当前查询、选择或滚动位置。</p>
           <div className={styles.themeOptions} role="radiogroup" aria-label="主题">
             {THEMES.map((theme) => (
-              <button
-                key={theme.id}
-                type="button"
-                role="radio"
-                aria-checked={snapshot.preference === theme.id}
-                onClick={() => setPreference(theme.id)}
-              >
-                {theme.label}
-              </button>
+              <label key={theme.id}>
+                <input
+                  type="radio"
+                  name={themeGroupName}
+                  value={theme.id}
+                  checked={snapshot.preference === theme.id}
+                  // 弹窗按 tabIndex 计算循环边界；未选项仍由原生方向键访问。
+                  tabIndex={snapshot.preference === theme.id ? 0 : -1}
+                  onChange={() => setPreference(theme.id)}
+                />
+                <span>{theme.label}</span>
+              </label>
             ))}
           </div>
         </section>

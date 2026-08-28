@@ -58,7 +58,8 @@ describe("Dialog", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     });
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    // Radix 在卸载后的定时任务中恢复焦点；等待可观察结果，不把调度快慢当作行为。
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 });
 

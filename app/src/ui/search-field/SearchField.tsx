@@ -1,4 +1,4 @@
-import { useId, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
@@ -29,6 +29,7 @@ export function SearchField({
   ...props
 }: SearchFieldProps): ReactNode {
   const id = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== "Escape" || value.length === 0) return;
@@ -43,6 +44,7 @@ export function SearchField({
       <MagnifyingGlassIcon className={styles.searchIcon} aria-hidden="true" />
       <input
         {...props}
+        ref={inputRef}
         id={id}
         type="search"
         name={name}
@@ -54,16 +56,22 @@ export function SearchField({
         onChange={(event) => onValueChange(event.currentTarget.value)}
         onKeyDown={handleKeyDown}
       />
-      {value.length === 0 ? null : (
-        <IconButton
-          className={styles.clearButton}
-          size="compact"
-          label="清除搜索"
-          icon={<XIcon />}
-          disabled={disabled}
-          onClick={() => onValueChange("")}
-        />
-      )}
+      {/* 始终预留清除操作的位置；空搜索不留下可聚焦的隐藏按钮。 */}
+      <span className={styles.clearSlot}>
+        {value.length === 0 ? null : (
+          <IconButton
+            className={styles.clearButton}
+            size="compact"
+            label="清除搜索"
+            icon={<XIcon />}
+            disabled={disabled}
+            onClick={() => {
+              onValueChange("");
+              inputRef.current?.focus();
+            }}
+          />
+        )}
+      </span>
       {shortcut === undefined ? null : (
         <kbd className={styles.shortcut} aria-hidden="true">
           {shortcut}

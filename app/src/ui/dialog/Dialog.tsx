@@ -15,6 +15,8 @@ export type DialogProps = {
   open?: boolean;
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onOpenAutoFocus?: (event: Event) => void;
+  onCloseAutoFocus?: (event: Event) => void;
 };
 
 /**
@@ -27,6 +29,8 @@ export function Dialog({
   description,
   footer,
   onOpenChange,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
   open,
   title,
   trigger,
@@ -40,7 +44,9 @@ export function Dialog({
       <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className={styles.overlay} />
-        <DialogPrimitive.Content className={styles.content}>
+        <DialogPrimitive.Content className={styles.content}
+          {...(onOpenAutoFocus === undefined ? {} : { onOpenAutoFocus })}
+          {...(onCloseAutoFocus === undefined ? {} : { onCloseAutoFocus })}>
           <header className={styles.header}>
             <div className={styles.heading}>
               <DialogPrimitive.Title className={styles.title}>{title}</DialogPrimitive.Title>

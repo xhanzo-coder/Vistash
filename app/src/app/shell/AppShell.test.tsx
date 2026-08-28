@@ -260,10 +260,20 @@ describe("AppShell 设置", () => {
     expect(dialog?.textContent).not.toContain("API Key");
     expect(dialog?.textContent).not.toContain("云同步");
 
-    const light = [...(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-      (button) => button.textContent === "浅色",
-    );
-    await act(async () => light?.click());
+    const group = dialog?.querySelector<HTMLElement>('[role="radiogroup"][aria-label="主题"]');
+    if (group === undefined || group === null) throw new Error("设置缺少主题单选组");
+    const radios = [...group.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+    expect(radios).toHaveLength(3);
+    expect(new Set(radios.map((radio) => radio.name)).size).toBe(1);
+    expect(radios.every((radio) => radio.name.length > 0)).toBe(true);
+    expect(radios.filter((radio) => radio.checked).map((radio) => radio.value)).toEqual(["dark"]);
+    expect(radios.filter((radio) => radio.tabIndex === 0).map((radio) => radio.value)).toEqual(["dark"]);
+    const light = group.querySelector<HTMLInputElement>('input[value="light"]');
+    if (light === null) throw new Error("设置缺少浅色单选控件");
+    expect(light.labels?.[0]?.textContent).toBe("浅色");
+    await act(async () => light.click());
+    expect(radios.filter((radio) => radio.checked).map((radio) => radio.value)).toEqual(["light"]);
+    expect(radios.filter((radio) => radio.tabIndex === 0).map((radio) => radio.value)).toEqual(["light"]);
     expect(document.documentElement.dataset.theme).toBe("light");
 
     const libraryTab = [...(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(

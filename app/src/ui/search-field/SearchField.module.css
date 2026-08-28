@@ -52,6 +52,12 @@
   flex: 0 0 auto;
 }
 
+.clearSlot {
+  display: flex;
+  width: 1.75rem;
+  flex: 0 0 1.75rem;
+}
+
 .clearButton {
   width: 1.5rem;
   min-height: 1.5rem;

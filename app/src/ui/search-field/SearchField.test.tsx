@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 
@@ -8,6 +8,11 @@ import { SearchField } from "./SearchField";
 
 let container: HTMLDivElement | null = null;
 let root: ReturnType<typeof createRoot> | null = null;
+
+function ControlledSearch(): ReactNode {
+  const [value, setValue] = useState("雨夜");
+  return <SearchField label="搜索图片" name="asset-search" placeholder="按文件名搜索…" value={value} onValueChange={setValue} />;
+}
 
 beforeAll(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
@@ -80,4 +85,38 @@ test("Escape 清空搜索并把焦点留在输入框", () => {
 
   expect(onValueChange).toHaveBeenCalledWith("");
   expect(document.activeElement).toBe(input);
+});
+
+test("清除按钮卸载后焦点回到搜索框", () => {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  act(() => root?.render(<ControlledSearch />));
+  const input = container.querySelector<HTMLInputElement>("input");
+  const clear = container.querySelector<HTMLButtonElement>('button[aria-label="清除搜索"]');
+  if (input === null || clear === null) throw new Error("搜索测试缺少输入框或清除按钮");
+  clear.focus();
+  act(() => clear.click());
+
+  expect(input.value).toBe("");
+  expect(container.querySelector('button[aria-label="清除搜索"]')).toBeNull();
+  expect(document.activeElement).toBe(input);
+});
+
+test("禁用搜索不能输入或清除，也不发出值变更", () => {
+  const onValueChange = vi.fn<(value: string) => void>();
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  act(() => root?.render(
+    <SearchField disabled label="搜索图片" name="asset-search" placeholder="按文件名搜索…" value="雨夜" onValueChange={onValueChange} />,
+  ));
+  const input = container.querySelector<HTMLInputElement>("input");
+  const clear = container.querySelector<HTMLButtonElement>('button[aria-label="清除搜索"]');
+  if (input === null || clear === null) throw new Error("搜索测试缺少输入框或清除按钮");
+  expect(input.disabled).toBe(true);
+  expect(clear.disabled).toBe(true);
+  act(() => clear.click());
+  expect(input.value).toBe("雨夜");
+  expect(onValueChange).not.toHaveBeenCalled();
 });
