@@ -14,11 +14,22 @@ import type { AssetLocationScope } from "../../app/navigation";
 import type { OpenLibrarySession } from "../library-lifecycle";
 
 export { AssetLibraryWorkspace } from "./internal/AssetLibraryWorkspace";
+export {
+  canStopTransferTask,
+  getTransferTaskStopError,
+  stopTransferTask as stopAssetTransferTask,
+} from "./internal/AssetTransfer";
 
 /** 应用外壳交给图片工作区的一次性入口：恢复现场，或按哈希定位到活动库/回收站。 */
 export type AssetLibraryEntry =
   | { kind: "resume" }
   | { kind: "locate"; requestId: RequestId; hash: AssetId; location: AssetLocationScope };
+
+/** 应用外壳发给图片工作区的一次性入站意图；路径选择仍由图片模块自己的 transfer seam 完成。 */
+export type AssetImportRequest = {
+  requestId: RequestId;
+  kind: "images" | "folder" | "clipboard";
+};
 
 /**
  * 图片工作区的组合属性：由应用外壳持有会话与一级导航状态后下发。
@@ -31,4 +42,7 @@ export type AssetLibraryWorkspaceProps = {
   active: boolean;
   /** 待处理的定位条目；模块消费后按 `requestId` 去重。 */
   entry?: AssetLibraryEntry;
+  /** 顶栏导入菜单发来的单次意图；组件消费后通过回调确认，不重复触发。 */
+  importRequest?: AssetImportRequest;
+  onImportRequestHandled?: (requestId: RequestId) => void;
 };

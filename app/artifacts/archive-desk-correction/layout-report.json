@@ -1,0 +1,106 @@
+[
+  {
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 49,
+      "navigationTop": 49,
+      "headingTop": 49,
+      "inspectorTop": 49,
+      "scrollWidth": 1440
+    }
+  },
+  {
+    "theme": "light",
+    "width": 1274,
+    "height": 819,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 49,
+      "navigationTop": 49,
+      "headingTop": 49,
+      "inspectorTop": 49,
+      "scrollWidth": 1274
+    }
+  },
+  {
+    "theme": "light",
+    "width": 960,
+    "height": 760,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 89,
+      "navigationTop": 89,
+      "headingTop": 89,
+      "inspectorTop": 89,
+      "scrollWidth": 960
+    }
+  },
+  {
+    "theme": "light",
+    "width": 760,
+    "height": 600,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 85,
+      "navigationTop": 85,
+      "headingTop": 85,
+      "inspectorTop": null,
+      "scrollWidth": 760
+    }
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 49,
+      "navigationTop": 49,
+      "headingTop": 49,
+      "inspectorTop": 49,
+      "scrollWidth": 1440
+    }
+  },
+  {
+    "theme": "dark",
+    "width": 1274,
+    "height": 819,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 49,
+      "navigationTop": 49,
+      "headingTop": 49,
+      "inspectorTop": 49,
+      "scrollWidth": 1274
+    }
+  },
+  {
+    "theme": "dark",
+    "width": 960,
+    "height": 760,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 89,
+      "navigationTop": 89,
+      "headingTop": 89,
+      "inspectorTop": 89,
+      "scrollWidth": 960
+    }
+  },
+  {
+    "theme": "dark",
+    "width": 760,
+    "height": 600,
+    "source": "production-component-memory-fixture",
+    "geometry": {
+      "workspaceTop": 85,
+      "navigationTop": 85,
+      "headingTop": 85,
+      "inspectorTop": null,
+      "scrollWidth": 760
+    }
+  }
+]

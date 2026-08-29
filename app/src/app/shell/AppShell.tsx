@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore, type ReactNode } from "react";
 
 import type { LibraryId } from "../common";
+import type { AppError } from "../../shared/types";
 import type { GlobalSearch } from "../globalSearch";
 import type { TaskCenter } from "../taskCenter";
 import type { WorkspaceId, WorkspaceNavigation } from "../navigation";
@@ -26,6 +27,10 @@ export type AppShellProps = {
   appVersion: string;
   onImportImages: () => void;
   onImportFolder: () => void;
+  onImportClipboard: () => void;
+  onStopTask?: (taskId: string) => Promise<void>;
+  canStopTask?: (taskId: string) => boolean;
+  getStopError?: (taskId: string) => AppError | null;
   onOpenOtherLibrary: () => void;
   assets: ReactNode;
   prompts: ReactNode;
@@ -62,8 +67,14 @@ export function AppShell(props: AppShellProps): ReactNode {
             <ImportMenu
               onImportImages={props.onImportImages}
               onImportFolder={props.onImportFolder}
+              onImportClipboard={props.onImportClipboard}
             />
-            <TaskCenterPopover taskCenter={props.taskCenter} />
+            <TaskCenterPopover
+              taskCenter={props.taskCenter}
+              {...(props.onStopTask === undefined ? {} : { onStopTask: props.onStopTask })}
+              {...(props.canStopTask === undefined ? {} : { canStopTask: props.canStopTask })}
+              {...(props.getStopError === undefined ? {} : { getStopError: props.getStopError })}
+            />
             <SettingsDialog
               appVersion={props.appVersion}
               library={props.library}

@@ -345,6 +345,8 @@ pub struct V3MigrationPlanEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V3MigrationPlan {
     pub entries: Vec<V3MigrationPlanEntry>,
+    /// 规划时文件夹清单的原始字节摘要；提交前必须仍然一致。
+    pub folder_list_sha256: ContentHash,
 }
 
 /// 使用者对一个多归属素材选择的唯一保留文件夹。
@@ -368,6 +370,8 @@ pub struct ResolvedV3MigrationPlanEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedV3MigrationPlan {
     pub entries: Vec<ResolvedV3MigrationPlanEntry>,
+    /// 规划时文件夹清单的原始字节摘要；清单变化也会让计划失效。
+    pub folder_list_sha256: ContentHash,
 }
 
 impl ResolvedV3MigrationPlan {
@@ -380,6 +384,7 @@ impl ResolvedV3MigrationPlan {
     ///
     /// 路径越界、侧车丢失或摘要变化返回 `migration.plan_stale`。
     pub fn verify_source_unchanged(&self, root: &Path) -> Result<()> {
+        verify_folder_list_unchanged(root, &self.folder_list_sha256)?;
         let planned: Vec<(&str, &ContentHash)> = self
             .entries
             .iter()
@@ -423,6 +428,14 @@ impl V3MigrationPlan {
             }
         }
 
+        let folder_list_path = root.join(FOLDERS_FILE);
+        let folder_list_bytes = std::fs::read(&folder_list_path).map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("读取文件夹清单失败 {}: {error}", folder_list_path.display()),
+            )
+        })?;
+        let folder_list_sha256 = ContentHash::of_bytes(&folder_list_bytes);
         let mut entries = Vec::new();
         for path in collect_sidecars(root)? {
             let bytes = std::fs::read(&path).map_err(|error| {
@@ -447,7 +460,15 @@ impl V3MigrationPlan {
                     ),
                 ));
             }
-            let folder = match sidecar.folders.as_slice() {
+            // 回收站侧车的 `folders` 是空的；可恢复的原归属只存在于
+            // `deleted_from_folders`。活动素材仍读取 `folders`，两种位置不能混为
+            // 一谈，否则迁移后还原会静默落到未分类。
+            let folders: &[String] = if sidecar.deleted_at.is_some() {
+                sidecar.deleted_from_folders.as_deref().unwrap_or(&[])
+            } else {
+                &sidecar.folders
+            };
+            let folder = match folders {
                 [] => V3FolderPlan::Automatic(None),
                 [folder] => V3FolderPlan::Automatic(Some(folder.clone())),
                 folders => V3FolderPlan::Conflict(folders.to_vec()),
@@ -460,7 +481,10 @@ impl V3MigrationPlan {
                 folder,
             });
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            folder_list_sha256,
+        })
     }
 
     /// 检查规划时读取的每个侧车仍与记录的 SHA-256 完全相同。
@@ -469,6 +493,7 @@ impl V3MigrationPlan {
     ///
     /// 路径越界、侧车丢失或摘要变化返回 `migration.plan_stale`。
     pub fn verify_source_unchanged(&self, root: &Path) -> Result<()> {
+        verify_folder_list_unchanged(root, &self.folder_list_sha256)?;
         let planned: Vec<(&str, &ContentHash)> = self
             .entries
             .iter()
@@ -544,7 +569,10 @@ impl V3MigrationPlan {
                 hash.as_str()
             )));
         }
-        Ok(ResolvedV3MigrationPlan { entries })
+        Ok(ResolvedV3MigrationPlan {
+            entries,
+            folder_list_sha256: self.folder_list_sha256.clone(),
+        })
     }
 }
 
@@ -944,6 +972,12 @@ impl<'a> V3MigrationCommit<'a> {
     /// 任何一次“解析再序列化”都会让回滚结果取决于当前程序的序列化实现。
     fn back_up_authority(&self, session: &Path) -> Result<()> {
         let backup_root = session.join(BACKUP_SUBDIR);
+        std::fs::create_dir_all(&backup_root).map_err(|error| {
+            AppError::detailed(
+                Code::MigrationBackupFailed,
+                format!("建立迁移备份目录失败 {}: {error}", backup_root.display()),
+            )
+        })?;
         for entry in &self.plan.entries {
             let from = plan_sidecar_path(&self.root, &entry.sidecar_relative_path)?;
             let to = backup_root.join(&entry.sidecar_relative_path);
@@ -1235,9 +1269,9 @@ fn staged_meta_json(meta: &LibraryMetaV2) -> Result<Vec<u8>> {
 /// 把一张 v2 侧车映射为设计第八条的 v3 形状。
 ///
 /// 归属取解决后的唯一文件夹：零归属与单归属自动继承，多归属来自使用者的明确选择。
-/// 回收站素材的删除来源采用同一归属——“删除前的家”与“归属”在单归属模型里是同一个
-/// 事实，两处各算一遍迟早出现互相矛盾的两个家。显示文件名取自旧原始文件名去掉扩展名，
-/// 扩展名由真实媒体类型重新给出。
+/// 回收站素材的活动归属必须保持为空，删除前的唯一归属单独写入
+/// `deleted_from_folder`，供还原事务恢复；不能把它误写回活动文件夹。显示文件名取自
+/// 旧原始文件名去掉扩展名，扩展名由真实媒体类型重新给出。
 fn convert_sidecar_v2_to_v3(v2: &AssetSidecarV2, folder: Option<&str>) -> Result<AssetSidecarV3> {
     let original_filename = v2.original_filename.clone();
     // v2 的 ext 在导入时归一成小写（本体路径 `<hash>.<ext>` 依赖它），而原始文件名
@@ -1249,6 +1283,12 @@ fn convert_sidecar_v2_to_v3(v2: &AssetSidecarV2, folder: Option<&str>) -> Result
     // 先于结构体字面量构造显示名：stem 借着 original_filename，而后者随后要整体
     // 移动进来源字段。
     let display_filename = DisplayFilename::new(stem, v2.media_type)?;
+    let folder = folder.map(str::to_owned);
+    let deleted_from_folder = if v2.deleted_at.is_some() {
+        folder.clone()
+    } else {
+        None
+    };
     Ok(AssetSidecarV3 {
         format_version: SIDECAR_FORMAT_VERSION_V3,
         hash: v2.hash.clone(),
@@ -1264,17 +1304,13 @@ fn convert_sidecar_v2_to_v3(v2: &AssetSidecarV2, folder: Option<&str>) -> Result
             filename: original_filename,
         },
         display_filename,
-        folder: folder.map(str::to_owned),
+        folder: if v2.deleted_at.is_some() { None } else { folder },
         tags: v2.tags.clone(),
         color_card: v2.color_card.clone(),
         note: v2.note.clone(),
         favorite: v2.favorite,
         deleted_at: v2.deleted_at,
-        deleted_from_folder: if v2.deleted_at.is_some() {
-            folder.map(str::to_owned)
-        } else {
-            None
-        },
+        deleted_from_folder,
     })
 }
 
@@ -1484,6 +1520,23 @@ fn verify_plan_inputs_unchanged(root: &Path, planned: &[(&str, &ContentHash)]) -
                 format!("迁移输入在规划后被修改：{}", path.display()),
             ));
         }
+    }
+    Ok(())
+}
+
+fn verify_folder_list_unchanged(root: &Path, planned: &ContentHash) -> Result<()> {
+    let path = root.join(FOLDERS_FILE);
+    let bytes = std::fs::read(&path).map_err(|error| {
+        AppError::detailed(
+            Code::MigrationPlanStale,
+            format!("迁移文件夹清单已不可读 {}: {error}", path.display()),
+        )
+    })?;
+    if &ContentHash::of_bytes(&bytes) != planned {
+        return Err(AppError::detailed(
+            Code::MigrationPlanStale,
+            "迁移规划后文件夹清单发生变化",
+        ));
     }
     Ok(())
 }
@@ -2290,7 +2343,8 @@ mod tests {
     use crate::hashing::ContentHash;
     use crate::library::{
         CurrentLibraryMeta, LibraryMetaV2, LIBRARY_FORMAT_VERSION_V2, LIBRARY_FORMAT_VERSION_V3,
-        META_FILE, PROMPTS_DIR, PROMPT_FOLDERS_FILE, PROMPT_OBJECTS_DIR, PROMPT_TRASH_DIR,
+        FOLDERS_FILE, META_FILE, PROMPTS_DIR, PROMPT_FOLDERS_FILE, PROMPT_OBJECTS_DIR,
+        PROMPT_TRASH_DIR,
     };
     use crate::media::MediaType;
     use crate::prompt::PromptFolderList;
@@ -2452,7 +2506,7 @@ mod tests {
             .run(
                 &mut |_root| {
                     rebuilds += 1;
-                    Ok(())
+                    crate::index::Index::rebuild_at(_root).map(|_| ())
                 },
                 &mut |p| seen.push(p),
             )
@@ -2688,7 +2742,10 @@ mod tests {
             .expect_err("v3 库不应再生成 v2→v3 迁移计划");
         assert_eq!(err.code, Code::MigrationPlanStale);
 
-        let resolved = ResolvedV3MigrationPlan { entries: Vec::new() };
+        let resolved = ResolvedV3MigrationPlan {
+            entries: Vec::new(),
+            folder_list_sha256: ContentHash::of_bytes(b"empty-test-plan"),
+        };
         let err = V3MigrationCommit::new(&resolved, &f.root)
             .run(&mut ok_rebuild(), &mut |_| {})
             .expect_err("v3 库不应再被 v2→v3 提交接受");
@@ -2901,6 +2958,10 @@ mod tests {
             let mut sidecar_value = v2_sidecar_fixture(&hash, folders);
             if deleted {
                 sidecar_value.deleted_at = Some(ts(120));
+                // v2 回收站侧车不再把删除前归属放在活动 folders；还原依据只在
+                // deleted_from_folders 中。这与真实 v2 删除事务的形状一致，也能
+                // 防止迁移实现误把回收站素材当作未分类素材。
+                sidecar_value.folders.clear();
                 sidecar_value.deleted_from_folders =
                     Some(folders.iter().map(|folder| (*folder).to_owned()).collect());
             }
@@ -3057,6 +3118,50 @@ mod tests {
         let mut ranked = seen.clone();
         ranked.sort();
         assert_eq!(ranked, seen, "进度阶段必须单调推进");
+    }
+
+    #[test]
+    fn changing_the_folder_list_after_planning_invalidates_the_v3_commit() {
+        let f = v2_library(2);
+        let resolved = resolved_plan(&f);
+        let folders_path = f.root.join(FOLDERS_FILE);
+        let mut folders: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&folders_path).expect("读取文件夹清单"),
+        )
+        .expect("解析文件夹清单");
+        folders["folders"]
+            .as_array_mut()
+            .expect("文件夹清单应为数组")
+            .push(serde_json::json!("外部变更"));
+        std::fs::write(
+            &folders_path,
+            serde_json::to_vec_pretty(&folders).expect("序列化变更后的清单"),
+        )
+        .expect("写入变更后的清单");
+
+        let error = V3MigrationCommit::new(&resolved, &f.root)
+            .run(&mut ok_rebuild(), &mut |_| {})
+            .expect_err("文件夹清单变化后不得继续提交旧迁移计划");
+        assert_eq!(error.code, Code::MigrationPlanStale);
+    }
+
+    #[test]
+    fn an_empty_v2_library_can_commit_to_v3() {
+        let f = v2_library(2);
+        for path in collect_sidecars(&f.root).expect("扫描空库前的侧车") {
+            std::fs::remove_file(path).expect("清理空库测试侧车");
+        }
+        let plan = V3MigrationPlan::inspect(&f.root).expect("生成空库迁移计划");
+        assert!(plan.entries.is_empty());
+        let resolved = plan.resolve(&[]).expect("解决空库迁移计划");
+        V3MigrationCommit::new(&resolved, &f.root)
+            .run(&mut ok_rebuild(), &mut |_| {})
+            .expect("空 v2 库也应完成 v3 提交");
+        let meta: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(f.root.join(META_FILE)).expect("读取升级后的库元数据"),
+        )
+        .expect("解析升级后的库元数据");
+        assert_eq!(meta["format_version"], 3);
     }
 
     #[test]

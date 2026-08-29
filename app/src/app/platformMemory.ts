@@ -23,6 +23,10 @@ import type { ImageLease, PlatformPort } from "./platform";
 export type MemoryPlatformConfig = {
   /** 图片选择对话框的预置结果；缺省视为使用者取消（空数组）。 */
   pickedImageFiles?: string[];
+  /** 图片目录选择对话框的预置结果；null 即使用者取消。 */
+  pickedImportDirectory?: string | null;
+  /** 导出目录选择对话框的预置结果；null 即使用者取消。 */
+  pickedExportDirectory?: string | null;
   /** 库位置对话框的预置结果；null 即使用者取消。 */
   pickedLibraryDirectory?: string | null;
 };
@@ -32,6 +36,10 @@ export type MemoryPlatform = PlatformPort & {
   answerImageFiles(paths: string[]): void;
   /** 覆盖库位置对话框的下一次结果。 */
   answerLibraryDirectory(value: string | null): void;
+  /** 覆盖导入目录对话框的下一次结果。 */
+  answerImportDirectory(value: string | null): void;
+  /** 覆盖导出目录对话框的下一次结果。 */
+  answerExportDirectory(value: string | null): void;
   /** 武装一次性失败：该方法的下一次调用以携带稳定错误码的 `IpcError` 拒绝，随后自动解除。 */
   failOnce(method: keyof PlatformPort, error: AppError): void;
   /** 向当前全部订阅者投递一条已映射的拖放事件。 */
@@ -53,6 +61,8 @@ export function createMemoryPlatform(config: MemoryPlatformConfig = {}): MemoryP
   const copied: string[] = [];
   const opened: string[] = [];
   let imageFiles = config.pickedImageFiles ?? [];
+  let importDirectory = config.pickedImportDirectory ?? null;
+  let exportDirectory = config.pickedExportDirectory ?? null;
   let libraryDirectory = config.pickedLibraryDirectory ?? null;
 
   const EMPTY_IMPORT: ImportOutcome = {
@@ -94,6 +104,16 @@ export function createMemoryPlatform(config: MemoryPlatformConfig = {}): MemoryP
       const failure = takeFailure("pickImageFiles");
       if (failure !== undefined) throw new IpcError(failure);
       return [...imageFiles];
+    },
+    pickImportDirectory: async () => {
+      const failure = takeFailure("pickImportDirectory");
+      if (failure !== undefined) throw new IpcError(failure);
+      return importDirectory;
+    },
+    pickExportDirectory: async () => {
+      const failure = takeFailure("pickExportDirectory");
+      if (failure !== undefined) throw new IpcError(failure);
+      return exportDirectory;
     },
     pickLibraryDirectory: async () => {
       const failure = takeFailure("pickLibraryDirectory");
@@ -142,6 +162,12 @@ export function createMemoryPlatform(config: MemoryPlatformConfig = {}): MemoryP
 
     answerImageFiles(paths) {
       imageFiles = [...paths];
+    },
+    answerImportDirectory(value) {
+      importDirectory = value;
+    },
+    answerExportDirectory(value) {
+      exportDirectory = value;
     },
     answerLibraryDirectory(value) {
       libraryDirectory = value;

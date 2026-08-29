@@ -41,7 +41,9 @@ def main():
                         page.get_by_role("button", name="详情列表", exact=True).click()
                         expect(page.locator('[data-list-item][aria-selected="true"]')).to_have_count(1)
                         page.get_by_role("button", name="切换测试库", exact=True).click()
-                        expect(page.get_by_role("heading", name="图片会话 · 乙库", exact=True)).to_be_visible()
+                        # 库身份位于侧栏；集合标题只表示当前查询范围。
+                        expect(page.get_by_role("navigation", name="图片导航", exact=True)).to_contain_text("图片会话 · 乙库")
+                        expect(page.get_by_role("heading", name="全部图片", exact=True)).to_be_visible()
                         expect(search).to_have_value("")
                         expect(page.get_by_role("button", name="瀑布流", exact=True)).to_have_attribute("aria-pressed", "true")
                         page.get_by_role("button", name="切换测试库", exact=True).click()

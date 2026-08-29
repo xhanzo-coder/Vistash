@@ -13,6 +13,16 @@ def choose_folder(page, path, width):
     expect(page.get_by_role("dialog")).to_have_count(0)
 
 
+def open_navigation(page, width):
+    if width <= 1050:
+        page.get_by_role("button", name="图片导航", exact=True).click()
+
+
+def close_navigation(page, width):
+    if width <= 1050:
+        page.get_by_role("dialog", name="图片导航", exact=True).get_by_role("button", name="关闭", exact=True).click()
+
+
 def drag(page, source, target, cancel=False):
     start = source.bounding_box()
     end = target.bounding_box()
@@ -55,7 +65,7 @@ def main():
                             expect(page.get_by_role("region", name="操作结果")).to_have_count(0)
                             drag(page, first, target)
                         else:
-                            page.get_by_role("button", name="移动到文件夹", exact=True).click()
+                            page.get_by_role("button", name="移动", exact=True).click()
                             move = page.get_by_role("dialog", name="移动图片", exact=True)
                             move.locator('select[name="move-target"]').select_option("folder:参考")
                             move.get_by_role("button", name="确认移动", exact=True).click()
@@ -63,6 +73,7 @@ def main():
                         expect(page.get_by_role("region", name="操作结果")).to_contain_text("成功 2 项")
                         choose_folder(page, "参考", width)
                         expect(page.get_by_role("listbox", name="图片集合").get_by_role("option")).to_have_count(2)
+                        open_navigation(page, width)
                         page.get_by_role("button", name="新建文件夹", exact=True).click()
                         create = page.get_by_role("dialog", name="新建文件夹", exact=True)
                         name = create.locator('input[name="folder-name"]')
@@ -73,7 +84,9 @@ def main():
                         name.fill("灵感")
                         create.get_by_role("button", name="创建文件夹", exact=True).click()
                         expect(create).to_have_count(0)
-                        expect(page.locator('[aria-label="图片工作区"] > header > span')).to_have_text("参考/灵感")
+                        close_navigation(page, width)
+                        expect(page.get_by_role("heading", name="参考/灵感", exact=True)).to_be_visible()
+                        open_navigation(page, width)
                         page.get_by_role("button", name="重命名文件夹", exact=True).click()
                         rename = page.get_by_role("dialog", name="重命名文件夹", exact=True)
                         rename.locator("select").select_option("参考")
@@ -81,9 +94,11 @@ def main():
                         page.screenshot(path=str(artifacts / f"rename-{theme}-{width}.png"), animations="disabled")
                         rename.get_by_role("button", name="保存名称", exact=True).click()
                         expect(rename).to_have_count(0)
-                        expect(page.locator('[aria-label="图片工作区"] > header > span')).to_have_text("档案/灵感")
+                        close_navigation(page, width)
+                        expect(page.get_by_role("heading", name="档案/灵感", exact=True)).to_be_visible()
                         choose_folder(page, "档案", width)
                         expect(page.get_by_role("listbox", name="图片集合").get_by_role("option")).to_have_count(2)
+                        open_navigation(page, width)
                         page.get_by_role("button", name="删除文件夹", exact=True).click()
                         remove = page.get_by_role("dialog", name="删除文件夹", exact=True)
                         remove.get_by_role("button", name="继续删除", exact=True).click()
@@ -93,7 +108,8 @@ def main():
                         remove.get_by_role("button", name="继续删除", exact=True).click()
                         page.get_by_role("alertdialog").get_by_role("button", name="确认删除文件夹", exact=True).click()
                         expect(remove).to_have_count(0)
-                        expect(page.locator('[aria-label="图片工作区"] > header > span')).to_have_text("未分类")
+                        close_navigation(page, width)
+                        expect(page.get_by_role("heading", name="未分类", exact=True)).to_be_visible()
                         expect(page.locator('[data-folder="档案"]')).to_have_count(0)
                         expect(first).to_be_visible()
                         expect(second).to_be_visible()

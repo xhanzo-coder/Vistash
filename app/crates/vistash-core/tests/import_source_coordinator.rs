@@ -457,6 +457,32 @@ fn a_requested_stop_is_not_confirmed_until_the_coordinator_returns() {
     assert_eq!(run.state(), TransferRunState::Stopped);
 }
 
+#[test]
+fn a_stop_request_is_idempotent_after_the_same_run_is_confirmed_stopped() {
+    let f = fixture();
+    let runs = TransferRuns::new();
+    let run = begin_run(&runs, &f.library);
+    let task_id = run.id().as_str().to_owned();
+
+    import_sources(
+        &f.library,
+        &ImportRequest {
+            sources: vec![],
+            current_folder: None,
+        },
+        &[],
+        &run,
+        &mut NoopTransferObserver,
+    )
+    .expect("空请求应确认任务终态");
+
+    assert_eq!(
+        runs.request_stop(&f.library, &task_id)
+            .expect("同一任务的重复停止请求应幂等"),
+        TransferRunState::Stopped
+    );
+}
+
 // —— 组六：扫描阶段停止 ——
 
 #[test]

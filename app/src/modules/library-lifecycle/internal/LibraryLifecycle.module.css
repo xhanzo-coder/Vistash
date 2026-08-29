@@ -197,6 +197,10 @@
   margin: 0;
 }
 
+.migrationTaskCenter {
+  justify-self: start;
+}
+
 .migrationProgressCard h1,
 .migrationHeader h1 {
   font-family: var(--font-display);
@@ -242,6 +246,14 @@
 
 .migrationHeader {
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.migrationHeaderActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 .migrationHeader h1,
@@ -377,6 +389,10 @@
   .migrationFooter {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .migrationHeaderActions {
+    justify-content: space-between;
   }
 
   .migrationFooter > button {

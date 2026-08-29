@@ -19,9 +19,9 @@ export function filenameTarget(asset: AssetRow): FilenameTarget {
 }
 
 /** 文件身份区；来源记录始终只读，不暴露可写的库内哈希对象。 */
-export function FileInformation({ asset, count, editable, onEdit }: { asset: AssetRow | null; count: number; editable: boolean; onEdit: () => void }): ReactNode {
+export function FileInformation({ asset }: { asset: AssetRow | null }): ReactNode {
   return <section className={styles.information} aria-label="图片文件信息">
-    {asset === null ? <p>{count > 1 ? "请选择单张图片编辑文件名，不支持批量重命名。" : "选择一张图片查看文件信息。"}</p> : <>
+    {asset === null ? <p>选择一张图片查看文件信息。</p> : <>
       <dl>
         <div><dt>显示文件名</dt><dd>{asset.display_filename}</dd></div>
         <div><dt>来源文件名</dt><dd>{asset.original_filename}</dd></div>
@@ -32,8 +32,6 @@ export function FileInformation({ asset, count, editable, onEdit }: { asset: Ass
         <div><dt>来源路径</dt><dd>{asset.source_path === null ? "未记录来源路径" : asset.source_path}</dd></div>
         <div><dt>内容哈希（{asset.hash_algo}）</dt><dd translate="no">{asset.hash}</dd></div>
       </dl>
-      <Button size="compact" disabled={!editable} onClick={onEdit}>编辑显示文件名</Button>
-      <p className={styles.hint}>修改显示名称不会重命名库内原图，也不会改变来源记录。</p>
     </>}
   </section>;
 }
@@ -84,11 +82,9 @@ function FilenameForm({ libraryId, target, onClose, inputRef }: {
 }
 
 /** 打开时的 target 固定写入身份；刷新、查询和选择变化不覆盖尚未保存的输入。 */
-export function RenameAssetDialog({ libraryId, target, disabled, onOpen, onClose, restoreFocus }: {
+export function RenameAssetDialog({ libraryId, target, onClose, restoreFocus }: {
   libraryId: LibraryId;
   target: FilenameTarget | null;
-  disabled: boolean;
-  onOpen: () => void;
   onClose: () => void;
   restoreFocus: () => void;
 }): ReactNode {
@@ -98,8 +94,7 @@ export function RenameAssetDialog({ libraryId, target, disabled, onOpen, onClose
     open={target !== null}
     onOpenChange={(next) => {
       if (busy) return;
-      if (next) onOpen();
-      else onClose();
+      if (!next) onClose();
     }}
     onOpenAutoFocus={(event) => {
       event.preventDefault();
@@ -107,8 +102,7 @@ export function RenameAssetDialog({ libraryId, target, disabled, onOpen, onClose
       if (input === null) throw new Error("重命名对话框缺少输入框");
       input.focus(); input.select();
     }}
-    onCloseAutoFocus={(event) => { event.preventDefault(); restoreFocus(); }}
-    trigger={<Button size="compact" disabled={disabled}>修改文件名</Button>}>
+    onCloseAutoFocus={(event) => { event.preventDefault(); restoreFocus(); }}>
     {target === null ? null : <FilenameForm key={target.hash} libraryId={libraryId} target={target} onClose={onClose} inputRef={inputRef} />}
   </Dialog>;
 }

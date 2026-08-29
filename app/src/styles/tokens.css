@@ -7,6 +7,10 @@
   --surface-raised: #f8f5ee;
   --surface-sunken: #e7e3da;
   --surface-input: #fbf8f1;
+  /* 灯箱媒体表面独立于应用主题，方便检查透明像素与边缘。 */
+  --surface-media-dark: #0f1111;
+  --surface-media-light: #f8f5ee;
+  --surface-media-checker: #c9c5bc;
   --surface-backdrop: rgb(17 19 19 / 72%);
   --surface-rail: #e9e5dc;
   --surface-rail-raised: #dedad1;

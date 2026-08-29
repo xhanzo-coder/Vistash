@@ -1,0 +1,42 @@
+[
+  {
+    "theme": "dark",
+    "width": 1440,
+    "file_picker": true,
+    "folder_picker": true,
+    "clipboard": true,
+    "task_center": true,
+    "empty_guide": true,
+    "errors": []
+  },
+  {
+    "theme": "dark",
+    "width": 760,
+    "file_picker": true,
+    "folder_picker": true,
+    "clipboard": true,
+    "task_center": true,
+    "empty_guide": true,
+    "errors": []
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "file_picker": true,
+    "folder_picker": true,
+    "clipboard": true,
+    "task_center": true,
+    "empty_guide": true,
+    "errors": []
+  },
+  {
+    "theme": "light",
+    "width": 760,
+    "file_picker": true,
+    "folder_picker": true,
+    "clipboard": true,
+    "task_center": true,
+    "empty_guide": true,
+    "errors": []
+  }
+]

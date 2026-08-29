@@ -78,6 +78,7 @@ function shell(overrides: Partial<ComponentProps<typeof AppShell>> = {}): ReactN
       appVersion="0.1.0"
       onImportImages={() => {}}
       onImportFolder={() => {}}
+      onImportClipboard={() => {}}
       onOpenOtherLibrary={() => {}}
       assets={<div data-testid="assets-workspace">图片工作区</div>}
       prompts={<div data-testid="prompts-workspace">提示词工作区</div>}
@@ -175,10 +176,11 @@ describe("AppShell 全局搜索", () => {
 });
 
 describe("AppShell 导入入口", () => {
-  test("顶栏明确区分导入图片与导入文件夹，并转交各自意图", async () => {
+  test("顶栏是三种导入方式的唯一常驻入口，并分别转交意图", async () => {
     const onImportImages = vi.fn<() => void>();
     const onImportFolder = vi.fn<() => void>();
-    mount(shell({ onImportImages, onImportFolder }));
+    const onImportClipboard = vi.fn<() => void>();
+    mount(shell({ onImportImages, onImportFolder, onImportClipboard }));
 
     const trigger = container?.querySelector<HTMLButtonElement>('button[aria-label="导入"]');
     trigger?.focus();
@@ -191,8 +193,12 @@ describe("AppShell 导入入口", () => {
     const folderItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
       (item) => item.textContent?.includes("导入文件夹"),
     );
+    const clipboardItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (item) => item.textContent?.includes("从剪贴板导入"),
+    );
     expect(imageItem).toBeDefined();
     expect(folderItem).toBeDefined();
+    expect(clipboardItem).toBeDefined();
 
     await act(async () => imageItem?.click());
     expect(onImportImages).toHaveBeenCalledTimes(1);
@@ -206,6 +212,15 @@ describe("AppShell 导入入口", () => {
     );
     await act(async () => reopenedFolderItem?.click());
     expect(onImportFolder).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      trigger?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+    });
+    const reopenedClipboardItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (item) => item.textContent?.includes("从剪贴板导入"),
+    );
+    await act(async () => reopenedClipboardItem?.click());
+    expect(onImportClipboard).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -233,6 +248,7 @@ describe("AppShell 任务中心", () => {
     await act(async () => trigger?.click());
     const popover = document.body.querySelector('[data-ui="task-center"]');
     expect(popover?.textContent).toContain("导入参考图片");
+    expect(popover?.querySelector('[data-task-kind="import"]')?.textContent).toBe("导入");
     expect(popover?.textContent).toContain("42%");
     expect(popover?.textContent).toContain("雨夜街道.png");
 

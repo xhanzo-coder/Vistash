@@ -93,6 +93,8 @@ type MethodKey =
       | "acquireThumbnail"
       | "acquireOriginal"
       | "pickImageFiles"
+      | "pickImportDirectory"
+      | "pickExportDirectory"
       | "pickLibraryDirectory"
       | "importSources"
       | "pasteImport"
@@ -105,6 +107,8 @@ type MethodKey =
 type PlatformFixture = {
   port: PlatformPort;
   answerImageFiles(paths: string[]): void;
+  answerImportDirectory(value: string | null): void;
+  answerExportDirectory(value: string | null): void;
   answerLibraryDirectory(value: string | null): void;
   failOnce(method: MethodKey, error: AppError): void;
   /** 以原生形态投递一次 drop 事件。 */
@@ -139,6 +143,8 @@ function memoryFixture(): PlatformFixture {
   return {
     port: memory,
     answerImageFiles: (paths) => memory.answerImageFiles(paths),
+    answerImportDirectory: (value) => memory.answerImportDirectory(value),
+    answerExportDirectory: (value) => memory.answerExportDirectory(value),
     answerLibraryDirectory: (value) => memory.answerLibraryDirectory(value),
     failOnce: (method, error) => memory.failOnce(method, error),
     deliverDrop: ({ paths, x, y }) => memory.emitFileDrag({ type: "drop", paths, x, y }),
@@ -151,6 +157,8 @@ function tauriFixture(): PlatformFixture {
   const armed = new Map<MethodKey, AppError>();
   let imageFilesAnswer: string[] = [];
   let libraryDirectoryAnswer: string | null = null;
+  let importDirectoryAnswer: string | null = null;
+  let exportDirectoryAnswer: string | null = null;
 
   const takeFailure = (method: MethodKey): AppError | undefined => {
     const armed_error = armed.get(method);
@@ -164,6 +172,8 @@ function tauriFixture(): PlatformFixture {
       if (options.directory === true) {
         const failure = takeFailure("pickLibraryDirectory");
         if (failure !== undefined) throw failure;
+        if (options.title === "选择要导入的图片文件夹") return importDirectoryAnswer;
+        if (options.title === "选择图片导出目录") return exportDirectoryAnswer;
         return libraryDirectoryAnswer;
       }
       const failure = takeFailure("pickImageFiles");
@@ -221,6 +231,12 @@ function tauriFixture(): PlatformFixture {
     answerLibraryDirectory: (value) => {
       libraryDirectoryAnswer = value;
     },
+    answerImportDirectory: (value) => {
+      importDirectoryAnswer = value;
+    },
+    answerExportDirectory: (value) => {
+      exportDirectoryAnswer = value;
+    },
     failOnce: (method, error) => {
       armed.set(method, error);
     },
@@ -240,6 +256,8 @@ function testPlatformContract(build: () => PlatformFixture): void {
     const fixture = build();
     await expect(fixture.port.pickImageFiles()).resolves.toEqual([]);
     await expect(fixture.port.pickLibraryDirectory()).resolves.toBeNull();
+    await expect(fixture.port.pickImportDirectory()).resolves.toBeNull();
+    await expect(fixture.port.pickExportDirectory()).resolves.toBeNull();
   });
 
   test("预置的文件与库位置结果原样转交", async () => {
@@ -247,9 +265,13 @@ function testPlatformContract(build: () => PlatformFixture): void {
     const paths = ["E:\\素材\\逆光.png", "E:\\素材\\顺光.jpg"];
     fixture.answerImageFiles(paths);
     fixture.answerLibraryDirectory("E:\\Vistash 库");
+    fixture.answerImportDirectory("E:\\待导入");
+    fixture.answerExportDirectory("E:\\导出");
 
     await expect(fixture.port.pickImageFiles()).resolves.toEqual(paths);
     await expect(fixture.port.pickLibraryDirectory()).resolves.toBe("E:\\Vistash 库");
+    await expect(fixture.port.pickImportDirectory()).resolves.toBe("E:\\待导入");
+    await expect(fixture.port.pickExportDirectory()).resolves.toBe("E:\\导出");
   });
 
   test("失败以稳定错误码原样传播，不被吞掉或改写", async () => {

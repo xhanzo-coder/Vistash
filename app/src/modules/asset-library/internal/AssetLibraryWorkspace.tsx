@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
+import { ArrowsOutLineHorizontalIcon } from "@phosphor-icons/react/dist/csr/ArrowsOutLineHorizontal";
+import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
+import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
+import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
+import { LinkSimpleIcon } from "@phosphor-icons/react/dist/csr/LinkSimple";
+import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
+import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
+import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
 import { parseAssetId, type AssetId } from "../../../app/common";
 import { catalogSnapshot, readLayout, writeLayout } from "../../../shared/ipc";
 import { IpcError } from "../../../shared/errors";
-import { Button } from "../../../ui/button/Button";
+import { Button, IconButton } from "../../../ui/button/Button";
 import { SearchField } from "../../../ui/search-field/SearchField";
-import { Dialog } from "../../../ui/dialog/Dialog";
+import { ConfirmDialog, Dialog } from "../../../ui/dialog/Dialog";
+import { Tooltip } from "../../../ui/overlays/Tooltip";
+import { Menu, MenuItem } from "../../../ui/overlays/Menu";
 import type { AssetLibraryWorkspaceProps } from "../index";
 import { assetKeys } from "./queryKeys";
 import { defaultAssetPreferences, parseLibraryPreferences, queryFromPreferences, type AssetPreferences, type LibraryPreferences } from "./preferences";
@@ -21,7 +33,13 @@ import { MoveAssetsDialog } from "./MoveAssetsDialog";
 import { useFolderDrag } from "./useFolderDrag";
 import { RenameAssetDialog, filenameTarget, type FilenameTarget } from "./AssetFilename";
 import { AssetInspector } from "./AssetInspector";
+import { AssetMultiInspector } from "./AssetMultiInspector";
+import { BatchEditDialog, type BatchEdit } from "./BatchEditDialog";
 import { useAssetNotes } from "./assetNotes";
+import { TrashResults, useTrashActions } from "./TrashActions";
+import { AssetLightbox, type LightboxSession } from "./AssetLightbox";
+import { AssetTransferFeedback, ImportGuide, useAssetTransfer } from "./AssetTransfer";
+import { AssetOutboundControls } from "./AssetOutbound";
 
 /** 集合滚动偏移在布局偏好 scrollOffsets 表中的固定键。 */
 const COLLECTION_SCROLL_KEY = "assets-collection";
@@ -31,12 +49,7 @@ const subscribeViewport = (listener: () => void): (() => void) => {
   window.addEventListener("resize", listener, { passive: true });
   return () => window.removeEventListener("resize", listener);
 };
-/** 密度三档的界面文案；值本身是持久化枚举。 */
-const DENSITY_LABELS = [
-  { value: "small", label: "小" },
-  { value: "medium", label: "中" },
-  { value: "large", label: "大" },
-] as const;
+const DENSITY_VALUES = ["small", "medium", "large"] as const;
 /** 排序选项：值是持久化枚举，文案面向使用者。 */
 const SORT_OPTIONS = [
   { value: "imported-desc", label: "最新导入在前" },
@@ -50,8 +63,11 @@ function Problem({ error }: { error: Error }): ReactNode {
   return <p className={styles.error} role="alert">{error.message}</p>;
 }
 
-function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspaceProps & { saved: LibraryPreferences }): ReactNode {
+function LoadedWorkspace({ session, active, entry, importRequest, onImportRequestHandled, saved }: AssetLibraryWorkspaceProps & { saved: LibraryPreferences }): ReactNode {
   const client = useQueryClient();
+  useEffect(() => {
+    if (!active) client.removeQueries({ queryKey: assetKeys.collections(session.id) });
+  }, [active, client, session.id]);
   const notes = useAssetNotes(session.id, active);
   const inlineInspector = useSyncExternalStore(subscribeViewport, inlineInspectorSnapshot);
   const organizationBusy = useIsMutating({ predicate: (mutation) => mutation.options.scope?.id === `asset-organization:${session.id}` }) > 0;
@@ -61,6 +77,20 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
     }
     return saved.assets;
   });
+  const currentImportFolder = layout.folder.kind === "path" && layout.location === "active" ? layout.folder.path : null;
+  const transfer = useAssetTransfer(session.id, active, currentImportFolder, () => {
+    void client.invalidateQueries({ queryKey: assetKeys.collections(session.id) });
+  });
+  const { chooseFolder, chooseImages, paste } = transfer;
+  const handledImportRequest = useRef<string | null>(null);
+  useEffect(() => {
+    if (!active || importRequest === undefined || handledImportRequest.current === importRequest.requestId) return;
+    handledImportRequest.current = importRequest.requestId;
+    onImportRequestHandled?.(importRequest.requestId);
+    if (importRequest.kind === "images") void chooseImages();
+    else if (importRequest.kind === "folder") void chooseFolder();
+    else paste();
+  }, [active, chooseFolder, chooseImages, importRequest, onImportRequestHandled, paste]);
   const [selection, dispatchSelection] = useReducer(selectionReducer, [], () => initialSelection([]));
   const selectedIds = selection.selectedIds;
   const activeId = selection.activeId;
@@ -69,6 +99,11 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
   const [informationOpen, setInformationOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<FilenameTarget | null>(null);
   const renameOrigin = useRef<HTMLElement | null>(null);
+  const [batchEdit, setBatchEdit] = useState<BatchEdit | null>(null);
+  const batchOrigin = useRef<HTMLElement | null>(null);
+  const [lightbox, setLightbox] = useState<LightboxSession | null>(null);
+  const [previewReturn, setPreviewReturn] = useState<{ id: number; hash: string | null; scrollTop: number } | null>(null);
+  const nextPreviewReturn = useRef(0);
   const savedRequestCount = useRef(0);
   const query = queryFromPreferences(layout);
   const collection = useQuery({
@@ -102,6 +137,7 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
   }).at(-1);
   const saveError = latestSave?.status === "error" ? latestSave.error : null;
   const actions = useAssetActions(session.id);
+  const trash = useTrashActions(session.id);
   // 排序是呈现语义：同一份缓存快照在两种视图与排序选项间共享，不触发新拉取。
   const orderedAssets = useMemo(
     () => sortAssets(collection.data?.assets ?? [], layout.sort),
@@ -114,7 +150,6 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
   const selectedAsset = collection.data?.assets.find((asset) => asset.hash === activeId);
   // 选择模型以字符串保存 ID；离开模型边界时恢复素材品牌身份。
   const activeAssetId: AssetId | null = activeId === null ? null : parseAssetId(activeId);
-
   const onItemSelect = useCallback((id: AssetId, modifiers: { ctrl: boolean; shift: boolean }): void => {
     if (modifiers.shift) {
       dispatchSelection({ kind: "rangeTo", id });
@@ -128,14 +163,25 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
 
   // 批量动作作用于当前选中集合；成功后精确失效当前库的集合族。
   const selectedHashList = useMemo(() => [...selectedIds], [selectedIds]);
+  const selectedAssets = useMemo(() => orderedAssets.filter((asset) => selectedIds.has(asset.hash)), [orderedAssets, selectedIds]);
+  const allSelectedFavorite = selectedAssets.length > 0 && selectedAssets.every((asset) => asset.favorite);
   const writesDisabled = organizationBusy || collection.isPlaceholderData || collection.isError || !active;
   const singleAsset = selectedIds.size === 1 && selectedAsset !== undefined ? selectedAsset : null;
+  const restoreSelected = (): void => {
+    if (writesDisabled || layout.location !== "trash" || selectedAssets.length === 0) return;
+    trash.restore(selectedAssets.map((asset) => ({ hash: parseAssetId(asset.hash), displayName: asset.display_filename })));
+  };
   const canRename = !writesDisabled && !collection.isError && layout.location === "active" && singleAsset !== null && singleAsset.deleted_at === null;
   const openRename = useCallback((): void => {
     if (!canRename || singleAsset === null || renameTarget !== null) return;
     renameOrigin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setRenameTarget(filenameTarget(singleAsset));
   }, [canRename, singleAsset, renameTarget]);
+  const inspectorActions = singleAsset === null || activeAssetId === null || layout.location !== "active" ? undefined : <div className={styles.inspectorActions} aria-label="当前图片操作">
+    <AssetOutboundControls libraryId={session.id} assets={[singleAsset]} active={active} disabled={writesDisabled} />
+    <Tooltip content="修改显示文件名"><IconButton size="compact" label="修改显示文件名" icon={<PencilSimpleIcon />} disabled={!canRename} onClick={openRename} /></Tooltip>
+    <Tooltip content={singleAsset.favorite ? "取消收藏" : "收藏"}><IconButton size="compact" label={singleAsset.favorite ? "取消收藏" : "收藏图片"} icon={<StarIcon weight={singleAsset.favorite ? "fill" : "regular"} />} disabled={writesDisabled} aria-pressed={singleAsset.favorite} onClick={() => actions.run({ kind: "favorite-one", hash: activeAssetId, value: !singleAsset.favorite })} /></Tooltip>
+  </div>;
   const folderDrag = useFolderDrag({
     selectedIds, disabled: writesDisabled || layout.location !== "active",
     selectSource: (id) => dispatchSelection({ kind: "selectOne", id }),
@@ -190,6 +236,15 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
     ]);
   };
   const navigatorProps = {
+    libraryName: session.displayName,
+    folderActions: <>
+      <FolderEditor mode="create" libraryId={session.id} currentFolder={layout.folder.kind === "path" ? layout.folder.path : null}
+        folders={collection.data?.folders ?? []} disabled={writesDisabled || collection.isPending || collection.isError} onCommitted={folderCommitted} />
+      <FolderEditor mode="rename" libraryId={session.id} currentFolder={layout.folder.kind === "path" ? layout.folder.path : null}
+        folders={collection.data?.folders ?? []} disabled={writesDisabled || collection.isPending || collection.isError} onCommitted={folderCommitted} />
+      <DeleteFolderDialog libraryId={session.id} currentFolder={layout.folder.kind === "path" ? layout.folder.path : null}
+        folders={collection.data?.folders ?? []} disabled={writesDisabled || collection.isPending || collection.isError} onCommitted={folderCommitted} />
+    </>,
     folders: collection.data?.folders ?? [],
     tagUsage: collection.data?.tags ?? [],
     trashCount: collection.data?.trash_count ?? 0,
@@ -217,6 +272,35 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
   // 本地查找快捷键只在本工作区激活时认领：Ctrl+F 聚焦搜索框并全选内容；
   // Ctrl+K 属于应用外壳的全局搜索，这里刻意不认领，分层由结构保证。
   const sectionRef = useRef<HTMLElement | null>(null);
+  const openLightbox = (hash: AssetId): void => {
+    if (!active || collection.isPending || collection.isError || collection.isPlaceholderData || lightbox !== null) return;
+    const gallery = sectionRef.current?.querySelector<HTMLElement>('[role="listbox"][aria-label="图片集合"]');
+    if (gallery === null || gallery === undefined || !orderedAssets.some((asset) => asset.hash === hash)) return;
+    dispatchSelection({ kind: "selectOne", id: hash });
+    setLightbox({ assets: orderedAssets, initialId: hash, scrollTop: gallery.scrollTop });
+  };
+  const closeLightbox = (hash: AssetId): void => {
+    if (lightbox === null) return;
+    const present = orderedAssets.some((asset) => asset.hash === hash);
+    dispatchSelection(present ? { kind: "selectOne", id: hash } : { kind: "clear" });
+    setPreviewReturn({ id: ++nextPreviewReturn.current, hash: present ? hash : null, scrollTop: lightbox.scrollTop });
+    setLightbox(null);
+  };
+  const openBatchEdit = (kind: BatchEdit["kind"], origin?: HTMLElement | null): void => {
+    if (writesDisabled || layout.location !== "active" || selectedHashList.length === 0) return;
+    batchOrigin.current = origin ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    setBatchEdit({ kind, hashes: [...selectedHashList] });
+  };
+  const restoreBatchFocus = (): void => {
+    const origin = batchOrigin.current;
+    if (origin !== null && origin !== document.body && origin.isConnected) {
+      origin.focus({ preventScroll: true });
+      if (document.activeElement === origin) return;
+    }
+    // 写入可能让原触发器退出查询；仍有覆盖检查器时在其中恢复，否则回到集合搜索。
+    const target = informationOpen ? document.querySelector<HTMLButtonElement>('[role="dialog"] button') : sectionRef.current?.querySelector<HTMLInputElement>('input[name="asset-filename"]');
+    target?.focus();
+  };
   useEffect(() => {
     if (!canRename || renameTarget !== null) return undefined;
     const onRenameKey = (event: KeyboardEvent): void => {
@@ -252,19 +336,46 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
       input.focus();
       input.select();
     };
+    // WebView2/系统级组合键在不同宿主上可能从 document 捕获阶段进入；
+    // 同一处理器保留 window 冒泡接缝以兼容浏览器与现有测试事件。首次处理会
+    // preventDefault，window 阶段只会看到 defaultPrevented，不会重复聚焦。
+    document.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, [active]);
 
   // 导航是有身份的外部输入。只调整本实例状态，不在渲染中调用 IPC 或修改共享缓存。
-  if (active && entry?.kind === "locate" && !seenRequests.has(entry.requestId)) {
-    setSeenRequests(new Set([...seenRequests, entry.requestId]));
+  useEffect(() => {
+    if (active || lightbox === null) return;
+    // 失活是应用壳层的外部生命周期输入；清除灯箱会话，避免重新激活时恢复过期原图。
+    // oxlint-disable-next-line react/set-state-in-effect
+    setLightbox(null);
+  }, [active, lightbox]);
+
+  useEffect(() => {
+    if (!active || entry?.kind !== "locate" || seenRequests.has(entry.requestId)) return;
+    // 定位请求是应用层外部输入；消费后记录 requestId，保证一次性语义。
+    // oxlint-disable-next-line react/set-state-in-effect
+    setSeenRequests((current) => {
+      if (current.has(entry.requestId)) return current;
+      return new Set([...current, entry.requestId]);
+    });
+    if (lightbox !== null) {
+      // 定位请求离开当前原图上下文时必须先关闭灯箱。
+      // oxlint-disable-next-line react/set-state-in-effect
+      setLightbox(null);
+    }
     dispatchSelection({ kind: "selectOne", id: entry.hash });
     const alreadyVisible = layout.location === entry.location && collection.data?.assets.some((asset) => asset.hash === entry.hash);
     if (!alreadyVisible) {
-      setLayout({ ...layout, ...queryFromPreferences(defaultAssetPreferences()), location: entry.location });
+      // 定位到另一查询域需要原子地切换本模块查询偏好。
+      // oxlint-disable-next-line react/set-state-in-effect
+      setLayout((current) => ({ ...current, ...queryFromPreferences(defaultAssetPreferences()), location: entry.location }));
     }
-  }
+  }, [active, collection.data, dispatchSelection, entry, layout.location, lightbox, seenRequests]);
   useEffect(() => {
     if (savedRequestCount.current === seenRequests.size) return;
     savedRequestCount.current = seenRequests.size;
@@ -277,42 +388,31 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
       {folderDrag.preview === null ? null : <div className={styles.dragPreview} role="status" style={{ left: folderDrag.preview.x + 12, top: folderDrag.preview.y + 12 }}>
         移动 {folderDrag.preview.count} 张图片{folderDrag.preview.target === undefined ? "：拖到文件夹" : folderDrag.preview.target === null ? "到未分类" : `到 ${folderDrag.preview.target}`}
       </div>}
-      <header className={styles.heading}>
-        <div><p className={styles.eyebrow}>IMAGE ARCHIVE</p><h1>{session.displayName}</h1></div>
-        <span>{layout.location === "trash" ? "回收站" : layout.folder.kind === "path" ? layout.folder.path : layout.folder.kind === "root" ? "未分类" : "全部图片"}</span>
-      </header>
       <div className={styles.columns}>
         <AssetNavigator {...navigatorProps} presentation="sidebar" />
         <div className={styles.content}>
+          <header className={styles.heading}>
+            <h1>{layout.location === "trash" ? "回收站" : layout.folder.kind === "path" ? layout.folder.path : layout.folder.kind === "root" ? "未分类" : "全部图片"}</h1>
+            <span aria-live="polite">{collection.isPending ? "正在读取…" : collection.isError ? "读取失败" : `${orderedAssets.length.toLocaleString("zh-CN")} 张图片`}</span>
+          </header>
           <div className={styles.toolbar} role="toolbar" aria-label="图片查询与视图">
             <div className={styles.mobileNavigation}>
-              <Dialog title="图片导航" description="选择图片范围、文件夹或标签。" open={navigatorOpen} onOpenChange={setNavigatorOpen} trigger={<Button size="compact">图片导航</Button>}>
+              <Dialog title="图片导航" description="选择图片范围、文件夹或标签。" open={navigatorOpen} onOpenChange={setNavigatorOpen} trigger={<IconButton size="compact" label="图片导航" title="图片导航" icon={<SidebarSimpleIcon />} />}>
                 <AssetNavigator {...navigatorProps} presentation="dialog" />
               </Dialog>
             </div>
-            <FolderEditor mode="create" libraryId={session.id} currentFolder={layout.folder.kind === "path" ? layout.folder.path : null}
-              folders={collection.data?.folders ?? []} disabled={writesDisabled || collection.isPending || collection.isError} onCommitted={folderCommitted} />
-            <FolderEditor mode="rename" libraryId={session.id} currentFolder={layout.folder.kind === "path" ? layout.folder.path : null}
-              folders={collection.data?.folders ?? []} disabled={writesDisabled || collection.isPending || collection.isError} onCommitted={folderCommitted} />
-            <DeleteFolderDialog libraryId={session.id} currentFolder={layout.folder.kind === "path" ? layout.folder.path : null}
-              folders={collection.data?.folders ?? []} disabled={writesDisabled || collection.isPending || collection.isError} onCommitted={folderCommitted} />
-            <SearchField label="按文件名搜索" aria-label="按文件名搜索" name="asset-filename" placeholder="显示名或来源文件名…" value={layout.text} onValueChange={(text) => changeLayout({ ...layout, text })} />
-            <RenameAssetDialog libraryId={session.id} target={renameTarget} disabled={!canRename} onOpen={openRename} onClose={() => setRenameTarget(null)} restoreFocus={restoreRenameFocus} />
+            <div className={styles.localSearch}><SearchField label="按文件名搜索" aria-label="按文件名搜索" name="asset-filename" placeholder="搜索文件名…" value={layout.text} onValueChange={(text) => changeLayout({ ...layout, text })} /></div>
+            {layout.location === "trash" && collection.data !== undefined ? <ConfirmDialog title="永久清空图片回收站？" description={`将永久删除回收站内全部 ${collection.data.trash_count} 张图片，包括当前筛选未显示的图片。此操作无法还原，不会删除库外源文件。`} confirmLabel="永久清空"
+              trigger={<Button size="compact" variant="danger" disabled={writesDisabled || collection.isPending || collection.data?.trash_count === 0}>清空图片回收站</Button>}
+              onConfirm={() => { if (!writesDisabled && !collection.isPending && collection.data !== undefined && collection.data.trash_count > 0) trash.purge(); }}
+              onCloseAutoFocus={(event) => { event.preventDefault(); sectionRef.current?.querySelector<HTMLInputElement>('input[name="asset-filename"]')?.focus(); }} /> : null}
             <div className={styles.mobileFileInformation}>
-              <Dialog title="图片信息" description="查看摘要、色卡、组织、备注、关联与来源记录。" open={active && informationOpen} onOpenChange={setInformationOpen} trigger={<Button size="compact">图片信息</Button>}
+              <Dialog title="图片信息" description="查看摘要、色卡、组织、备注、关联与来源记录。" open={active && informationOpen} onOpenChange={setInformationOpen} trigger={<IconButton size="compact" label="图片信息" title="图片信息" icon={<InfoIcon />} />}
                 onCloseAutoFocus={(event) => {
-                  if (inlineInspector) { event.preventDefault(); sectionRef.current?.querySelector<HTMLButtonElement>('[data-inspector-section] h2 button')?.focus(); }
+                  if (inlineInspector) { event.preventDefault(); sectionRef.current?.querySelector<HTMLElement>('[data-inspector-heading], [data-inspector-section] h2 button')?.focus(); }
                 }}>
-                <AssetInspector libraryId={session.id} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} onEdit={openRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={collection.data?.folders ?? []} />
+                {selectedAssets.length > 1 ? <AssetMultiInspector assets={selectedAssets} /> : <AssetInspector libraryId={session.id} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={collection.data?.folders ?? []} onRestore={restoreSelected} restorable={!writesDisabled && layout.location === "trash"} actions={inspectorActions} />}
               </Dialog>
-            </div>
-            <div className={styles.density} role="group" aria-label="缩略图大小">
-              {DENSITY_LABELS.map(({ value, label }) => (
-                <Button key={value} size="compact" aria-pressed={layout.tileSize === value}
-                  onClick={() => changeLayout({ ...layout, tileSize: value })}>
-                  {label}
-                </Button>
-              ))}
             </div>
             <select aria-label="排序方式" className={styles.sortSelect} value={layout.sort}
               onChange={(event) => {
@@ -324,21 +424,30 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
+            <label className={styles.density} title="缩略图大小">
+              <ArrowsOutLineHorizontalIcon aria-hidden="true" />
+              <span className={styles.visuallyHidden}>缩略图大小</span>
+              <input type="range" name="asset-thumbnail-density" aria-label="缩略图大小" min="0" max="2" step="1" value={DENSITY_VALUES.indexOf(layout.tileSize)}
+                onChange={(event) => {
+                  const value = DENSITY_VALUES[Number(event.currentTarget.value)];
+                  if (value === undefined) throw new RangeError("缩略图密度档位越界");
+                  changeLayout({ ...layout, tileSize: value });
+                }} />
+            </label>
             <div className={styles.views} role="group" aria-label="集合视图">
-              <Button size="compact" aria-pressed={layout.view === "waterfall"} onClick={() => changeLayout({ ...layout, view: "waterfall" })}>瀑布流</Button>
-              <Button size="compact" aria-pressed={layout.view === "list"} onClick={() => changeLayout({ ...layout, view: "list" })}>详情列表</Button>
+              <Tooltip content="瀑布流"><Button size="compact" variant="ghost" aria-label="瀑布流" startIcon={<SquaresFourIcon />} aria-pressed={layout.view === "waterfall"} onClick={() => changeLayout({ ...layout, view: "waterfall" })}><span className={styles.visuallyHidden}>瀑布流</span></Button></Tooltip>
+              <Tooltip content="详情列表"><Button size="compact" variant="ghost" aria-label="详情列表" startIcon={<ListBulletsIcon />} aria-pressed={layout.view === "list"} onClick={() => changeLayout({ ...layout, view: "list" })}><span className={styles.visuallyHidden}>详情列表</span></Button></Tooltip>
             </div>
-            {activeAssetId !== null && selectedAsset !== undefined && layout.location === "active" ? (
-              <Button size="compact" aria-label={selectedAsset.favorite ? "取消收藏" : "收藏图片"} disabled={writesDisabled}
-                onClick={() => actions.run({ kind: "favorite-one", hash: activeAssetId, value: !selectedAsset.favorite })}>
-                {selectedAsset.favorite ? "取消收藏" : "收藏图片"}
-              </Button>
-            ) : null}
           </div>
+          <AssetTransferFeedback transfer={transfer} />
+          <RenameAssetDialog libraryId={session.id} target={renameTarget} onClose={() => setRenameTarget(null)} restoreFocus={restoreRenameFocus} />
           {saveError !== null ? <div><Problem error={saveError} /><Button onClick={() => savePreferences(layout)}>重试保存布局</Button></div> : null}
-          {collection.isError ? <Problem error={collection.error} /> : collection.isPending ? <p role="status">正在读取图片…</p> : (
-            orderedAssets.length === 0 ? <p className={styles.empty}>没有符合条件的图片</p> :
+          {collection.isError ? <div><Problem error={collection.error} /><Button onClick={() => void collection.refetch()}>重试读取图片</Button></div> : collection.isPending ? <p role="status">正在读取图片…</p> : (
+            orderedAssets.length === 0 ? <><p className={styles.empty}>{layout.location === "trash" && collection.data.trash_count === 0 ? "图片回收站为空" : "没有符合条件的图片"}</p><ImportGuide onImportImages={() => void transfer.chooseImages()} onImportFolder={() => void transfer.chooseFolder()} onPaste={transfer.paste} /></> :
               <AssetCollection
+                onOpen={openLightbox}
+                previewOpen={lightbox !== null}
+                previewReturn={previewReturn}
                 assets={orderedAssets}
                 view={layout.view}
                 activeId={activeAssetId}
@@ -358,26 +467,31 @@ function LoadedWorkspace({ session, active, entry, saved }: AssetLibraryWorkspac
                   : undefined}
               />
           )}
-          {selectedIds.size > 0 ? (
+          {selectedIds.size > 1 ? (
             <footer className={styles.selectionBar} role="toolbar" aria-label="批量操作">
               <span className={styles.selectionCount}>已选中 {selectedIds.size} 项</span>
               {layout.location === "active" ? (
                 <>
+                  <AssetOutboundControls libraryId={session.id} assets={selectedAssets} active={active} disabled={writesDisabled} />
                   <MoveAssetsDialog hashes={selectedHashList} folders={collection.data?.folders ?? []} disabled={writesDisabled} busy={actions.busy} run={actions.run} />
+                  <Button size="compact" disabled={writesDisabled} onClick={() => openBatchEdit("tags")}>标签</Button>
                   <Button size="compact" disabled={writesDisabled}
-                    onClick={() => actions.run({ kind: "favorite", hashes: selectedHashList, value: true })}>收藏</Button>
-                  <Button size="compact" disabled={writesDisabled}
-                    onClick={() => actions.run({ kind: "favorite", hashes: selectedHashList, value: false })}>取消收藏</Button>
-                  <Button size="compact" disabled={writesDisabled}
-                    onClick={() => actions.run({ kind: "trash", hashes: selectedHashList })}>移入回收站</Button>
+                    onClick={() => actions.run({ kind: "favorite", hashes: selectedHashList, value: !allSelectedFavorite })}>{allSelectedFavorite ? "取消收藏" : "收藏"}</Button>
+                  <Menu align="end" label="更多批量操作" trigger={<IconButton size="compact" label="更多批量操作" title="更多批量操作" icon={<DotsThreeIcon />} disabled={writesDisabled} />}>
+                    <MenuItem icon={<LinkSimpleIcon />} onSelect={() => openBatchEdit("link", sectionRef.current?.querySelector<HTMLButtonElement>('button[aria-label="更多批量操作"]'))}>关联提示词</MenuItem>
+                    <MenuItem icon={<TrashIcon />} destructive onSelect={() => actions.run({ kind: "trash", hashes: selectedHashList })}>移入回收站</MenuItem>
+                  </Menu>
                 </>
-              ) : null}
+              ) : <Button size="compact" disabled={writesDisabled} onClick={restoreSelected}>还原所选图片</Button>}
             </footer>
           ) : null}
           <ActionResults results={actions.results} dismiss={actions.dismiss} />
+          <TrashResults actions={trash} />
+          {lightbox === null || !active ? null : <AssetLightbox session={lightbox} onClose={closeLightbox} />}
+          <BatchEditDialog edit={batchEdit} libraryId={session.id} active={active} busy={organizationBusy} run={actions.run} onClose={() => setBatchEdit(null)} restoreFocus={restoreBatchFocus} />
         </div>
         {inlineInspector && !informationOpen ? <aside className={styles.filenameInspector} aria-label="图片检查器">
-          <AssetInspector libraryId={session.id} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} onEdit={openRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={collection.data?.folders ?? []} />
+          {selectedAssets.length > 1 ? <AssetMultiInspector assets={selectedAssets} /> : <AssetInspector libraryId={session.id} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={collection.data?.folders ?? []} onRestore={restoreSelected} restorable={!writesDisabled && layout.location === "trash"} actions={inspectorActions} />}
         </aside> : null}
       </div>
     </section>

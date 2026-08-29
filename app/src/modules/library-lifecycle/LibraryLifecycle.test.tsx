@@ -214,6 +214,10 @@ test("多归属旧库必须完成唯一文件夹选择并二次确认后才提�
   await act(async () => inspect?.click());
 
   await vi.waitFor(() => expect(container?.textContent).toContain("雨夜街道.png"));
+  const taskTrigger = container?.querySelector<HTMLButtonElement>('button[aria-label^="任务中心"]');
+  if (taskTrigger === null || taskTrigger === undefined) throw new Error("迁移页缺少任务中心入口");
+  await act(async () => taskTrigger.click());
+  expect(document.body.querySelector('[data-ui="task-center"]')?.textContent).toContain("库迁移");
   const commit = [...(container?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
     (button) => button.textContent === "确认迁移",
   );

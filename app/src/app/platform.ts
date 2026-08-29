@@ -54,6 +54,10 @@ export interface PlatformPort {
 
   /** 多选图片文件对话框；使用者取消时解析为空数组。扩展名清单与核心导入层一致。 */
   pickImageFiles(): Promise<string[]>;
+  /** 选择待导入的图片目录；取消时返回 null。 */
+  pickImportDirectory(): Promise<string | null>;
+  /** 选择原图导出的目标目录；取消时返回 null。 */
+  pickExportDirectory(): Promise<string | null>;
   /** 选择库位置对话框；取消时解析为 null。规格禁止默认路径，因此没有位置参数。 */
   pickLibraryDirectory(): Promise<string | null>;
 

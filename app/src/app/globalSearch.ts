@@ -38,7 +38,12 @@ export function locateRequestFromSelection(selection: GlobalSearchSelection): Lo
       location: assetLocationScope(selection.row),
     };
   }
-  return { kind: "locate_prompt", requestId, promptId: selection.row.id };
+  return {
+    kind: "locate_prompt",
+    requestId,
+    promptId: selection.row.id,
+    location: selection.row.deleted_at === null ? "active" : "trash",
+  };
 }
 
 /**

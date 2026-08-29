@@ -85,10 +85,18 @@ export type TaskOutcomeCounts = {
   unprocessed: number;
 };
 
+/** 可读的跳过原因；不同业务协调器只填自己拥有的原因。 */
+export type TaskSkipDetail = {
+  kind: "duplicate" | "unsupported" | "conflict";
+  count: number;
+};
+
 /** 任务完成报告。部分成功是常态，因此失败明细永远逐项携带。 */
 export type TaskOutcome = {
   counts: TaskOutcomeCounts;
   failures: TaskFailureItem[];
+  /** 导入/导出的跳过拆分；没有该业务维度的任务保持未定义。 */
+  skipDetails?: readonly TaskSkipDetail[];
   /** 任务级整体失败（如迁移整体回滚）；只在逐项失败解释不了时使用。 */
   error: AppError | null;
 };

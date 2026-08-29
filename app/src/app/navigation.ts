@@ -39,6 +39,8 @@ export type NavigationEntry =
       kind: "locate_prompt";
       requestId: RequestId;
       promptId: string;
+      /** 提示词本身的活动/回收站范围，来源于搜索结果的 deleted_at。 */
+      location: "active" | "trash";
     };
 
 /** 除 resume 外的定位条目：`requestLocate` 只接受这两种。 */

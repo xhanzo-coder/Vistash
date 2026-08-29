@@ -57,7 +57,8 @@ def main():
                         information = page.get_by_role("region", name="图片文件信息", exact=True)
                         expect(information).to_contain_text("fixture-0.png")
                         expect(information).to_contain_text("雨夜参考.png")
-                        edit_button = information.get_by_role("button", name="编辑显示文件名", exact=True)
+                        inspector = page.get_by_role("dialog", name="图片信息", exact=True) if width <= 780 else page.get_by_role("complementary", name="图片检查器", exact=True)
+                        edit_button = inspector.get_by_role("button", name="修改显示文件名", exact=True)
                         edit_button.click()
                         expect(field).to_have_value("雨夜参考")
                         field.fill("暂存草稿")
@@ -95,7 +96,7 @@ def main():
                         second.click(modifiers=["Control"])
                         second.press("F2")
                         expect(editor).to_have_count(0)
-                        expect(page.get_by_role("button", name="修改文件名", exact=True)).to_be_disabled()
+                        expect(page.get_by_role("button", name="修改显示文件名", exact=True)).to_have_count(0)
                         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "水平溢出"
                         assert not errors, errors
                         report = {"theme": theme, "width": width, "f2": True, "inspector": True, "source_search": True, "failure_retained": True, "focus_restored": True}

@@ -5,6 +5,8 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { Button, IconButton } from "../../ui/button/Button";
 import { Popover } from "../../ui/overlays/Popover";
 import { Progress } from "../../ui/progress/Progress";
+import { IpcError, formatError } from "../../shared/errors";
+import type { AppError } from "../../shared/types";
 import type { TaskCenter, TaskRecord, TaskRunState } from "../taskCenter";
 import styles from "./TaskCenterPopover.module.css";
 
@@ -28,6 +30,22 @@ function stateLabel(state: TaskRunState): string {
   throw new Error(`未知任务状态：${String(state)}`);
 }
 
+function taskKindLabel(kind: TaskRecord["kind"]): string {
+  switch (kind) {
+    case "import":
+      return "导入";
+    case "export":
+      return "导出";
+    case "migration":
+      return "库迁移";
+    case "folder_mutation":
+      return "文件夹";
+    case "batch_organization":
+      return "批量组织";
+  }
+  throw new Error(`未知任务种类：${String(kind)}`);
+}
+
 function taskProgress(record: TaskRecord): ReactNode {
   if (record.progress === null) return null;
   const { done, total } = record.progress;
@@ -46,13 +64,14 @@ function taskProgress(record: TaskRecord): ReactNode {
   );
 }
 
-function TaskItem({ record, taskCenter }: { record: TaskRecord; taskCenter: TaskCenter }): ReactNode {
+function TaskItem({ record, taskCenter, onStopTask, canStopTask, stopError }: { record: TaskRecord; taskCenter: TaskCenter; onStopTask?: (taskId: string) => Promise<void>; canStopTask?: (taskId: string) => boolean; stopError: string | null }): ReactNode {
   const terminal = record.state !== "running" && record.state !== "stopping";
   return (
-    <article className={styles.task} data-state={record.state}>
+    <article className={styles.task} data-state={record.state} data-task-id={record.id}>
       <header>
         <div>
           <strong>{record.title}</strong>
+          <span data-task-kind={record.kind}>{taskKindLabel(record.kind)}</span>
           <span>{stateLabel(record.state)}</span>
         </div>
         {terminal ? (
@@ -66,10 +85,40 @@ function TaskItem({ record, taskCenter }: { record: TaskRecord; taskCenter: Task
       </header>
       {taskProgress(record)}
       {record.outcome === null ? null : (
-        <p className={styles.outcome}>
-          成功 {NUMBER_FORMAT.format(record.outcome.counts.succeeded)}，跳过 {NUMBER_FORMAT.format(record.outcome.counts.skipped)}，失败 {NUMBER_FORMAT.format(record.outcome.counts.failed)}，未处理 {NUMBER_FORMAT.format(record.outcome.counts.unprocessed)}
-        </p>
+        <>
+          <p className={styles.outcome}>
+            成功 {NUMBER_FORMAT.format(record.outcome.counts.succeeded)}，跳过 {NUMBER_FORMAT.format(record.outcome.counts.skipped)}，失败 {NUMBER_FORMAT.format(record.outcome.counts.failed)}，未处理 {NUMBER_FORMAT.format(record.outcome.counts.unprocessed)}
+          </p>
+          {record.outcome.skipDetails?.map((detail) => (
+            <p key={`${record.id}-${detail.kind}`}>
+              跳过：{detail.kind === "unsupported" ? "非图片" : detail.kind === "duplicate" ? "重复内容" : "同名冲突"} {NUMBER_FORMAT.format(detail.count)} 项
+            </p>
+          ))}
+          {record.outcome.error === null && record.outcome.failures.length === 0 ? null : (
+            <details>
+              <summary>查看逐项结果</summary>
+              {record.outcome.error === null ? null : <p role="alert">{formatError(record.outcome.error)}</p>}
+              {record.outcome.failures.map((failure) => (
+                <p key={`${record.id}-${failure.displayName}`} role="alert">
+                  {failure.displayName}：{formatError(failure.error)}
+                </p>
+              ))}
+            </details>
+          )}
+        </>
       )}
+      {!terminal && record.stoppable && onStopTask !== undefined && (canStopTask === undefined || canStopTask(record.id)) ? (
+        <Button
+          size="compact"
+          aria-label={`${record.state === "stopping" ? "重试停止" : "停止"}任务：${record.title}`}
+          onClick={() => {
+            void onStopTask(record.id);
+          }}
+        >
+          {record.state === "stopping" ? "正在停止…" : "停止"}
+        </Button>
+      ) : null}
+      {stopError === null ? null : <p role="alert">{stopError}</p>}
     </article>
   );
 }
@@ -83,8 +132,19 @@ function useTaskRecords(taskCenter: TaskCenter): readonly TaskRecord[] {
   return records;
 }
 
-export function TaskCenterPopover({ taskCenter }: { taskCenter: TaskCenter }): ReactNode {
+export function TaskCenterPopover({ taskCenter, onStopTask, canStopTask, getStopError }: { taskCenter: TaskCenter; onStopTask?: (taskId: string) => Promise<void>; canStopTask?: (taskId: string) => boolean; getStopError?: (taskId: string) => AppError | null }): ReactNode {
   const records = useTaskRecords(taskCenter);
+  const [stopError, setStopError] = useState<{ taskId: string; message: string } | null>(null);
+  const requestStop = (taskId: string): Promise<void> => {
+    if (onStopTask === undefined) throw new Error("任务中心未配置传输停止协调器");
+    return onStopTask(taskId).then(
+      () => setStopError(null),
+      (raw: unknown) => {
+        if (!(raw instanceof IpcError)) throw raw;
+        setStopError({ taskId, message: formatError(raw.appError) });
+      },
+    );
+  };
   const runningCount = records.filter(
     (record) => record.state === "running" || record.state === "stopping",
   ).length;
@@ -113,7 +173,10 @@ export function TaskCenterPopover({ taskCenter }: { taskCenter: TaskCenter }): R
           <p className={styles.empty}>当前没有任务。</p>
         ) : (
           <div className={styles.list}>
-            {records.map((record) => <TaskItem key={record.id} record={record} taskCenter={taskCenter} />)}
+            {records.map((record) => {
+              const reportedStopError = getStopError?.(record.id);
+              return <TaskItem key={record.id} record={record} taskCenter={taskCenter} {...(onStopTask === undefined ? {} : { onStopTask: requestStop })} {...(canStopTask === undefined ? {} : { canStopTask })} stopError={stopError?.taskId === record.id ? stopError.message : reportedStopError === null || reportedStopError === undefined ? null : formatError(reportedStopError)} />;
+            })}
           </div>
         )}
       </div>

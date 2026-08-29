@@ -1,10 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { parseAssetId, parseLibraryId } from "../../app/common";
-import { AssetLibraryWorkspace, type AssetLibraryEntry } from "../../modules/asset-library";
+import { createRequestId, parseAssetId, parseLibraryId } from "../../app/common";
+import { appTaskCenter } from "../../app/runtime";
+import { canStopTransferTask, stopAssetTransferTask } from "../../modules/asset-library";
+import { TaskCenterPopover } from "../../app/shell/TaskCenterPopover";
+import { ImportMenu } from "../../app/shell/ImportMenu";
+import { AssetLibraryWorkspace, type AssetImportRequest, type AssetLibraryEntry } from "../../modules/asset-library";
 import type { AssetRow, PromptRow } from "../../shared/types";
 import { Button } from "../../ui/button/Button";
 import testImageUrl from "../../../src-tauri/icons/128x128.png?url";
+import testOriginalUrl from "../../../src-tauri/icons/1024x1024.png?url";
 import styles from "./AssetLibraryShowcase.module.css";
 
 const LIBRARIES = [
@@ -14,13 +19,17 @@ const LIBRARIES = [
 let currentLibrary = LIBRARIES[0].id;
 let rejectWrite = false;
 let failBatch = false;
-const thumbnailResponse = await fetch(testImageUrl);
+let rejectOriginal = false;
+let exportConflict = false;
+const [thumbnailResponse, originalResponse] = await Promise.all([fetch(testImageUrl), fetch(testOriginalUrl)]);
 if (!thumbnailResponse.ok) throw new Error("无法读取展台品牌测试图");
-const thumbnail = await thumbnailResponse.arrayBuffer();
+if (!originalResponse.ok) throw new Error("无法读取展台原图");
+const [thumbnail, original] = await Promise.all([thumbnailResponse.arrayBuffer(), originalResponse.arrayBuffer()]);
 const foldersByLibrary = new Map(LIBRARIES.map((library) => [library.id, ["参考", "参考/构图", "配色"]]));
+const deletedFoldersByLibrary = new Map(LIBRARIES.map((library) => [library.id, new Map<string, string | null>()]));
 const assetsByLibrary = new Map(LIBRARIES.map((library, libraryIndex) => [library.id, Array.from({ length: 1000 }, (_, index): AssetRow => ({
   hash: index.toString(16).padStart(64, "0"), hash_algo: "blake3", media_type: "image/png", ext: "png",
-  byte_size: thumbnail.byteLength, width: 128, height: 128, imported_at: "2026-08-27T00:00:00Z",
+  byte_size: original.byteLength, width: 1024, height: 1024, imported_at: "2026-08-27T00:00:00Z",
   original_filename: `fixture-${index}.png`, display_filename: `${libraryIndex === 0 ? "甲" : "乙"}库测试图-${index}.png`,
   source_path: null, folder: null, deleted_at: null, color_card_status: "ok", color_card_algo_version: 1,
   color_card_failure_reason: null, color_card_sampled_pixel_count: 1, note: "开发专用品牌测试图", favorite: false, tags: [], colors: [{ hex: "#E8664A", oklab_l: .6, oklab_a: .2, oklab_b: .1, share: .8, role: "dominant" }, { hex: "#171919", oklab_l: .2, oklab_a: 0, oklab_b: 0, share: .2, role: "neutral" }],
@@ -48,6 +57,12 @@ function folderName(value: unknown): string {
 mockIPC((command, payload) => {
   const request = record(payload);
   switch (command) {
+    case "plugin:dialog|open": {
+      const options = record(request.options);
+      if (options.title === "选择图片导出目录") return "E:\\Vistash\\导出演示";
+      if (options.directory === true) return "E:\\Vistash\\导入演示";
+      return ["E:\\Vistash\\demo-01.png", "E:\\Vistash\\demo-02.jpg"];
+    }
     case "read_layout": {
       if (typeof request.libraryId !== "string") throw new TypeError("布局请求缺少库身份");
       const saved = localStorage.getItem(`vistash.dev.asset-session:${request.libraryId}`);
@@ -66,13 +81,50 @@ mockIPC((command, payload) => {
       if (rows === undefined || folders === undefined) throw new Error("展台库不存在");
       const text = query.text.toLocaleLowerCase();
       const folder = record(query.folder);
+      const queryTags = query.tags;
+      if (!Array.isArray(queryTags) || !queryTags.every((tag): tag is string => typeof tag === "string")) throw new TypeError("标签查询非法");
+      const tagCounts = new Map<string, number>();
+      for (const row of rows) if (row.deleted_at === null) for (const tag of row.tags) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
       return { assets: rows.filter((asset) =>
         (query.location === "trash" ? asset.deleted_at !== null : asset.deleted_at === null) &&
         (query.location === "trash" || folder.kind === "all" || (folder.kind === "root" ? asset.folder === null : asset.folder === folder.path)) &&
         (query.favorite === null || asset.favorite === query.favorite) &&
-        `${asset.display_filename} ${asset.original_filename}`.toLocaleLowerCase().includes(text)), folders, tags: [], trash_count: rows.filter((asset) => asset.deleted_at !== null).length };
+        queryTags.every((tag) => asset.tags.includes(tag)) &&
+        `${asset.display_filename} ${asset.original_filename}`.toLocaleLowerCase().includes(text)), folders, tags: [...tagCounts].map(([tag, count]) => ({ tag, count })), trash_count: rows.filter((asset) => asset.deleted_at !== null).length };
     }
     case "asset_thumbnail": return thumbnail.slice(0);
+    case "import_sources":
+    case "paste_import": return { task_id: "dev-import-task", imported: 2, skipped_non_images: 1, duplicates: 0, pending_count: 0, failures: [] };
+    case "import_stop": return { task_id: request.taskId, state: "stopped" };
+    case "plan_export": {
+      const hashes = request.hashes;
+      if (!Array.isArray(hashes) || !hashes.every((hash): hash is string => typeof hash === "string")) throw new TypeError("导出规划哈希无效");
+      const rows = assetsByLibrary.get(currentLibrary);
+      if (rows === undefined) throw new Error("展台库不存在");
+      return hashes.map((hash) => {
+        const row = rows.find((asset) => asset.hash === hash);
+        if (row === undefined) throw new Error("导出目标不存在");
+        return { hash, display_filename: row.display_filename, existing: exportConflict };
+      });
+    }
+    case "export_assets": {
+      const hashes = request.hashes;
+      if (!Array.isArray(hashes) || !hashes.every((hash): hash is string => typeof hash === "string")) throw new TypeError("导出哈希无效");
+      const rows = assetsByLibrary.get(currentLibrary);
+      if (rows === undefined || (request.policy !== "skip" && request.policy !== "overwrite" && request.policy !== "auto_number")) throw new TypeError("导出请求无效");
+      const names = hashes.map((hash) => {
+        const row = rows.find((asset) => asset.hash === hash);
+        if (row === undefined) throw new Error("导出目标不存在");
+        return row.display_filename;
+      });
+      return { task_id: "dev-export-task", exported: request.policy === "skip" && exportConflict ? [] : names, skipped_existing: request.policy === "skip" && exportConflict ? names.length : 0, failed: [], pending_count: 0 };
+    }
+    case "copy_asset_to_clipboard":
+    case "open_with_default_app": return undefined;
+    case "asset_original": {
+      if (rejectOriginal) throw { code: "library.io_failed", detail: "展台模拟原图读取失败" };
+      return original.slice(0);
+    }
     case "image_detail": {
       const rows = assetsByLibrary.get(currentLibrary);
       const prompts = promptsByLibrary.get(currentLibrary);
@@ -141,7 +193,11 @@ mockIPC((command, payload) => {
     }
     case "batch_set_asset_favorite":
     case "batch_move_assets_to_folder":
+    case "batch_add_asset_tag":
+    case "batch_remove_asset_tag":
+    case "batch_link_to_prompt":
     case "batch_delete_assets": {
+      if (rejectWrite && (command === "batch_add_asset_tag" || command === "batch_remove_asset_tag" || command === "batch_link_to_prompt")) throw { code: "library.io_failed", detail: "展台模拟批量写入失败" };
       const rows = assetsByLibrary.get(currentLibrary);
       if (rows === undefined || !Array.isArray(request.hashes) || !request.hashes.every((hash): hash is string => typeof hash === "string")) throw new TypeError("批量请求非法");
       const targets = new Set(request.hashes);
@@ -152,10 +208,27 @@ mockIPC((command, payload) => {
           failures.push({ id: row.hash, display_name: row.display_filename, error: { code: "library.io_failed", detail: "展台模拟只读素材" } });
           continue;
         }
-        if (command === "batch_delete_assets") row.deleted_at = "2026-08-28T00:00:00Z";
+        if (command === "batch_delete_assets") {
+          const deletedFolders = deletedFoldersByLibrary.get(currentLibrary);
+          if (deletedFolders === undefined) throw new Error("缺少删除记录");
+          deletedFolders.set(row.hash, row.folder);
+          row.folder = null;
+          row.deleted_at = "2026-08-28T00:00:00Z";
+        }
         else if (command === "batch_move_assets_to_folder") {
           if (request.folder !== null && typeof request.folder !== "string") throw new TypeError("移动目标非法");
           row.folder = request.folder;
+        }
+        else if (command === "batch_add_asset_tag" || command === "batch_remove_asset_tag") {
+          if (typeof request.tag !== "string") throw new TypeError("批量标签非法");
+          const tag = request.tag.trim();
+          if (tag.length === 0 || /\p{Cc}/u.test(tag)) throw { code: "library.tag_invalid", detail: "标签不可为空或包含控制字符" };
+          row.tags = command === "batch_add_asset_tag" ? [...new Set([...row.tags, tag])] : row.tags.filter((value) => value !== tag);
+        }
+        else if (command === "batch_link_to_prompt") {
+          const prompt = promptsByLibrary.get(currentLibrary)?.find((item) => item.id === request.promptId && item.deleted_at === null);
+          if (prompt === undefined) throw new Error("批量关联目标不存在");
+          prompt.linked_image_hashes = [...new Set([...prompt.linked_image_hashes, row.hash])];
         }
         else {
           if (typeof request.favorite !== "boolean") throw new TypeError("收藏值非法");
@@ -196,6 +269,38 @@ mockIPC((command, payload) => {
       for (const row of rows) if (row.folder !== null && matches(row.folder)) row.folder = renamed + row.folder.slice(path.length);
       return renamed;
     }
+    case "restore_asset": {
+      const row = assetsByLibrary.get(currentLibrary)?.find((asset) => asset.hash === request.hash && asset.deleted_at !== null);
+      const folders = foldersByLibrary.get(currentLibrary);
+      const deletedFolders = deletedFoldersByLibrary.get(currentLibrary);
+      if (row === undefined || folders === undefined || deletedFolders === undefined) throw new Error("还原目标不存在");
+      if (rejectWrite || (failBatch && row.hash === "0".repeat(64))) throw { code: "trash.restore_failed", detail: "展台模拟还原写入失败" };
+      const previous = deletedFolders.get(row.hash);
+      if (previous === undefined) throw new Error("缺少删除前归属");
+      const missing = previous !== null && !folders.includes(previous);
+      row.folder = missing ? null : previous;
+      row.deleted_at = null;
+      deletedFolders.delete(row.hash);
+      return { missing_folders: missing ? [previous] : [] };
+    }
+    case "purge_trash": {
+      if (rejectWrite) throw { code: "trash.purge_failed", detail: "展台模拟清空写入失败" };
+      const rows = assetsByLibrary.get(currentLibrary);
+      const prompts = promptsByLibrary.get(currentLibrary);
+      const deletedFolders = deletedFoldersByLibrary.get(currentLibrary);
+      if (rows === undefined || prompts === undefined || deletedFolders === undefined) throw new Error("清空目标库不存在");
+      const purged = new Set<string>();
+      const failures = [];
+      for (const row of rows) {
+        if (row.deleted_at === null) continue;
+        if (failBatch && failures.length === 0) { failures.push({ hash: row.hash, original_filename: row.original_filename, error: { code: "trash.purge_failed", detail: "展台模拟原图被占用" } }); continue; }
+        purged.add(row.hash);
+        deletedFolders.delete(row.hash);
+      }
+      assetsByLibrary.set(currentLibrary, rows.filter((row) => !purged.has(row.hash)));
+      for (const prompt of prompts) prompt.linked_image_hashes = prompt.linked_image_hashes.filter((hash) => !purged.has(hash));
+      return { purged: purged.size, failures };
+    }
     default: throw new Error(`展台未实现 IPC：${command}`);
   }
 });
@@ -203,8 +308,11 @@ mockIPC((command, payload) => {
 export function AssetLibraryShowcase(): ReactNode {
   const [libraryIndex, setLibraryIndex] = useState<0 | 1>(0);
   const [entry, setEntry] = useState<AssetLibraryEntry>({ kind: "resume" });
+  const [importRequest, setImportRequest] = useState<AssetImportRequest | undefined>();
   const [writeFailure, setWriteFailure] = useState(false);
   const [batchFailure, setBatchFailure] = useState(false);
+  const [originalFailure, setOriginalFailure] = useState(false);
+  const [exportConflictState, setExportConflict] = useState(false);
   return <main className={styles.page}>
     <div className={styles.controls} aria-label="开发验收控制">
       <span>图片模块验收 · 品牌测试图 · 非完整工作区</span>
@@ -217,7 +325,11 @@ export function AssetLibraryShowcase(): ReactNode {
       <Button size="compact" onClick={() => setEntry({ kind: "locate", requestId: crypto.randomUUID(), hash: parseAssetId((80).toString(16).padStart(64, "0")), location: "active" })}>定位第 81 项</Button>
       <Button size="compact" aria-pressed={writeFailure} onClick={() => { rejectWrite = !writeFailure; setWriteFailure(!writeFailure); }}>模拟保存失败</Button>
       <Button size="compact" aria-pressed={batchFailure} onClick={() => { failBatch = !batchFailure; setBatchFailure(!batchFailure); }}>模拟部分失败</Button>
+      <Button size="compact" aria-pressed={originalFailure} onClick={() => { rejectOriginal = !originalFailure; setOriginalFailure(!originalFailure); }}>模拟原图失败</Button>
+      <Button size="compact" aria-pressed={exportConflictState} onClick={() => { exportConflict = !exportConflictState; setExportConflict(!exportConflictState); }}>模拟导出冲突</Button>
+      <ImportMenu onImportImages={() => setImportRequest({ requestId: createRequestId(), kind: "images" })} onImportFolder={() => setImportRequest({ requestId: createRequestId(), kind: "folder" })} onImportClipboard={() => setImportRequest({ requestId: createRequestId(), kind: "clipboard" })} />
+      <TaskCenterPopover taskCenter={appTaskCenter} onStopTask={stopAssetTransferTask} canStopTask={canStopTransferTask} />
     </div>
-    <div className={styles.workspace}><AssetLibraryWorkspace session={LIBRARIES[libraryIndex]} active entry={entry} /></div>
+    <div className={styles.workspace}><AssetLibraryWorkspace session={LIBRARIES[libraryIndex]} active entry={entry} {...(importRequest === undefined ? {} : { importRequest })} onImportRequestHandled={(requestId) => setImportRequest((current) => current?.requestId === requestId ? undefined : current)} /></div>
   </main>;
 }

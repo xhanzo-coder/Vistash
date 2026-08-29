@@ -22,6 +22,8 @@ function stubPort(): PlatformPort {
     acquireThumbnail: async (hash) => ({ url: `memory://thumb/${hash}`, release() {} }),
     acquireOriginal: async (hash) => ({ url: `memory://original/${hash}`, release() {} }),
     pickImageFiles: async () => [],
+    pickImportDirectory: async () => null,
+    pickExportDirectory: async () => null,
     pickLibraryDirectory: async () => null,
     onFileDrag: () => () => {},
     importSources: async () => EMPTY_IMPORT,

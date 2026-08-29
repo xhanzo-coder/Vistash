@@ -8,7 +8,7 @@ import {
   type UIEvent,
 } from "react";
 
-import { waterfallMetrics } from "../assets/waterfallMetrics";
+import { waterfallMetrics } from "./waterfallMetrics";
 import { estimatedPromptCardHeight } from "./promptCardMetrics";
 import { PromptCoverImage } from "./PromptCoverImage";
 import { promptDisplayTitle } from "./promptDisplay";
@@ -35,6 +35,8 @@ type PromptCardWaterfallProps = {
   onOpenFocused: (id: string) => void;
   /** 密度旋钮：期望卡片宽度。 */
   targetTileWidth?: number;
+  /** 外壳切换可见性时通知虚拟器重新测量隐藏容器的真实高度。 */
+  workspaceActive?: boolean;
 };
 
 /** 后端已经排除回收站图片并解析出唯一有效封面；界面层不重复推导删除状态。 */
@@ -62,6 +64,7 @@ export function PromptCardWaterfall({
   onToggleFavorite,
   onOpenFocused,
   targetTileWidth = 280,
+  workspaceActive = true,
 }: PromptCardWaterfallProps) {
   const { state, onItemClick, handleKeyDown } = useSelection();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -97,6 +100,10 @@ export function PromptCardWaterfall({
     lanes: columnCount,
     getItemKey: (index) => prompts[index]?.id ?? String(index),
   });
+
+  useEffect(() => {
+    if (workspaceActive) virtualizer.measure();
+  }, [workspaceActive, virtualizer]);
 
   useScrollRestore(scrollRef, scrollKey, savedOffset);
   const boxSelection = useWaterfallBoxSelection(virtualizer, laneWidth, GAP);
@@ -182,7 +189,7 @@ export function PromptCardWaterfall({
             {copyProblem}
           </p>
         )}
-        {virtualizer.getVirtualItems().map((item) => {
+        {(workspaceActive ? virtualizer.getVirtualItems() : []).map((item) => {
           const prompt = prompts[item.index];
           if (prompt === undefined) return null;
           const selected = state.selectedIds.has(prompt.id);
@@ -227,7 +234,7 @@ export function PromptCardWaterfall({
               >
                 {cover !== null && (
                   <span className="prompt-card-cover">
-                    <PromptCoverImage coverHash={cover} />
+                    <PromptCoverImage key={cover} coverHash={cover} />
                     {linkedCount > 1 && (
                       <span className="prompt-card-count" aria-hidden="true">
                         +{linkedCount - 1}

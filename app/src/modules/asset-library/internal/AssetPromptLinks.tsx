@@ -9,7 +9,7 @@ import { SearchField } from "../../../ui/search-field/SearchField";
 import { assetKeys } from "./queryKeys";
 import styles from "./AssetInspector.module.css";
 
-function promptTitle(prompt: PromptRow): string {
+export function promptTitle(prompt: PromptRow): string {
   if (prompt.title !== null) return prompt.title;
   const line = prompt.body.split(/\r?\n/).find((text) => text.trim().length > 0);
   if (line === undefined) throw new TypeError("无标题提示词必须包含非空正文");

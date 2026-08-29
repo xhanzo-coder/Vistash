@@ -1,4 +1,9 @@
 import type { ReactNode } from "react";
+import { ImagesIcon } from "@phosphor-icons/react/dist/csr/Images";
+import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
+import { TrayIcon } from "@phosphor-icons/react/dist/csr/Tray";
+import { FolderIcon } from "@phosphor-icons/react/dist/csr/Folder";
+import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 
 import type { FolderFilter } from "../../../shared/types";
 import { Button } from "../../../ui/button/Button";
@@ -15,6 +20,8 @@ export type NavigatorScope = {
 };
 
 type NavigatorProps = {
+  libraryName: string;
+  folderActions: ReactNode;
   /** 快照给出的全部逻辑文件夹路径；展示为按段缩进的树。 */
   folders: readonly string[];
   tagUsage: readonly TagUsage[];
@@ -40,11 +47,14 @@ function leafSegment(path: string): string {
  * 正常文件夹条件）；文件夹树、「全部图片」与「未分类」都意味着回到正常集合，
  * 因此同时把 location 拉回 active。重复点击同一文件夹是幂等的选择而非反选。
  */
-export function AssetNavigator({ folders, tagUsage, trashCount, scope, onChange, dropTarget, presentation }: NavigatorProps): ReactNode {
+export function AssetNavigator({ libraryName, folderActions, folders, tagUsage, trashCount, scope, onChange, dropTarget, presentation }: NavigatorProps): ReactNode {
   // 排序保证父路径先于后代出现；先复制副本再就地排序（与 assetSort 相同写法）。
   const sortedFolders: string[] = [...folders];
   sortedFolders.sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
   const sortedTags: TagUsage[] = [...tagUsage];
+  // 批量移除最后一个标签后，当前筛选仍须可见、可取消；完整用量中不存在即为零。
+  const knownTags = new Set(tagUsage.map(({ tag }) => tag));
+  for (const tag of scope.tags) if (!knownTags.has(tag)) sortedTags.push({ tag, count: 0 });
   sortedTags.sort((left, right) => left.tag.localeCompare(right.tag, "zh-Hans-CN"));
   const browsingActive = scope.location === "active";
   const favoritesCurrent = scope.favorite === true;
@@ -52,38 +62,33 @@ export function AssetNavigator({ folders, tagUsage, trashCount, scope, onChange,
   return (
     <aside className={presentation === "sidebar" ? styles.navigationRail : styles.dialogNavigator}>
       <nav aria-label="图片导航" className={styles.navigator}>
+        <div className={styles.libraryIdentity} title={libraryName}><strong>{libraryName}</strong></div>
         <div className={styles.navGroup}>
-          <Button size="compact" className={styles.navEntry}
+          <Button size="compact" variant="ghost" className={styles.navEntry} title="全部图片" startIcon={<ImagesIcon />}
             aria-current={browsingActive && scope.folder.kind === "all" ? "true" : undefined}
             onClick={() => onChange(ALL_ASSETS_PATCH)}>
             全部图片
           </Button>
-          <Button size="compact" className={styles.navEntry} aria-current={favoritesCurrent ? "true" : undefined}
+          <Button size="compact" variant="ghost" className={styles.navEntry} title="收藏" startIcon={<StarIcon weight={favoritesCurrent ? "fill" : "regular"} />} aria-current={favoritesCurrent ? "true" : undefined}
             onClick={() => onChange({ favorite: !favoritesCurrent })}>
             收藏
           </Button>
-          <Button size="compact" className={styles.navEntry}
+          <Button size="compact" variant="ghost" className={styles.navEntry} title="未分类" startIcon={<TrayIcon />}
             data-folder-drop="" data-drop-target={dropTarget === null ? "true" : undefined}
             aria-current={browsingActive && scope.folder.kind === "root" ? "true" : undefined}
             onClick={() => onChange({ folder: { kind: "root" }, location: "active" })}>
             未分类
           </Button>
-          <div className={styles.entryRow}>
-            <Button size="compact" className={styles.navEntry}
-              aria-current={!browsingActive ? "true" : undefined}
-              onClick={() => onChange({ location: "trash" })}>
-              回收站
-            </Button>
-            {trashCount > 0 ? <span className={styles.trashBadge}>{trashCount}</span> : null}
-          </div>
         </div>
+        <div className={styles.folderSection}>
+          <div className={styles.sectionHeading}><span>文件夹</span><div className={styles.folderActions} role="group" aria-label="文件夹操作">{folderActions}</div></div>
         {sortedFolders.length > 0 ? (
           <div className={styles.tree}>
             {sortedFolders.map((path) => {
               const depth = path.split("/").length - 1;
               const current = browsingActive && scope.folder.kind === "path" && scope.folder.path === path;
               return (
-                <Button key={path} size="compact" className={styles.navEntry}
+                <Button key={path} size="compact" variant="ghost" className={styles.navEntry} title={path} startIcon={<FolderIcon />}
                   data-folder={path}
                   data-folder-drop={path} data-drop-target={dropTarget === path ? "true" : undefined}
                   style={{ paddingInlineStart: `${(depth + 1) * 0.75}em` }}
@@ -94,14 +99,16 @@ export function AssetNavigator({ folders, tagUsage, trashCount, scope, onChange,
               );
             })}
           </div>
-        ) : null}
-      </nav>
-      {tagUsage.length > 0 ? (
+        ) : <p className={styles.navigationHint}>还没有文件夹</p>}
+        </div>
+      {sortedTags.length > 0 ? (
+        <div className={styles.tagSection}>
+          <div className={styles.sectionHeading}><span>标签</span></div>
         <div role="group" aria-label="标签筛选" className={styles.tagPanel}>
           {sortedTags.map(({ tag, count }) => {
               const pressed = scope.tags.includes(tag);
               return (
-                <Button key={tag} size="compact" data-tag={tag} aria-pressed={pressed}
+                <Button key={tag} size="compact" variant="ghost" data-tag={tag} aria-pressed={pressed}
                   onClick={() =>
                     onChange({
                       tags: pressed
@@ -109,13 +116,21 @@ export function AssetNavigator({ folders, tagUsage, trashCount, scope, onChange,
                         : [...scope.tags, tag],
                     })
                   }>
-                  {tag}
+                  <span className={styles.tagName}>{tag}</span>
                   <span className={styles.tagCount}>{count}</span>
                 </Button>
               );
             })}
         </div>
+        </div>
       ) : null}
+        <div className={styles.entryRow}>
+          <Button size="compact" variant="ghost" className={styles.navEntry} title="回收站" startIcon={<TrashIcon />}
+            aria-current={!browsingActive ? "true" : undefined}
+            onClick={() => onChange({ location: "trash" })}>回收站</Button>
+          {trashCount > 0 ? <span className={styles.trashBadge}>{trashCount}</span> : null}
+        </div>
+      </nav>
     </aside>
   );
 }

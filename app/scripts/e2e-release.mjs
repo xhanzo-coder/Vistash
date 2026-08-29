@@ -117,7 +117,7 @@ async function dumpState(page, label) {
       .innerText()
       .catch(() => "(工作台标题不存在)"),
     resultCount: await page
-      .locator(".result-count")
+      .locator('[data-result-count]')
       .first()
       .innerText()
       .catch(() => "(结果计数不存在)"),
@@ -183,6 +183,14 @@ async function findSidecar(predicate, subdir = "objects") {
     if (predicate(meta)) return { path, meta };
   }
   return null;
+}
+
+function sourceFilename(meta) {
+  const source = meta.source;
+  if (source === null || typeof source !== "object" || typeof source.filename !== "string") {
+    throw new TypeError("v3 侧车缺少 source.filename");
+  }
+  return source.filename;
 }
 
 /** 提示词权威文件（prompts/objects|trash/<id>.json）。 */
@@ -259,7 +267,7 @@ async function main() {
     // 迁移页的可观察语义选中真实目标；创建普通 newPage 也没有 Tauri IPC，禁止兜底。
     const page = await poll(async () => {
       for (const candidate of context.pages()) {
-        if ((await candidate.getByRole("heading", { name: "迁移到新的库格式" }).count()) > 0) {
+        if ((await candidate.getByRole("heading", { name: "这个库需要升级" }).count()) > 0) {
           return candidate;
         }
       }
@@ -281,13 +289,17 @@ async function main() {
     );
     await shot(page, "migration-page");
 
-    /* S2 执行迁移：界面进入工作区，磁盘落成 v2 */
-    await page.getByRole("button", { name: "开始迁移" }).click();
-    await page.locator(".app-shell").waitFor({ timeout: 60_000 });
+    /* S2 执行迁移：先生成只读冲突方案，再提交 v3 格式 */
+    await page.getByRole("button", { name: "准备迁移" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "检查迁移方案" }).click();
+    await page.getByRole("heading", { name: "选择唯一图片文件夹" }).waitFor({ timeout: 60_000 });
+    await page.getByRole("button", { name: "确认迁移" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "开始迁移" }).click();
+    await page.locator('[data-workspace="assets"]').waitFor({ timeout: 60_000 });
     await poll(async () => {
       const meta = await readJson(join(LIBRARY, "library.json"));
-      return meta.format_version === 2 && /^[0-9a-f-]{36}$/.test(meta.library_id ?? "");
-    }, 10_000, "library.json 升级为 v2 且带 UUID library_id");
+      return meta.format_version === 3 && /^[0-9a-f-]{36}$/.test(meta.library_id ?? "");
+    }, 10_000, "library.json 升级为 v3 且带 UUID library_id");
     assert(!existsSync(join(LIBRARY, "migration-journal.json")), "journal 必须在成功后清理");
     for (const dir of ["prompts", join("prompts", "objects"), join("prompts", "trash")]) {
       assert(existsSync(join(LIBRARY, dir)), `迁移应建立 ${dir}`);
@@ -297,8 +309,8 @@ async function main() {
     assert(sidecars.length === 8, `正常素材应为 8 张，实际 ${sidecars.length}`);
     for (const path of sidecars) {
       const meta = await readJson(path);
-      assert(meta.format_version === 2, `侧车应升级 v2：${path}`);
-      assert("note" in meta && "favorite" in meta, "v2 侧车强制 note/favorite 字段");
+      assert(meta.format_version === 3, `侧车应升级 v3：${path}`);
+      assert("source" in meta && "display_filename" in meta && "folder" in meta, "v3 侧车应包含来源、显示名和单一文件夹字段");
     }
     const trashed = sidecarPaths("trash");
     assert(trashed.length === 1, "回收站素材应保留 1 张");
@@ -319,7 +331,7 @@ async function main() {
       10_000,
       "备注经 set_asset_note 落盘",
     );
-    await page.locator(".favorite-toggle").click();
+    await page.getByRole("button", { name: "收藏图片", exact: true }).click();
     const favored = await poll(
       () => findSidecar((meta) => meta.favorite === true),
       10_000,
@@ -332,10 +344,12 @@ async function main() {
     const cards = page.locator("[data-waterfall-item]");
     await cards.nth(1).click({ modifiers: ["Control"] });
     await cards.nth(2).click({ modifiers: ["Control"] });
-    const tagForm = page.locator("form:has(#batch-new-tag)");
-    await tagForm.waitFor({ timeout: 10_000 });
-    await tagForm.locator("#batch-new-tag").fill("验收");
-    await tagForm.locator('button[type="submit"]').click();
+    const batchToolbar = page.getByRole("toolbar", { name: "批量操作", exact: true });
+    await poll(() => batchToolbar.getByRole("button", { name: "编辑标签", exact: true }).isEnabled(), 15_000, "多选检查器写入按钮可用");
+    await batchToolbar.getByRole("button", { name: "编辑标签", exact: true }).click();
+    const tagDialog = page.getByRole("dialog", { name: "批量编辑标签", exact: true });
+    await tagDialog.getByRole("textbox", { name: "标签名称", exact: true }).fill("验收");
+    await tagDialog.getByRole("button", { name: "添加到所选图片", exact: true }).click();
     const taggedCount = await poll(
       async () => {
         const count =
@@ -347,13 +361,11 @@ async function main() {
       "批量打标落盘（至少两张）",
     );
     assert(taggedCount >= 2, `至少两张素材应带上“验收”标签，实际 ${taggedCount}`);
-    // 批量进行中工作区处于 mutating：等批量 promise 真正收尾。磁盘先见到标签不代表
-    // UI 已收到报告（杀软/磁盘抖动可以让最后一项拖上数秒），「批量完成」报告出现
-    // 才意味着进度已清、按钮已恢复。
+    // 磁盘已确认所有目标完成；新版动作报告按动作标题呈现，不再使用旧的“批量完成”文案。
     await poll(
-      async () => ((await page.getByText(/批量完成/).count()) >= 1 ? true : null),
+      async () => ((await page.getByText(/添加标签/).count()) >= 1 ? true : null),
       30_000,
-      "批量报告出现（批量 promise 收尾）",
+      "批量动作报告出现",
     );
     await shot(page, "batch-tagging");
 
@@ -362,12 +374,14 @@ async function main() {
     //（单击已选中项不会退出多选）。
     await page.keyboard.press("Escape");
     await cards.nth(0).click();
-    await page.locator("#new-folder").fill("验收集");
-    await page.locator('form:has(#new-folder) button[type="submit"]').click();
+    await page.getByRole("button", { name: "新建文件夹", exact: true }).click();
+    const createFolderDialog = page.getByRole("dialog", { name: "新建文件夹", exact: true });
+    await createFolderDialog.locator('input[name="folder-name"]').fill("验收集");
+    await createFolderDialog.getByRole("button", { name: "创建文件夹", exact: true }).click();
     await poll(async () => (await page.getByRole("button", { name: /验收集/ }).count()) > 0, 10_000, "左栏出现新文件夹");
     // 新建文件夹后查询自动切进该文件夹（此时为空集合），选中项不在查询域、检查器清空：
     // 回到“全部素材”重新建立单选，组织分区才可用。
-    await page.getByRole("button", { name: "全部素材" }).click();
+    await page.getByRole("button", { name: "全部图片", exact: true }).click();
     await cards.first().waitFor({ timeout: 15_000 });
     await page.keyboard.press("Escape");
     await cards.nth(0).click();
@@ -375,12 +389,12 @@ async function main() {
     // 用 click() 触发，落盘结果交给下面的权威文件轮询。
     const folderBox = page
       .locator('[data-inspector-section="organization"]')
-      .getByRole("checkbox", { name: /验收集/ });
-    await folderBox.click();
+      .getByRole("combobox", { name: "图片所在文件夹", exact: true });
+    await folderBox.selectOption("folder:验收集");
     await dumpState(page, "s6-after-checkbox-click");
     try {
       await poll(
-        () => findSidecar((meta) => meta.folders.includes("验收集")),
+        () => findSidecar((meta) => meta.folder === "验收集"),
         10_000,
         "素材归属新文件夹落盘",
       );
@@ -391,27 +405,31 @@ async function main() {
     await shot(page, "folder-organization");
 
     /* S7 Ctrl+F 分库搜索与条件芯片 */
+    // S6 最后一次交互是检查器下拉框；先把焦点还给工作区，再验证工作区快捷键，
+    // 避免把原生 select 的焦点语义误判成应用快捷键失效。
+    await page.locator('section[aria-label="图片工作区"] h1').click();
+    await page.evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+    });
     await page.keyboard.press("Control+f");
     const searchBox = page.locator('input[aria-label="按文件名搜索"]');
     await poll(() => searchBox.evaluate((el) => el === document.activeElement), 5_000, "Ctrl+F 聚焦搜索框");
     await searchBox.fill("晨雾");
-    await poll(async () => (await page.locator(".result-count").innerText()) === "1 项", 15_000, "分库搜索过滤到 1 项");
-    assert(
-      (await page.getByRole("list", { name: "已应用的搜索条件" }).count()) >= 1,
-      "应出现条件芯片列表",
-    );
+    await poll(async () => (await page.locator("[data-waterfall-item]").count()) === 1, 15_000, "分库搜索过滤到 1 项");
     await shot(page, "library-search");
     await searchBox.fill("");
     await poll(
-      async () => (await page.locator(".result-count").innerText()) !== "1 项",
+      async () => (await page.locator("[data-waterfall-item]").count()) !== 1,
       15_000,
       "清空查询恢复全集",
     );
 
     /* S8 Ctrl+K 全局搜索：分组与计数 */
     await page.keyboard.press("Control+k");
-    await page.keyboard.type("晨雾", { delay: 40 });
-    await poll(async () => (await page.getByText("图片素材").count()) >= 1, 15_000, "全局搜索出现图片分组");
+    const globalDialog = page.getByRole("dialog");
+    await globalDialog.getByRole("searchbox", { name: "搜索全部素材", exact: true }).fill("晨雾");
+    await poll(async () => (await globalDialog.getByRole("heading", { name: "图片" }).count()) >= 1, 15_000, "全局搜索出现图片分组");
     assert((await page.getByRole("button", { name: /晨雾/ }).count()) >= 1, "结果里应能点选命中项");
     await shot(page, "global-search");
     await page.keyboard.press("Escape");
@@ -434,7 +452,7 @@ async function main() {
       const [path] = promptFiles();
       return path === undefined ? null : { path, meta: await readJson(path) };
     }, 10_000, "种子提示词权威文件落盘");
-    await page.getByRole("button", { name: "提示词库" }).first().click();
+    await page.getByRole("button", { name: "提示词", exact: true }).click();
     await page.locator("[data-prompt-card]").first().waitFor({ timeout: 20_000 });
     await dumpState(page, "s9-after-tab-switch");
 
@@ -497,19 +515,16 @@ async function main() {
     await shot(page, "prompt-note-favorite");
 
     /* S12 图片回收站：删除 → 还原 → purge */
-    await page.getByRole("button", { name: "素材", exact: true }).click();
+    await page.getByRole("button", { name: "图片", exact: true }).click();
     await page.keyboard.press("Escape"); // 清掉上一场景可能残留的选择
     const assetCards = page.locator("[data-waterfall-item]");
     await assetCards.first().waitFor({ timeout: 20_000 });
     await page.locator("[data-waterfall-item]", { hasText: "晨雾.png" }).click();
     await page.getByRole("button", { name: "移入回收站" }).first().click();
-    const deleteDialog = page.getByRole("dialog");
-    await deleteDialog.waitFor({ timeout: 5_000 });
-    await deleteDialog.getByRole("button", { name: "移入回收站" }).click();
     await poll(
       async () => {
         const deleted = await findSidecar(
-          (meta) => meta.original_filename === "晨雾.png",
+          (meta) => sourceFilename(meta) === "晨雾.png",
           "trash",
         );
         return deleted !== null && deleted.meta.deleted_at !== null;
@@ -517,7 +532,7 @@ async function main() {
       10_000,
       "晨雾进入回收站态",
     );
-    await page.locator('button[aria-label="回收站"]').click();
+    await page.getByRole("button", { name: "回收站", exact: true }).click();
     const trashCards = page.locator("[data-waterfall-item]");
     try {
       await poll(
@@ -530,37 +545,37 @@ async function main() {
       throw error;
     }
     await page.locator("[data-waterfall-item]", { hasText: "废片.png" }).click();
-    await page.getByRole("button", { name: "还原素材" }).click();
+    await page.getByRole("button", { name: "还原图片" }).click();
     await poll(
       async () => {
-        const restored = await findSidecar((meta) => meta.original_filename === "废片.png");
+        const restored = await findSidecar((meta) => sourceFilename(meta) === "废片.png");
         if (restored === null) return false;
         return (
           restored.meta.deleted_at === null &&
-          JSON.stringify(restored.meta.folders) === JSON.stringify(["参考/构图"])
+          restored.meta.folder === "参考/构图"
         );
       },
       10_000,
       "废片还原并回到删除前归属",
     );
-    await page.getByRole("button", { name: "清空回收站" }).click();
-    const purgeDialog = page.getByRole("dialog");
+    await page.getByRole("button", { name: "清空图片回收站" }).click();
+    const purgeDialog = page.getByRole("alertdialog");
     await purgeDialog.waitFor({ timeout: 5_000 });
-    await purgeDialog.getByRole("button", { name: "永久删除" }).click();
-    await poll(async () => (await page.getByText(/已永久删除 1 个/).count()) >= 1, 15_000, "purge 报告逐项数量");
+    await purgeDialog.getByRole("button", { name: "永久清空" }).click();
+    await poll(async () => (await page.getByText(/已永久删除 1 张图片/).count()) >= 1, 15_000, "purge 报告逐项数量");
     assert(sidecarPaths("trash").length === 0, "purge 后 trash 树应为空");
     assert(
-      (await findSidecar((meta) => meta.original_filename === "晨雾.png")) === null,
+      (await findSidecar((meta) => sourceFilename(meta) === "晨雾.png")) === null,
       "晨雾本体与侧车应被永久移除",
     );
     assert(
-      (await findSidecar((meta) => meta.original_filename === "废片.png")) !== null,
+      (await findSidecar((meta) => sourceFilename(meta) === "废片.png")) !== null,
       "还原过的废片不受 purge 影响",
     );
     await shot(page, "asset-trash-purge");
 
     /* S13 提示词回收站：删除 → 还原 → 再删除 → purge */
-    await page.getByRole("button", { name: "提示词库" }).first().click();
+    await page.getByRole("button", { name: "提示词", exact: true }).click();
     await page.locator("[data-prompt-card]").first().waitFor({ timeout: 20_000 });
     await page.locator("[data-prompt-card]").first().click();
     await page.getByRole("button", { name: "移入回收站" }).first().click();
@@ -571,7 +586,7 @@ async function main() {
       const [path] = promptFiles("trash");
       return path === undefined ? false : (await readJson(path)).deleted_at !== null;
     }, 10_000, "提示词进入回收站态");
-    await page.locator('button[aria-label="回收站"]').click();
+    await page.getByRole("button", { name: "回收站", exact: true }).click();
     await page.locator("[data-prompt-card]").first().waitFor({ timeout: 15_000 });
     await page.locator("[data-prompt-card]").first().click();
     await page.getByRole("button", { name: "还原提示词" }).click();
@@ -590,8 +605,8 @@ async function main() {
     await secondPromptTrashDialog.waitFor({ timeout: 5_000 });
     await secondPromptTrashDialog.getByRole("button", { name: "移入回收站" }).click();
     await poll(() => promptFiles("trash").length === 1, 10_000, "提示词再次进入回收站");
-    await page.locator('button[aria-label="回收站"]').click();
-    await page.getByRole("button", { name: "清空回收站" }).click();
+    await page.getByRole("button", { name: "回收站", exact: true }).click();
+    await page.getByRole("button", { name: "清空回收站", exact: true }).click();
     const promptPurgeDialog = page.getByRole("dialog");
     await promptPurgeDialog.waitFor({ timeout: 5_000 });
     await promptPurgeDialog.getByRole("button", { name: "永久删除" }).click();

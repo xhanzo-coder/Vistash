@@ -98,6 +98,24 @@ export async function pickImageFiles(): Promise<string[]> {
   }
 }
 
+/** 选择要导入的目录；取消时返回 null，不复用库位置选择器的语义。 */
+export async function pickImportDirectory(): Promise<string | null> {
+  try {
+    return await openDialog({ directory: true, multiple: false, title: "选择要导入的图片文件夹" });
+  } catch (raw) {
+    throw new IpcError(asAppError(raw));
+  }
+}
+
+/** 选择导出目标目录；取消时返回 null，不能复用库或导入目录选择语义。 */
+export async function pickExportDirectory(): Promise<string | null> {
+  try {
+    return await openDialog({ directory: true, multiple: false, title: "选择图片导出目录" });
+  } catch (raw) {
+    throw new IpcError(asAppError(raw));
+  }
+}
+
 /** 对旧版本格式的库执行一次性迁移，成功后该库成为当前库。 */
 export function migrateLibrary(
   path: string,

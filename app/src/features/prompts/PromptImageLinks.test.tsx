@@ -102,6 +102,7 @@ beforeEach(() => {
       if (states instanceof Error) throw states;
       return states;
     }
+    if (command === "asset_thumbnail") return new ArrayBuffer(8);
     if (command === "catalog_snapshot") return { assets: candidates };
     if (
       command === "link_images" ||
@@ -128,6 +129,7 @@ beforeEach(() => {
 afterEach(() => {
   clearMocks();
   Reflect.deleteProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__");
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   document.body.replaceChildren();
 });
@@ -208,6 +210,52 @@ test("挂载读取关联状态：回收站项显式标记已删除，缺省封�
   ).toBeNull();
 
   await harness.unmount();
+});
+
+test("关联图片缩略图卸载时释放全部媒体租约", async () => {
+  let nextUrl = 0;
+  const createUrl = vi.fn(() => `blob:linked-${++nextUrl}`);
+  const revokeUrl = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL: createUrl, revokeObjectURL: revokeUrl });
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "";
+      readonly scrollMargin = "";
+      readonly thresholds = [0];
+
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+
+      observe(target: Element): void {
+        queueMicrotask(() => {
+          const bounds = target.getBoundingClientRect();
+          const entry: IntersectionObserverEntry = {
+            boundingClientRect: bounds,
+            intersectionRatio: 1,
+            intersectionRect: bounds,
+            isIntersecting: true,
+            rootBounds: null,
+            target,
+            time: performance.now(),
+          };
+          this.callback([entry], this);
+        });
+      }
+
+      disconnect(): void {}
+      unobserve(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+    },
+  );
+
+  const harness = await setupLinks();
+  await vi.waitFor(() => expect(createUrl).toHaveBeenCalledTimes(2));
+  await harness.unmount();
+  expect(revokeUrl).toHaveBeenCalledWith("blob:linked-1");
+  expect(revokeUrl).toHaveBeenCalledWith("blob:linked-2");
 });
 
 test("显式封面优先于缺省解析：取消封面回到缺省", async () => {

@@ -5,7 +5,7 @@ import styles from "./Overlays.module.css";
 
 export function TooltipProvider({ children }: { children: ReactNode }): ReactNode {
   return (
-    <TooltipPrimitive.Provider delayDuration={420} skipDelayDuration={180}>
+    <TooltipPrimitive.Provider delayDuration={800} skipDelayDuration={300}>
       {children}
     </TooltipPrimitive.Provider>
   );

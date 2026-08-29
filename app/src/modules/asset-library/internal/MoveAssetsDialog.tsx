@@ -26,7 +26,7 @@ export function MoveAssetsDialog({ hashes, folders, disabled, busy, run }: {
       if (busy) return;
       if (next) { setTargets([...hashes]); setTarget(undefined); setReport(null); setError(null); }
       setOpen(next);
-    }} trigger={<Button size="compact" disabled={disabled}>移动到文件夹</Button>}>
+    }} trigger={<Button size="compact" disabled={disabled}>移动</Button>}>
     <form className={styles.folderForm} onSubmit={(event) => {
       event.preventDefault();
       if (target === undefined || targets.length === 0) throw new Error("移动必须指定目标及素材");

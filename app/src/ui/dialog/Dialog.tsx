@@ -7,7 +7,7 @@ import { Button, IconButton } from "../button/Button";
 import styles from "./Dialog.module.css";
 
 export type DialogProps = {
-  trigger: ReactElement;
+  trigger?: ReactElement;
   title: string;
   description?: string;
   children: ReactNode;
@@ -41,7 +41,7 @@ export function Dialog({
       {...(open === undefined ? {} : { open })}
       {...(onOpenChange === undefined ? {} : { onOpenChange })}
     >
-      <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger>
+      {trigger === undefined ? null : <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger>}
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className={styles.overlay} />
         <DialogPrimitive.Content className={styles.content}
@@ -79,6 +79,7 @@ export type ConfirmDialogProps = {
   confirmLabel: string;
   cancelLabel?: string;
   onConfirm: () => void;
+  onCloseAutoFocus?: (event: Event) => void;
 };
 
 /** 高风险操作的阻断式确认；取消与确认均为明确按钮，不用浏览器 alert。 */
@@ -87,6 +88,7 @@ export function ConfirmDialog({
   confirmLabel,
   description,
   onConfirm,
+  onCloseAutoFocus,
   title,
   trigger,
 }: ConfirmDialogProps): ReactNode {
@@ -95,7 +97,7 @@ export function ConfirmDialog({
       <AlertDialogPrimitive.Trigger asChild>{trigger}</AlertDialogPrimitive.Trigger>
       <AlertDialogPrimitive.Portal>
         <AlertDialogPrimitive.Overlay className={styles.overlay} />
-        <AlertDialogPrimitive.Content className={styles.confirmContent}>
+        <AlertDialogPrimitive.Content className={styles.confirmContent} {...(onCloseAutoFocus === undefined ? {} : { onCloseAutoFocus })}>
           <AlertDialogPrimitive.Title className={styles.title}>{title}</AlertDialogPrimitive.Title>
           <AlertDialogPrimitive.Description className={styles.description}>
             {description}

@@ -33,6 +33,11 @@ export type OpenLibraryContext = {
   formatVersion: number;
 };
 
+/** 已通过开库门禁的工作现场可请求的生命周期动作。 */
+export type LibraryLifecycleControls = {
+  openOtherLibrary: () => void;
+};
+
 export type LibraryPickerPurpose = "create" | "open" | "relocate";
 
 /** 库生命周期依赖的窄 port；生产与测试 adapter 都只在此边界交换 DTO。 */
@@ -57,7 +62,7 @@ export function LibraryLifecycle({
   port,
 }: {
   port: LibraryLifecyclePort;
-  children: (context: OpenLibraryContext) => ReactNode;
+  children: (context: OpenLibraryContext, controls: LibraryLifecycleControls) => ReactNode;
 }): ReactNode {
   // oxlint-disable-next-line react/no-children-prop -- 这里的 children 是显式 render prop，不是可渲染 ReactNode；index.ts 不能使用 JSX。
   return createElement(LibraryLifecycleInternal, { port, children });

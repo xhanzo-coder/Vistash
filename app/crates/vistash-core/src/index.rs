@@ -16,9 +16,9 @@ use crate::library::{
     PROMPT_OBJECTS_DIR, PROMPTS_DIR, PROMPT_TRASH_DIR, TRASH_DIR,
 };
 use crate::prompt::{PromptAsset, PromptFolderList};
-use crate::sidecar::AssetSidecar;
+use crate::sidecar::{AssetSidecar, AssetSidecarV2, AssetSidecarV3};
 use rusqlite::{params_from_iter, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// 索引结构版本。表结构、列语义或写入口径的任何改动都必须提升此值——提升即触发全量重建。
@@ -259,6 +259,40 @@ fn io_err(what: &str, path: &Path, e: std::io::Error) -> AppError {
         Code::LibraryIndexRebuildFailed,
         format!("{what} {}: {e}", path.display()),
     )
+}
+
+#[derive(Deserialize)]
+struct SidecarFormatProbe {
+    format_version: u32,
+}
+
+/// 迁移阶段的索引重建读取 v2 侧车，生产阶段读取 v3；不能用 v3 解析器
+/// 盲读 v2，否则 v1→v2 迁移会在提交前被误报为元数据损坏。
+fn read_sidecar_for_rebuild(path: &Path) -> Result<AssetSidecar> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIndexRebuildFailed,
+            format!("读取侧车失败 {}: {error}", path.display()),
+        )
+    })?;
+    let probe: SidecarFormatProbe = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::detailed(
+            Code::LibraryMetadataCorrupt,
+            format!("读取侧车格式版本失败 {}: {error}", path.display()),
+        )
+    })?;
+    match probe.format_version {
+        1 => Err(AppError::detailed(
+            Code::LibraryIndexRebuildFailed,
+            format!("v1 侧车尚未迁移，不能重建生产索引：{}", path.display()),
+        )),
+        2 => Ok(AssetSidecarV2::read(path)?.as_v3_index_view()?),
+        3 => Ok(AssetSidecarV3::read(path)?),
+        version => Err(AppError::detailed(
+            Code::LibraryIndexRebuildFailed,
+            format!("侧车格式版本 {version} 不受索引重建支持：{}", path.display()),
+        )),
+    }
 }
 
 /// 一个已打开的索引。
@@ -506,7 +540,7 @@ impl Index {
             for sidecar_path in collect_json_files(&tree)? {
                 // 单个文件损坏即整次重建失败，不跳过。跳过会静默丢掉一个素材，而使用者
                 // 只会看到"素材少了一个"，无从归因。
-                let sidecar = AssetSidecar::read(&sidecar_path)?;
+                let sidecar = read_sidecar_for_rebuild(&sidecar_path)?;
                 index.upsert_asset(&sidecar)?;
             }
         }

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
@@ -6,11 +6,13 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { asAppError, formatError } from "../../../shared/errors";
+import { appTaskCenter } from "../../../app/runtime";
 import type { AppError, LibraryStatus } from "../../../shared/types";
 import { parseLibraryId } from "../../../app/common";
 import { Button } from "../../../ui/button/Button";
 import { ConfirmDialog } from "../../../ui/dialog/Dialog";
 import { Progress } from "../../../ui/progress/Progress";
+import { TaskCenterPopover } from "../../../app/shell/TaskCenterPopover";
 import brandMark from "../../../assets/brand/vistash-mark.svg";
 import type {
   MigrationProgress,
@@ -21,6 +23,7 @@ import type {
 import type {
   LibraryPickerPurpose,
   LibraryLifecyclePort,
+  LibraryLifecycleControls,
   OpenLibraryContext,
 } from "../index";
 import styles from "./LibraryLifecycle.module.css";
@@ -132,7 +135,7 @@ function FailureView({
         <p className={styles.eyebrow}>{needsMigration ? "LIBRARY MIGRATION" : "LIBRARY UNAVAILABLE"}</p>
         <h1>{needsMigration ? "这个库需要升级" : "无法打开上次的库"}</h1>
         {path === null ? null : <p className={styles.path}>{path}</p>}
-        <p className={styles.error} role="alert">{formatError(error)}</p>
+        <p className={styles.error} role="alert" data-error-code={error.code}>{formatError(error)}</p>
         <div className={styles.actions}>
           {needsMigration && path !== null && onMigrate !== undefined ? (
             <ConfirmDialog
@@ -171,6 +174,9 @@ function MigrationProgressView({
       <section className={styles.migrationProgressCard}>
         <p className={styles.eyebrow}>LIBRARY MIGRATION</p>
         <h1>{label}</h1>
+        <div className={styles.migrationTaskCenter}>
+          <TaskCenterPopover taskCenter={appTaskCenter} />
+        </div>
         <p>
           {committing
             ? "正在替换权威元数据并重建索引，此阶段不能取消。"
@@ -217,7 +223,10 @@ function MigrationPlanView({
             {NUMBER_FORMAT.format(automaticCount)} 张图片可自动迁移，{NUMBER_FORMAT.format(conflicts.length)} 张图片需要选择。
           </p>
         </div>
-        <Button variant="ghost" onClick={onCancel}>退出迁移</Button>
+        <div className={styles.migrationHeaderActions}>
+          <TaskCenterPopover taskCenter={appTaskCenter} />
+          <Button variant="ghost" onClick={onCancel}>退出迁移</Button>
+        </div>
       </header>
       <div className={styles.conflictList}>
         {conflicts.length === 0 ? (
@@ -264,10 +273,12 @@ export function LibraryLifecycle({
   port,
 }: {
   port: LibraryLifecyclePort;
-  children?: (context: OpenLibraryContext) => ReactNode;
+  children?: (context: OpenLibraryContext, controls: LibraryLifecycleControls) => ReactNode;
 }): ReactNode {
   const [localStatus, setLocalStatus] = useState<LibraryStatus | null>(null);
+  const [pickerRequested, setPickerRequested] = useState(false);
   const [operation, setOperation] = useState<OperationState>({ kind: "idle" });
+  const migrationTaskId = useRef<string | null>(null);
   const status = useQuery({
     queryKey: LIBRARY_STATUS_KEY,
     queryFn: () => port.status(),
@@ -285,6 +296,7 @@ export function LibraryLifecycle({
       }
       const next = await port.open(path);
       setLocalStatus(next);
+      setPickerRequested(false);
       setOperation({ kind: "idle" });
     } catch (raw) {
       setOperation({ kind: "failure", path, error: asAppError(raw) });
@@ -292,15 +304,25 @@ export function LibraryLifecycle({
   };
 
   const startMigration = async (path: string): Promise<void> => {
+    if (migrationTaskId.current !== null) throw new Error("迁移任务已经在运行");
+    const registration = appTaskCenter.register({ kind: "migration", title: "准备迁移方案", libraryId: path, stoppable: false, concurrencyKey: null });
+    if (registration.kind !== "registered") throw new Error("迁移任务意外触发并发拒绝");
+    migrationTaskId.current = registration.record.id;
     setOperation({ kind: "preparing", path, progress: null });
     try {
       await port.migrateLegacy(path, (progress) => {
+        appTaskCenter.reportProgress(registration.record.id, { kind: "migration", stage: progress.stage, done: progress.done, total: progress.total, currentFilename: progress.current_filename });
         setOperation({ kind: "preparing", path, progress });
       });
       const plan = await port.planV3(path);
+      appTaskCenter.complete(registration.record.id, { counts: { succeeded: 1, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: null });
+      migrationTaskId.current = null;
       setOperation({ kind: "planning", path, plan, resolutions: new Map() });
     } catch (raw) {
-      setOperation({ kind: "failure", path, error: asAppError(raw) });
+      const error = asAppError(raw);
+      appTaskCenter.complete(registration.record.id, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error });
+      migrationTaskId.current = null;
+      setOperation({ kind: "failure", path, error });
     }
   };
 
@@ -328,15 +350,26 @@ export function LibraryLifecycle({
       return { hash: entry.hash, folder };
     });
     const path = operation.path;
+    if (migrationTaskId.current !== null) throw new Error("迁移任务已经在运行");
+    const registration = appTaskCenter.register({ kind: "migration", title: "提交库格式迁移", libraryId: path, stoppable: false, concurrencyKey: null });
+    if (registration.kind !== "registered") throw new Error("迁移任务意外触发并发拒绝");
+    migrationTaskId.current = registration.record.id;
     setOperation({ kind: "committing", path, progress: null });
     try {
       const next = await port.commitV3(path, resolutions, (progress) => {
+        appTaskCenter.reportProgress(registration.record.id, { kind: "migration", stage: progress.stage, done: progress.done, total: progress.total, currentFilename: progress.current_filename });
         setOperation({ kind: "committing", path, progress });
       });
+      appTaskCenter.complete(registration.record.id, { counts: { succeeded: 1, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: null });
+      migrationTaskId.current = null;
       setLocalStatus(next);
+      setPickerRequested(false);
       setOperation({ kind: "idle" });
     } catch (raw) {
-      setOperation({ kind: "failure", path, error: asAppError(raw) });
+      const error = asAppError(raw);
+      appTaskCenter.complete(registration.record.id, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error });
+      migrationTaskId.current = null;
+      setOperation({ kind: "failure", path, error });
     }
   };
 
@@ -388,11 +421,19 @@ export function LibraryLifecycle({
       />
     );
   }
-  const effectiveStatus = localStatus ?? status.data;
+  const effectiveStatus = pickerRequested
+    ? { path: null, library_id: null, recorded_path: null, problem: null }
+    : localStatus ?? status.data;
   const context = compatibleContext(effectiveStatus);
   if (context !== null) {
     if (children === undefined) throw new Error("LibraryLifecycle 缺少工作现场 render prop");
-    return children(context);
+    return children(context, {
+      openOtherLibrary: () => {
+        setPickerRequested(true);
+        setLocalStatus(null);
+        setOperation({ kind: "idle" });
+      },
+    });
   }
   if (effectiveStatus.problem === null && effectiveStatus.recorded_path === null) {
     return <Welcome onChoose={(purpose) => void chooseLibrary(purpose)} />;

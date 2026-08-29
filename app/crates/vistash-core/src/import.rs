@@ -834,11 +834,18 @@ impl TransferRuns {
                 format!("库当前没有可停止的传输任务：{task_id}"),
             )
         })?;
-        if run.id().as_str() != task_id || run.state() == TransferRunState::Stopped {
+        if run.id().as_str() != task_id {
             return Err(AppError::detailed(
                 Code::TransferTaskNotActive,
                 format!("任务 {task_id} 已不是库槽位中的当前任务"),
             ));
+        }
+        // 同一个任务在协调器返回后仍可能短暂留在槽位中。停止请求是可重试的：
+        // 对已经确认 stopped 的同一 TaskId 返回终态，避免前端在“正在停止”与
+        // `transfer.task_not_active` 之间竞速而永久卡住；旧任务 ID 仍由上面的
+        // 精确匹配分支拒绝，不能误停新任务。
+        if run.state() == TransferRunState::Stopped {
+            return Ok(TransferRunState::Stopped);
         }
         run.request_stop();
         Ok(run.state())

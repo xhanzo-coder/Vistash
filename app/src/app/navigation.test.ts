@@ -44,7 +44,7 @@ describe("createWorkspaceNavigation", () => {
 
   test("点击已在前台的一级入口不是导航事件：不发通知也不改条目", () => {
     const nav = createWorkspaceNavigation("prompts");
-    nav.requestLocate({ kind: "locate_prompt", requestId: "r1", promptId: PROMPT_ID });
+    nav.requestLocate({ kind: "locate_prompt", requestId: "r1", promptId: PROMPT_ID, location: "active" });
     const listener = vi.fn<() => void>();
     nav.subscribe(listener);
 
@@ -107,7 +107,7 @@ describe("visitNavigationEntry", () => {
     const entries: NavigationEntry[] = [
       { kind: "resume" },
       { kind: "locate_asset", requestId: "r1", hash: HASH_A, location: "active" },
-      { kind: "locate_prompt", requestId: "r2", promptId: PROMPT_ID },
+      { kind: "locate_prompt", requestId: "r2", promptId: PROMPT_ID, location: "active" },
     ];
 
     const visited = entries.map((entry) =>

@@ -225,6 +225,60 @@ impl AssetSidecarV2 {
         })?;
         Ok(())
     }
+
+    /// 在 v1→v2 迁移的索引重建阶段提供一个只读 v3 视图。
+    ///
+    /// 此时权威侧车已经是 v2，但库尚未提交到 v2/v3 生产格式；索引是派生数据，
+    /// 只需能完成一致重建，最终 v3 提交会再次从权威侧车重建。多归属在这个过渡
+    /// 快照中取稳定的第一个路径，绝不写回侧车或改变迁移计划。
+    pub(crate) fn as_v3_index_view(&self) -> Result<AssetSidecarV3> {
+        let stem = Path::new(&self.original_filename)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                AppError::detailed(
+                    Code::LibraryMetadataCorrupt,
+                    format!("来源文件名无法转换为显示名：{}", self.original_filename),
+                )
+            })?;
+        Ok(AssetSidecarV3 {
+            format_version: SIDECAR_FORMAT_VERSION_V3,
+            hash: self.hash.clone(),
+            hash_algo: self.hash_algo.clone(),
+            media_type: self.media_type,
+            ext: self.ext.clone(),
+            byte_size: self.byte_size,
+            width: self.width,
+            height: self.height,
+            imported_at: self.imported_at,
+            source: AssetSource::Filesystem {
+                path: self.source_path.clone(),
+                filename: self.original_filename.clone(),
+            },
+            display_filename: DisplayFilename::new(stem, self.media_type)?,
+            folder: if self.is_deleted() {
+                None
+            } else {
+                match self.folders.as_slice() {
+                    [] => None,
+                    [folder] => Some(folder.clone()),
+                    // v1/v2 libraries are blocked from opening until the v3 conflict
+                    // plan resolves every multi-folder asset; the temporary derived
+                    // index must not invent an arbitrary ownership here.
+                    _ => None,
+                }
+            },
+            tags: self.tags.clone(),
+            color_card: self.color_card.clone(),
+            note: self.note.clone(),
+            favorite: self.favorite,
+            deleted_at: self.deleted_at,
+            deleted_from_folder: self.deleted_from_folders.as_ref().and_then(|folders| match folders.as_slice() {
+                [folder] => Some(folder.clone()),
+                _ => None,
+            }),
+        })
+    }
 }
 
 /// 图片进入库时的不可变来源。

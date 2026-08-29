@@ -87,8 +87,17 @@ describe("locateRequestFromSelection", () => {
     expect(entry).toMatchObject({
       kind: "locate_prompt",
       promptId,
+      location: "active",
     });
     expect(entry.requestId).toMatch(UUID_PATTERN);
+  });
+
+  test("回收站提示词定位保留 trash 范围", () => {
+    const entry = locateRequestFromSelection({
+      kind: "prompt",
+      row: promptRow({ id: "prompt-trash", deletedAt: "2026-08-27T01:00:00Z" }),
+    });
+    expect(entry).toMatchObject({ kind: "locate_prompt", location: "trash" });
   });
 
   test("每次选择生成独立的请求身份", () => {

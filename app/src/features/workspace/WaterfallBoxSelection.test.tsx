@@ -3,9 +3,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { AssetWaterfall } from "../assets/AssetWaterfall";
 import { PromptCardWaterfall } from "../prompts/PromptCardWaterfall";
-import type { AssetRow, PromptRow } from "../../shared/types";
+import type { PromptRow } from "../../shared/types";
 import { SelectionProvider, useSelection } from "./selectionContext";
 
 const roots: ReturnType<typeof createRoot>[] = [];
@@ -34,17 +33,6 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
 });
 
-function asset(index: number): AssetRow {
-  return {
-    hash: `item-${index}`, hash_algo: "blake3", media_type: "image", ext: "png", byte_size: 100,
-    width: 100, height: 100, imported_at: "2026-08-20T00:00:00Z", original_filename: `图片 ${index}.png`,
-    display_filename: `图片 ${index}.png`,
-    source_path: null, deleted_at: null, color_card_status: "ok", color_card_algo_version: 1,
-    color_card_failure_reason: null, color_card_sampled_pixel_count: 100, note: "", favorite: false,
-    tags: [], folder: null, colors: [],
-  };
-}
-
 function prompt(index: number): PromptRow {
   return {
     id: `item-${index}`, body: `正文 ${index}`, title: `提示词 ${index}`, model: null, parameters: null,
@@ -58,7 +46,7 @@ function SelectionSummary() {
   return <output data-selection-summary="" data-active={state.activeId}>{[...state.selectedIds].join(",")}</output>;
 }
 
-async function mount(kind: "图片" | "提示词", count = 100) {
+async function mount(_kind: "提示词", count = 100) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -68,13 +56,8 @@ async function mount(kind: "图片" | "提示词", count = 100) {
     root.render(
     <SelectionProvider ids={ids}>
       <SelectionSummary />
-      {kind === "图片" ? (
-        <AssetWaterfall assets={ids.map((_, index) => asset(index))} scrollKey="box-assets" savedOffset={0}
-          onScrollOffset={() => {}} onOpenFocused={() => {}} targetTileWidth={tileWidth} />
-      ) : (
-        <PromptCardWaterfall prompts={ids.map((_, index) => prompt(index))} scrollKey="box-prompts" savedOffset={0}
-          onScrollOffset={() => {}} onToggleFavorite={() => {}} onOpenFocused={() => {}} targetTileWidth={tileWidth} />
-      )}
+      <PromptCardWaterfall prompts={ids.map((_, index) => prompt(index))} scrollKey="box-prompts" savedOffset={0}
+        onScrollOffset={() => {}} onToggleFavorite={() => {}} onOpenFocused={() => {}} targetTileWidth={tileWidth} />
     </SelectionProvider>,
     );
   };
@@ -95,7 +78,7 @@ async function pointer(target: HTMLElement, type: string, x: number, y: number, 
   });
 }
 
-test.each(["图片", "提示词"] as const)("%s 从空白处拖框替换选择且保留键盘活动项", async (kind) => {
+test.each(["提示词"] as const)("%s 从空白处拖框替换选择且保留键盘活动项", async (kind) => {
   const { surface, first, summary, container } = await mount(kind);
   await act(async () => first.click());
   await pointer(surface, "pointerdown", 300, 0);
@@ -108,7 +91,7 @@ test.each(["图片", "提示词"] as const)("%s 从空白处拖框替换选择�
   expect(container.querySelector('[data-selection-box]')).toBeNull();
 });
 
-test.each(["图片", "提示词"] as const)("%s Ctrl 框选可收缩，Esc 与 pointercancel 恢复原选择", async (kind) => {
+test.each(["提示词"] as const)("%s Ctrl 框选可收缩，Esc 与 pointercancel 恢复原选择", async (kind) => {
   const { surface, first, summary, container } = await mount(kind);
   await act(async () => first.click());
   await pointer(surface, "pointerdown", 300, 0, true);
@@ -128,7 +111,7 @@ test.each(["图片", "提示词"] as const)("%s Ctrl 框选可收缩，Esc 与 p
   expect(container.querySelector('[data-selection-box]')).toBeNull();
 });
 
-test.each(["图片", "提示词"] as const)("%s 万项框选跨滚动包含离屏项且 DOM 保持有界", async (kind) => {
+test.each(["提示词"] as const)("%s 万项框选跨滚动包含离屏项且 DOM 保持有界", async (kind) => {
   const { surface, summary, container } = await mount(kind, 10_000);
   await pointer(surface, "pointerdown", 300, 0);
   await pointer(surface, "pointermove", 590, 80);
@@ -145,7 +128,7 @@ test.each(["图片", "提示词"] as const)("%s 万项框选跨滚动包含离�
   await pointer(surface, "pointerup", 590, 80);
 });
 
-test.each(["图片", "提示词"] as const)("%s 查询和列宽改变时取消手势，单列仍按虚拟几何命中", async (kind) => {
+test.each(["提示词"] as const)("%s 查询和列宽改变时取消手势，单列仍按虚拟几何命中", async (kind) => {
   const { surface, first, summary, container, rerender } = await mount(kind);
   await act(async () => first.click());
   await pointer(surface, "pointerdown", 300, 0);

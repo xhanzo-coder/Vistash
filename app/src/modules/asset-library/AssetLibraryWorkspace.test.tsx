@@ -30,9 +30,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { parseAssetId, parseLibraryId, type AssetId } from "../../app/common";
+import { createRequestId, parseAssetId, parseLibraryId, type AssetId } from "../../app/common";
 import { createAppQueryClient } from "../../app/queryClient";
-import type { AssetRow, CatalogSnapshot, PromptRow } from "../../shared/types";
+import { appTaskCenter } from "../../app/runtime";
+import { canStopTransferTask, getTransferTaskStopError, stopAssetTransferTask } from "./index";
+import { TaskCenterPopover } from "../../app/shell/TaskCenterPopover";
+import type { AssetRow, CatalogSnapshot, ImportOutcome, PromptRow } from "../../shared/types";
 import { UiProvider } from "../../ui/UiProvider";
 import {
   AssetLibraryWorkspace,
@@ -163,6 +166,24 @@ let noteGate: Promise<void> | null = null;
 let prompts: PromptRow[];
 let detailFailure = false;
 let promptFailure = false;
+let applyTagFilter = false;
+let deletedFolders: Map<string, string | null>;
+let failedRestoreId: string | null = null;
+let failedPurgeId: string | null = null;
+let restoreGate: Promise<void> | null = null;
+let purgeFailsAfterDelete = false;
+let originalFailure = false;
+let originalGate: Promise<ArrayBuffer> | null = null;
+let dialogImageFiles: string[] = [];
+let dialogExportDirectory: string | null = null;
+let importGate: Promise<ImportOutcome> | null = null;
+let emitImportProgress = false;
+let importStopState: "stopping" | "stopped" = "stopped";
+let importStopFailure = false;
+let exportConflict = false;
+let outboundFailure: "copy" | "open" | null = null;
+let createObjectUrlMock: ReturnType<typeof vi.fn>;
+let revokeObjectUrlMock: ReturnType<typeof vi.fn>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -171,6 +192,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function record(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) throw new TypeError("测试合同要求对象载荷");
   return value;
+}
+
+function hasProgressChannel(value: unknown): value is { onmessage: (progress: unknown) => void } {
+  return typeof value === "object" && value !== null && "onmessage" in value && typeof value.onmessage === "function";
 }
 
 function recordedQueries(): Array<{ libraryId: unknown; query: Record<string, unknown> }> {
@@ -239,10 +264,9 @@ beforeEach(() => {
   setWindowWidth(1440);
   stubGeometry();
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
-  vi.stubGlobal("URL", {
-    createObjectURL: vi.fn(() => "blob:vistash-test"),
-    revokeObjectURL: vi.fn(),
-  });
+  createObjectUrlMock = vi.fn(() => "blob:vistash-test");
+  revokeObjectUrlMock = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL: createObjectUrlMock, revokeObjectURL: revokeObjectUrlMock });
 
   ipcCalls = [];
   currentLibrary = LIB_A;
@@ -260,6 +284,22 @@ beforeEach(() => {
   noteGate = null;
   detailFailure = false;
   promptFailure = false;
+  applyTagFilter = false;
+  deletedFolders = new Map([[H_TRASHED, "参考"]]);
+  failedRestoreId = null;
+  failedPurgeId = null;
+  restoreGate = null;
+  purgeFailsAfterDelete = false;
+  originalFailure = false;
+  originalGate = null;
+  dialogImageFiles = [];
+  dialogExportDirectory = null;
+  importGate = null;
+  emitImportProgress = false;
+  importStopState = "stopped";
+  importStopFailure = false;
+  exportConflict = false;
+  outboundFailure = null;
   prompts = ["光影参考", "已删除记录"].map((title, index) => ({ id: `prompt-${index}`, title, body: "普通提示词正文", model: null, parameters: null, note: "", favorite: false, folders: [], tags: [], linked_image_hashes: index === 1 ? [H_STREET] : [], cover_image_hash: null, resolved_cover_hash: null, created_at: "2026-08-28T00:00:00Z", updated_at: "2026-08-28T00:00:00Z", deleted_at: index === 1 ? "2026-08-28T00:00:00Z" : null }));
   snapshotsByLibrary = {
     [LIB_A]: SNAPSHOT_A,
@@ -271,6 +311,34 @@ beforeEach(() => {
     ipcCalls.push({ command, payload, currentLibrary });
     const request = record(payload);
     switch (command) {
+      case "plugin:dialog|open": {
+        const options = record(request.options);
+        if (options.title === "选择图片导出目录") return dialogExportDirectory;
+        return options.directory === true ? "E:\\待导入" : dialogImageFiles;
+      }
+      case "paste_import":
+      case "import_sources": {
+        if (emitImportProgress) {
+          const channel = request.onProgress;
+          if (hasProgressChannel(channel)) {
+            channel.onmessage({ task_id: "backend-import-test", done: 1, total: 3, current_filename: "一张.png" });
+          }
+        }
+        if (importGate !== null) { const gate = importGate; importGate = null; return gate; }
+        return { task_id: "task-import-test", imported: 0, skipped_non_images: 0, duplicates: 0, pending_count: 0, failures: [] };
+      }
+      case "plan_export": {
+        const hashes = request.hashes;
+        if (!Array.isArray(hashes) || hashes.length === 0 || !hashes.every((hash): hash is string => typeof hash === "string")) throw new TypeError("导出规划哈希无效");
+        return [{ hash: hashes[0], display_filename: "晨光街道.png", existing: exportConflict }];
+      }
+      case "export_assets": return { task_id: "task-export-test", exported: ["晨光街道.png"], skipped_existing: 0, failed: [], pending_count: 0 };
+      case "copy_asset_to_clipboard": if (outboundFailure === "copy") throw { code: "clipboard.write_failed", detail: "复制失败" }; return undefined;
+      case "open_with_default_app": if (outboundFailure === "open") throw { code: "external.open_failed", detail: "打开失败" }; return undefined;
+      case "import_stop": {
+        if (importStopFailure) throw { code: "transfer.task_not_active", detail: "终态确认失败" };
+        return { task_id: "backend-import-test", state: importStopState };
+      }
       case "catalog_snapshot": {
         if (filenameQueryFailure) throw { code: "library.io_failed", detail: "文件名查询失败" };
         expect(request).not.toHaveProperty("libraryId");
@@ -279,6 +347,11 @@ beforeEach(() => {
         const base =
           query.location === "trash" && libraryKey === LIB_A ? trashSnapshotA : snapshotsByLibrary[libraryKey];
         if (base === undefined) throw new Error(`未知库的集合查询：${libraryKey}`);
+        if (applyTagFilter) {
+          const tags = query.tags;
+          if (!Array.isArray(tags) || !tags.every((tag): tag is string => typeof tag === "string")) throw new TypeError("查询标签无效");
+          return { ...base, assets: base.assets.filter((asset) => tags.every((tag) => asset.tags.includes(tag))) };
+        }
         if (applyFilenameFilter) {
           if (typeof query.text !== "string") throw new TypeError("缺少文件名查询文本");
           const needle = query.text.toLowerCase();
@@ -380,6 +453,45 @@ beforeEach(() => {
         snapshotsByLibrary[currentLibrary] = { ...snapshot, assets: snapshot.assets.map((asset) => asset.hash === request.hash ? { ...asset, display_filename: `${stem.trim()}.${asset.ext}` } : asset) };
         return undefined;
       }
+      case "restore_asset": {
+        if (request.hash === failedRestoreId) throw { code: "trash.restore_failed", detail: "恢复写入失败" };
+        const library = currentLibrary;
+        const snapshot = snapshotsByLibrary[library];
+        const asset = trashSnapshotA.assets.find((row) => row.hash === request.hash);
+        if (snapshot === undefined || asset === undefined) throw new Error("还原目标不存在");
+        const previous = deletedFolders.get(asset.hash);
+        if (previous === undefined) throw new Error("测试缺少删除前归属");
+        const missing = previous !== null && !snapshot.folders.includes(previous);
+        const restored = { ...asset, folder: missing ? null : previous, deleted_at: null };
+        const commit = () => {
+          trashSnapshotA = { ...trashSnapshotA, assets: trashSnapshotA.assets.filter((row) => row.hash !== asset.hash), trash_count: trashSnapshotA.trash_count - 1 };
+          snapshotsByLibrary[library] = { ...snapshot, assets: [...snapshot.assets, restored], trash_count: trashSnapshotA.trash_count };
+          return { missing_folders: missing ? [previous] : [] };
+        };
+        if (restoreGate !== null) {
+          const gate = restoreGate;
+          restoreGate = null;
+          return gate.then(commit);
+        }
+        return commit();
+      }
+      case "purge_trash": {
+        if (purgeFailsAfterDelete) {
+          const remaining = trashSnapshotA.assets.slice(1);
+          trashSnapshotA = { ...trashSnapshotA, assets: remaining, trash_count: remaining.length };
+          const snapshot = snapshotsByLibrary[currentLibrary];
+          if (snapshot === undefined) throw new Error("清空目标库不存在");
+          snapshotsByLibrary[currentLibrary] = { ...snapshot, trash_count: remaining.length };
+          throw { code: "library.io_failed", detail: "删除后索引重建失败" };
+        }
+        const failed = trashSnapshotA.assets.filter((asset) => asset.hash === failedPurgeId);
+        const purged = trashSnapshotA.assets.length - failed.length;
+        trashSnapshotA = { ...trashSnapshotA, assets: failed, trash_count: failed.length };
+        const snapshot = snapshotsByLibrary[currentLibrary];
+        if (snapshot === undefined) throw new Error("清空目标库不存在");
+        snapshotsByLibrary[currentLibrary] = { ...snapshot, trash_count: failed.length };
+        return { purged, failures: failed.map((asset) => ({ hash: asset.hash, original_filename: asset.original_filename, error: { code: "trash.purge_failed", detail: "原图仍被占用" } })) };
+      }
       case "create_folder": {
         const snapshot = snapshotsByLibrary[currentLibrary];
         if (rejectFolderMutation) throw { code: "library.io_failed", detail: "文件夹元数据只读" };
@@ -418,6 +530,28 @@ beforeEach(() => {
         snapshotsByLibrary[currentLibrary] = { ...snapshot, assets: snapshot.assets.map((asset) => targets.has(asset.hash) && asset.hash !== failedBatchId ? { ...asset, folder } : asset) };
         return { succeeded: targets.size - failures.length, failures };
       }
+      case "batch_add_asset_tag":
+      case "batch_remove_asset_tag": {
+        if (inspectorWriteFailure) throw { code: "library.io_failed", detail: "批量标签写入失败" };
+        const snapshot = snapshotsByLibrary[currentLibrary];
+        const hashes = request.hashes;
+        const tag = request.tag;
+        if (snapshot === undefined || typeof tag !== "string" || !Array.isArray(hashes) || !hashes.every((hash): hash is string => typeof hash === "string")) throw new TypeError("批量标签载荷无效");
+        const targets = new Set(hashes);
+        const failures = snapshot.assets.filter((asset) => targets.has(asset.hash) && asset.hash === failedBatchId).map((asset) => ({ id: asset.hash, display_name: asset.display_filename, error: { code: "library.io_failed", detail: "只读素材" } }));
+        snapshotsByLibrary[currentLibrary] = { ...snapshot, assets: snapshot.assets.map((asset) => targets.has(asset.hash) && asset.hash !== failedBatchId ? { ...asset, tags: command === "batch_add_asset_tag" ? [...new Set([...asset.tags, tag])] : asset.tags.filter((item) => item !== tag) } : asset) };
+        return { succeeded: targets.size - failures.length, failures };
+      }
+      case "batch_link_to_prompt": {
+        if (inspectorWriteFailure) throw { code: "library.io_failed", detail: "批量关联写入失败" };
+        const snapshot = snapshotsByLibrary[currentLibrary];
+        const hashes = request.hashes;
+        if (snapshot === undefined || !Array.isArray(hashes) || !hashes.every((hash): hash is string => typeof hash === "string")) throw new TypeError("批量关联载荷无效");
+        const targets = new Set(hashes);
+        const failures = snapshot.assets.filter((asset) => targets.has(asset.hash) && asset.hash === failedBatchId).map((asset) => ({ id: asset.hash, display_name: asset.display_filename, error: { code: "library.io_failed", detail: "只读素材" } }));
+        prompts = prompts.map((prompt) => prompt.id === request.promptId ? { ...prompt, linked_image_hashes: [...new Set([...prompt.linked_image_hashes, ...hashes.filter((hash) => hash !== failedBatchId)])] } : prompt);
+        return { succeeded: targets.size - failures.length, failures };
+      }
       // 批量命令直接作用于假快照：失效重取后界面能看到真实结果。
       case "batch_set_asset_favorite": {
         const snapshot = snapshotsByLibrary[currentLibrary];
@@ -453,6 +587,10 @@ beforeEach(() => {
       // 虚拟卡片按需取缩略图字节；URL.createObjectURL 已被替换为测试桩。
       case "asset_thumbnail":
         return new ArrayBuffer(4);
+      case "asset_original":
+        if (originalFailure) throw { code: "library.io_failed", detail: "原图读取失败" };
+        if (originalGate !== null) { const gate = originalGate; originalGate = null; return gate; }
+        return new ArrayBuffer(8);
       default:
         throw new Error(`未预期的 IPC：${command}`);
     }
@@ -496,6 +634,7 @@ async function mountWorkspace(props: AssetLibraryWorkspaceProps): Promise<void> 
   const node: ReactNode = (
     <QueryClientProvider client={queryClient}>
       <UiProvider>
+        <TaskCenterPopover taskCenter={appTaskCenter} onStopTask={stopAssetTransferTask} canStopTask={canStopTransferTask} getStopError={getTransferTaskStopError} />
         <AssetLibraryWorkspace {...props} />
       </UiProvider>
     </QueryClientProvider>
@@ -511,6 +650,7 @@ async function rerenderWorkspace(props: AssetLibraryWorkspaceProps): Promise<voi
   const node: ReactNode = (
     <QueryClientProvider client={queryClient}>
       <UiProvider>
+        <TaskCenterPopover taskCenter={appTaskCenter} onStopTask={stopAssetTransferTask} canStopTask={canStopTransferTask} getStopError={getTransferTaskStopError} />
         <AssetLibraryWorkspace {...props} />
       </UiProvider>
     </QueryClientProvider>
@@ -554,6 +694,20 @@ function locate(
 ): Extract<AssetLibraryEntry, { kind: "locate" }> {
   return { kind: "locate", requestId, hash, location };
 }
+
+test("集合标题反映导航范围，库名与文件夹操作留在侧栏而非查询工具栏", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true, entry: { kind: "resume" } });
+  await vi.waitFor(() => expect(container?.querySelector("h1")?.textContent).toBe("全部图片"));
+  const navigation = container?.querySelector('[aria-label="图片导航"]');
+  expect(navigation?.textContent).toContain("视觉档案");
+  expect(navigation?.querySelector('[aria-label="文件夹操作"]')?.textContent).toContain("新建文件夹");
+  expect(container?.querySelector('[aria-label="图片查询与视图"]')?.textContent).not.toContain("新建文件夹");
+  await vi.waitFor(() => expect(folderButton("参考/构图")).toBeDefined());
+  await act(async () => folderButton("参考/构图").click());
+  await vi.waitFor(() => expect(container?.querySelector("h1")?.textContent).toBe("参考/构图"));
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(container?.querySelector("h1")?.textContent).toBe("回收站"));
+});
 
 test("resume 条目按库身份恢复上次查询，修改经 write_layout 写回同一库", async () => {
   savedLayouts[LIB_A] = { assets: savedAssetsSectionA(), prompts: {} };
@@ -867,8 +1021,8 @@ test("左栏镜像恢复的现场并提供全部图片、收藏、未分类与�
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true, entry: { kind: "resume" } });
   await vi.waitFor(() => expect(searchInput().value).toBe("晨光"));
 
-  // 左栏是现场的镜子：恢复出的文件夹路径、收藏轴都由入口选中态呈现。
-  expect(folderButton("参考").getAttribute("aria-current")).toBe("true");
+  // 搜索框来自布局，文件夹来自异步集合；分别等待实际可观察状态。
+  await vi.waitFor(() => expect(folderButton("参考").getAttribute("aria-current")).toBe("true"));
   expect(railButton("收藏").getAttribute("aria-current")).toBe("true");
   expect(railButton("全部图片").getAttribute("aria-current")).not.toBe("true");
 
@@ -994,21 +1148,26 @@ test("非激活的工作区不认领本地快捷键", async () => {
 
 // ---------------------------------------------------------------------------
 // 任务 8.4：可调密度、排序与滚动恢复。
-// 契约：工具栏存在 aria-label="缩略图大小" 的三档按钮组（小/中/大，
-// aria-pressed 表达当前档），档位经 tileSize 轴持久化并驱动瀑布流列宽；
+// 契约：工具栏存在 aria-label="缩略图大小" 的三档滑杆，档位经 tileSize 轴
+// 持久化并驱动瀑布流列宽；视觉不再常驻“小/中/大”三个文字按钮；
 // 工具栏存在原生 select[aria-label="排序方式"]（imported-desc / name-asc /
 // size-desc 三值），排序作用于瀑布流与详情列表共同的结果序列并写回 sort 轴；
 // 集合滚动容器的偏移经布局偏好的 scrollOffsets["assets-collection"] 落盘，
 // 重开同库后在数据就绪时恢复。两轴都沿用左栏同一 changeLayout 通道。
 // ---------------------------------------------------------------------------
 
-function densityButton(text: "小" | "中" | "大"): HTMLButtonElement {
-  const group = container?.querySelector<HTMLElement>('[aria-label="缩略图大小"]');
-  const button = [...(group?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-    (candidate) => candidate.textContent?.trim() === text,
-  );
-  if (button === undefined) throw new Error(`缺少缩略图大小按钮：${text}`);
-  return button;
+function densityControl(): HTMLInputElement {
+  const input = container?.querySelector<HTMLInputElement>('input[type="range"][aria-label="缩略图大小"]');
+  if (input === null || input === undefined) throw new Error("缺少缩略图大小滑杆");
+  return input;
+}
+
+function chooseDensity(value: "small" | "medium" | "large"): void {
+  const position = { small: "0", medium: "1", large: "2" }[value];
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  if (descriptor?.set === undefined) throw new Error("HTMLInputElement.value setter 不存在");
+  descriptor.set.call(densityControl(), position);
+  densityControl().dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function waterfallTileWidth(): number {
@@ -1042,18 +1201,18 @@ function chooseSort(value: string): void {
   sortSelect().dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-test("缩略图大小三档可调：档位即时驱动列宽、写回偏好并在重开同库时保持", async () => {
+test("缩略图密度滑杆即时驱动列宽、写回偏好并在重开同库时保持", async () => {
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true, entry: { kind: "resume" } });
   await vi.waitFor(() => {
     expect(container?.querySelectorAll("[data-waterfall-item]").length).toBeGreaterThan(0);
   });
 
-  await vi.waitFor(() => expect(densityButton("中").getAttribute("aria-pressed")).toBe("true"));
+  await vi.waitFor(() => expect(densityControl().value).toBe("1"));
   const mediumWidth = waterfallTileWidth();
 
-  await act(async () => densityButton("大").click());
+  await act(async () => chooseDensity("large"));
   await vi.waitFor(() => {
-    expect(densityButton("大").getAttribute("aria-pressed")).toBe("true");
+    expect(densityControl().value).toBe("2");
     expect(waterfallTileWidth()).toBeGreaterThan(mediumWidth);
   });
 
@@ -1067,7 +1226,7 @@ test("缩略图大小三档可调：档位即时驱动列宽、写回偏好并�
   await vi.waitFor(() => {
     expect(container?.querySelectorAll("[data-waterfall-item]").length).toBeGreaterThan(0);
   });
-  await vi.waitFor(() => expect(densityButton("大").getAttribute("aria-pressed")).toBe("true"));
+  await vi.waitFor(() => expect(densityControl().value).toBe("2"));
   expect(waterfallTileWidth()).toBeGreaterThan(mediumWidth);
 });
 
@@ -1189,6 +1348,25 @@ function barButton(text: string): HTMLButtonElement {
   return button;
 }
 
+function namedButton(label: string): HTMLButtonElement {
+  const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (candidate) => candidate.getAttribute("aria-label") === label,
+  );
+  if (button === undefined) throw new Error(`缺少按钮：${label}`);
+  return button;
+}
+
+async function chooseBatchMore(label: string): Promise<void> {
+  const trigger = namedButton("更多批量操作");
+  trigger.focus();
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+  const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  if (item === undefined) throw new Error(`更多批量操作缺少：${label}；当前菜单项：${[...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((candidate) => candidate.textContent?.trim()).join("｜")}`);
+  await act(async () => item.click());
+}
+
 function clickWithModifiers(
   hash: string,
   modifiers: { ctrl?: boolean; shift?: boolean } = {},
@@ -1269,6 +1447,32 @@ test("单击、Ctrl+单击、Shift+单击、Ctrl+A 与 Esc 构成 Windows 多选
   expect(card(H_STREET).getAttribute("aria-current")).toBeNull();
 });
 
+test("操作表面随选择上下文变化：单选用检查器，多选才用批量栏", async () => {
+  snapshotsByLibrary[LIB_A] = threeAssetSnapshot();
+  await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+
+  const queryToolbar = container?.querySelector('[aria-label="图片查询与视图"]');
+  expect(queryToolbar?.textContent).not.toContain("导入图片");
+  expect(queryToolbar?.textContent).not.toContain("复制图像");
+  expect(queryToolbar?.textContent).not.toContain("修改文件名");
+  expect(container?.querySelector('[aria-label="检查器分区定位"]')).toBeNull();
+
+  await act(async () => card(H_STREET).click());
+  expect(container?.querySelector('[aria-label="批量操作"]')).toBeNull();
+  const singleActions = container?.querySelector('[aria-label="当前图片操作"]');
+  expect(singleActions).not.toBeNull();
+  expect(singleActions?.querySelector('button[aria-label="复制图像"]')).not.toBeNull();
+  expect(singleActions?.querySelector('button[aria-label="修改显示文件名"]')).not.toBeNull();
+
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  expect(bar().textContent).toContain("已选中 2 项");
+  expect(container?.querySelector('[aria-label="当前图片操作"]')).toBeNull();
+  expect(bar().textContent).not.toContain("取消收藏");
+  expect(bar().textContent).not.toContain("关联提示词");
+  expect(bar().querySelector('button[aria-label="更多批量操作"]')).not.toBeNull();
+});
+
 test("跨视图保留多选与批量操作栏", async () => {
   snapshotsByLibrary[LIB_A] = threeAssetSnapshot();
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true, entry: { kind: "resume" } });
@@ -1298,6 +1502,8 @@ test("框选按虚拟几何命中，拖动显示矩形，Esc 与 pointercancel �
   await vi.waitFor(() => {
     expect(container?.querySelectorAll("[data-hash]").length).toBeGreaterThan(0);
   });
+  // 本用例的手势坐标对应 900px 容器中的三列大图，不依赖默认密度。
+  await act(async () => chooseDensity("large"));
   await act(async () => card(H_DAWN).click());
 
   const surface = collectionScroll();
@@ -1334,6 +1540,7 @@ test("Ctrl 框选缩回矩形时去掉旧命中，失去指针捕获时恢复原
   snapshotsByLibrary[LIB_A] = threeAssetSnapshot();
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
   await vi.waitFor(() => expect(card(H_DAWN)).toBeDefined());
+  await act(async () => chooseDensity("large"));
   await act(async () => card(H_DAWN).click());
   const surface = collectionScroll();
   await pointer(surface, "pointerdown", 296, 20, true);
@@ -1369,7 +1576,7 @@ test("底部操作栏批量收藏与移入回收站作用于全部选中项", as
   // 批量写入后精确失效当前库集合：恰好一次重取。
   await vi.waitFor(() => expect(recordedQueries().length).toBe(baseline + 1));
 
-  await act(async () => barButton("移入回收站").click());
+  await chooseBatchMore("移入回收站");
   await vi.waitFor(() => {
     const call = ipcCalls.find((entry) => entry.command === "batch_delete_assets");
     const payload = record(call?.payload);
@@ -1526,7 +1733,7 @@ test("批量移动明确选择唯一目标，部分失败保留目标并只重�
   await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
   await act(async () => card(H_NIGHT).click());
   await act(async () => clickWithModifiers(H_STREET, { ctrl: true }));
-  await act(async () => barButton("移动到文件夹").click());
+  await act(async () => barButton("移动").click());
   const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
   const target = dialog?.querySelector<HTMLSelectElement>('select[name="move-target"]');
   const submit = dialog?.querySelector<HTMLButtonElement>('button[type="submit"]');
@@ -1584,7 +1791,7 @@ test("窄窗口可以打开图片导航，选择文件夹后关闭浮层并更�
   setWindowWidth(760);
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
   await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
-  const trigger = [...document.querySelectorAll("button")].find((button) => button.textContent === "图片导航");
+  const trigger = [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "图片导航");
   if (trigger === undefined) throw new Error("窄窗口缺少导航入口");
   await act(async () => trigger.click());
   const target = document.querySelector<HTMLButtonElement>('[role="dialog"] [data-folder="参考/构图"]');
@@ -1703,7 +1910,7 @@ test("检查器共用重命名表单，服务端拒绝伪造扩展名后可以�
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
   await act(async () => card(H_STREET).click());
-  const edit = container?.querySelector<HTMLButtonElement>('[aria-label="图片文件信息"] button');
+  const edit = container?.querySelector<HTMLButtonElement>('button[aria-label="修改显示文件名"]');
   if (edit === null || edit === undefined) throw new Error("缺少检查器编辑入口");
   await act(async () => edit.click());
   const input = document.querySelector<HTMLInputElement>('input[name="display-filename-stem"]');
@@ -1761,8 +1968,8 @@ test("双文件名查询失败时保留搜索词和稳定错误，不开放过�
   await vi.waitFor(() => expect(container?.textContent).toContain("文件名查询失败"));
   expect(searchInput().value).toBe("IMG_0042");
   expect(container?.textContent).toContain("library.io_failed");
-  const trigger = [...document.querySelectorAll("button")].find((button) => button.textContent === "修改文件名");
-  expect(trigger?.disabled).toBe(true);
+  const trigger = [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "修改显示文件名");
+  expect(trigger).toBeUndefined();
 });
 
 function inspector(): HTMLElement {
@@ -1777,7 +1984,7 @@ function inspectorButton(label: string): HTMLButtonElement {
   return button;
 }
 
-test("单选检查器连续呈现六分区，可独立折叠、定位并按库恢复", async () => {
+test("单选检查器连续呈现六分区且不重复显示分区定位标签", async () => {
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
   expect(ipcCalls.filter((call) => call.command === "image_detail")).toHaveLength(0);
@@ -1790,9 +1997,9 @@ test("单选检查器连续呈现六分区，可独立折叠、定位并按库�
   expect(inspectorButton("色卡").getAttribute("aria-expanded")).toBe("false");
   expect(inspectorButton("备注").getAttribute("aria-expanded")).toBe("true");
   await vi.waitFor(() => expect(record(record(savedLayouts[LIB_A]).assets).inspectorSections).toEqual({ colors: false }));
-  await act(async () => inspectorButton("定位色卡").click());
+  expect(inspector().querySelector('[aria-label="检查器分区定位"]')).toBeNull();
+  await act(async () => inspectorButton("色卡").click());
   expect(inspectorButton("色卡").getAttribute("aria-expanded")).toBe("true");
-  expect(document.activeElement).toBe(inspectorButton("色卡"));
   await act(async () => inspectorButton("备注").click());
   await mountWorkspace({ session: makeSession(LIB_B, "乙库"), active: true });
   await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
@@ -1933,7 +2140,7 @@ test("回收站检查器只读，详情错误可重试且不冒充空关联", as
   await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
   await act(async () => card(H_TRASHED).click());
   expect(noteInput().disabled).toBe(true);
-  expect(inspectorButton("编辑显示文件名").disabled).toBe(true);
+  expect(inspector().querySelector('button[aria-label="修改显示文件名"]')).toBeNull();
   expect(inspector().querySelector('input[aria-label="添加图片标签"]')).toBeNull();
 });
 
@@ -1960,8 +2167,8 @@ test("选择图片的延迟聚焦不得抢走检查器分区焦点", async () =>
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { frames.set(++frameId, callback); return frameId; });
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
   await act(async () => card(H_STREET).click());
-  await act(async () => inspectorButton("定位色卡").click());
   const heading = inspectorButton("色卡");
+  await act(async () => heading.focus());
   expect(document.activeElement).toBe(heading);
   const pendingFrames = Array.from(frames.values());
   await act(async () => { for (const callback of pendingFrames) callback(performance.now()); });
@@ -1974,7 +2181,7 @@ test("窄窗口关闭检查器时不读取隐藏详情，打开后只呈现一�
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
   await act(async () => card(H_STREET).click());
   expect(ipcCalls.filter((call) => call.command === "image_detail")).toHaveLength(0);
-  const trigger = [...document.querySelectorAll("button")].find((button) => button.textContent === "图片信息");
+  const trigger = [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label") === "图片信息");
   if (trigger === undefined) throw new Error("缺少窄屏检查器入口");
   await act(async () => trigger.click());
   await vi.waitFor(() => expect(document.querySelectorAll('[data-inspector-section]')).toHaveLength(6));
@@ -2013,4 +2220,691 @@ test("折叠检查器分区不覆盖最新滚动位置与提示词布局", async
   await vi.waitFor(() => expect(record(record(savedLayouts[LIB_A]).assets).inspectorSections).toEqual({ note: false }));
   expect(record(record(record(savedLayouts[LIB_A]).assets).scrollOffsets)["assets-collection"]).toBe(560);
   expect(record(savedLayouts[LIB_A]).prompts).toEqual({ text: "提示词现场" });
+});
+
+test("多选检查器展示共同值与混合值，不使用活动图片冒充整组信息", async () => {
+  snapshotsByLibrary[LIB_A] = { ...SNAPSHOT_A, assets: SNAPSHOT_A.assets.map((asset) => ({ ...asset, tags: asset.hash === H_STREET ? ["共同", "人物"] : ["共同", "夜景"] })) };
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  expect(inspector().textContent).toContain("已选 2 张图片");
+  expect(inspector().textContent).toContain("混合值（2 个位置）");
+  expect(inspector().textContent).toContain("混合值（1/2 已收藏）");
+  expect(inspector().querySelector('[aria-label="共同标签"]')?.textContent).toBe("共同");
+  expect(inspector().querySelector('[aria-label="部分图片标签"]')?.textContent).toContain("人物（1/2）");
+  expect(inspector().querySelector('[aria-label="部分图片标签"]')?.textContent).toContain("夜景（1/2）");
+  expect(inspector().querySelector("textarea")).toBeNull();
+  expect(inspector().textContent).not.toContain("晨光街道.png");
+  expect(inspector().querySelector("img")).toBeNull();
+  await act(async () => viewButton("详情列表").click());
+  expect(inspector().textContent).toContain("已选 2 张图片");
+  expect(inspector().querySelector('[aria-label="共同标签"]')?.textContent).toBe("共同");
+});
+
+test("多选检查器只显示概览，底部栏操作全部选中项且报告不随选择清空消失", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  expect(inspector().textContent).not.toContain("批量操作");
+  await act(async () => barButton("收藏").click());
+  await vi.waitFor(() => expect(inspector().textContent).toContain("全部已收藏"));
+  await vi.waitFor(() => expect(barButton("取消收藏").disabled).toBe(false));
+  await act(async () => barButton("取消收藏").click());
+  await vi.waitFor(() => expect(inspector().textContent).toContain("全部未收藏"));
+  await chooseBatchMore("移入回收站");
+  await vi.waitFor(() => expect(container?.querySelectorAll('[role="option"]')).toHaveLength(0));
+  expect(document.querySelector('[aria-label="操作结果"]')?.textContent).toContain("成功 2 项，失败 0 项");
+});
+
+function batchDialog(): HTMLElement {
+  const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find((element) => element.querySelector("h2")?.textContent === "批量编辑标签" || element.querySelector("h2")?.textContent === "批量关联提示词");
+  if (dialog === undefined) throw new Error("缺少批量编辑 Dialog");
+  return dialog;
+}
+
+function batchDialogButton(label: string): HTMLButtonElement {
+  const button = [...batchDialog().querySelectorAll("button")].find((element) => (element.getAttribute("aria-label") ?? element.textContent) === label);
+  if (button === undefined) throw new Error(`批量编辑缺少按钮：${label}`);
+  return button;
+}
+
+test("批量标签部分失败保留意图且只重试失败项，成功后可批量移除", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  await act(async () => barButton("标签").click());
+  const input = batchDialog().querySelector<HTMLInputElement>('input[name="batch-asset-tag"]');
+  if (input === null) throw new Error("缺少批量标签输入");
+  await act(async () => setInput(input, "建筑"));
+  failedBatchId = H_NIGHT;
+  await act(async () => batchDialogButton("添加到所选图片").click());
+  await vi.waitFor(() => expect(batchDialog().textContent).toContain("雨夜霓虹.jpg"));
+  expect(batchDialog().textContent).toContain("library.io_failed");
+  expect(input.value).toBe("建筑");
+  expect(input.disabled).toBe(true);
+  failedBatchId = null;
+  await act(async () => batchDialogButton("重试失败项").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(inspector().querySelector('[aria-label="共同标签"]')?.textContent).toBe("建筑");
+  const writes = ipcCalls.filter((call) => call.command === "batch_add_asset_tag");
+  expect(record(writes[0]?.payload).hashes).toEqual([H_STREET, H_NIGHT]);
+  expect(record(writes[1]?.payload).hashes).toEqual([H_NIGHT]);
+  await act(async () => barButton("标签").click());
+  const remove = batchDialog().querySelector<HTMLInputElement>('input[value="remove"]');
+  if (remove === null) throw new Error("缺少移除模式");
+  await act(async () => remove.click());
+  await act(async () => setInput(batchDialog().querySelector<HTMLInputElement>('input[name="batch-asset-tag"]')!, "建筑"));
+  await act(async () => batchDialogButton("从所选图片移除").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(inspector().querySelector('[aria-label="共同标签"]')?.textContent).toBe("无共同标签");
+  expect(document.querySelector('[aria-label="操作结果"]')?.textContent).toContain("雨夜霓虹.jpg");
+});
+
+test("批量提示词关联按需加载正常候选，保留部分失败并刷新每张图片的关联", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  expect(ipcCalls.filter((call) => call.command === "prompt_snapshot")).toHaveLength(0);
+  await chooseBatchMore("关联提示词");
+  await vi.waitFor(() => expect(batchDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
+  expect(batchDialog().querySelector('input[value="prompt-1"]')).toBeNull();
+  await act(async () => batchDialog().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
+  failedBatchId = H_NIGHT;
+  await act(async () => batchDialogButton("关联到所选图片").click());
+  await vi.waitFor(() => expect(batchDialog().textContent).toContain("雨夜霓虹.jpg"));
+  expect(batchDialog().textContent).toContain("library.io_failed");
+  failedBatchId = null;
+  await act(async () => batchDialogButton("重试失败项").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  const writes = ipcCalls.filter((call) => call.command === "batch_link_to_prompt");
+  expect(record(writes[0]?.payload).hashes).toEqual([H_STREET, H_NIGHT]);
+  expect(record(writes[1]?.payload).hashes).toEqual([H_NIGHT]);
+  await act(async () => card(H_STREET).click());
+  await vi.waitFor(() => expect(inspectorButton("解除关联 光影参考")).toBeDefined());
+  await act(async () => card(H_NIGHT).click());
+  await vi.waitFor(() => expect(inspectorButton("解除关联 光影参考")).toBeDefined());
+});
+
+test("移除筛选标签导致多选变单选时，批量编辑会话与失败目标仍保留", async () => {
+  applyTagFilter = true;
+  savedLayouts[LIB_A] = { assets: { ...savedAssetsSectionA(), tags: ["共同"] }, prompts: {} };
+  snapshotsByLibrary[LIB_A] = { ...SNAPSHOT_A, assets: SNAPSHOT_A.assets.map((asset) => ({ ...asset, tags: ["共同"] })) };
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  await act(async () => barButton("标签").click());
+  await act(async () => batchDialog().querySelector<HTMLInputElement>('input[value="remove"]')!.click());
+  await act(async () => setInput(batchDialog().querySelector<HTMLInputElement>('input[name="batch-asset-tag"]')!, "共同"));
+  failedBatchId = H_NIGHT;
+  await act(async () => batchDialogButton("从所选图片移除").click());
+  await vi.waitFor(() => expect(container?.querySelectorAll('[role="option"]')).toHaveLength(1));
+  expect(batchDialog().textContent).toContain("待处理 1 张图片");
+  expect(batchDialog().textContent).toContain("雨夜霓虹.jpg");
+  failedBatchId = null;
+  await act(async () => batchDialogButton("重试失败项").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(container?.textContent).toContain("没有符合条件的图片");
+  await vi.waitFor(() => expect(document.activeElement).toBe(searchInput()));
+  const activeFilter = document.querySelector<HTMLButtonElement>('[data-tag="共同"]');
+  expect(activeFilter).not.toBeNull();
+  expect(activeFilter?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => activeFilter?.click());
+  await vi.waitFor(() => expect(container?.querySelectorAll('[role="option"]')).toHaveLength(2));
+});
+
+test("批量标签固定打开时的目标，整个请求失败保留输入而不写入新的活动项", async () => {
+  snapshotsByLibrary[LIB_A] = threeAssetSnapshot();
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  await act(async () => barButton("标签").click());
+  const input = batchDialog().querySelector<HTMLInputElement>('input[name="batch-asset-tag"]')!;
+  await act(async () => setInput(input, "固定目标"));
+  await rerenderWorkspace({ session: makeSession(LIB_A, "甲库"), active: true, entry: { kind: "locate", requestId: "batch-target-frozen", hash: parseAssetId(H_DAWN), location: "active" } });
+  inspectorWriteFailure = true;
+  await act(async () => batchDialogButton("添加到所选图片").click());
+  await vi.waitFor(() => expect(batchDialog().textContent).toContain("批量标签写入失败"));
+  expect(input.value).toBe("固定目标");
+  expect(input.disabled).toBe(false);
+  inspectorWriteFailure = false;
+  await act(async () => batchDialogButton("添加到所选图片").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(inspector().querySelector('[aria-label="图片标签"]')?.textContent).not.toContain("固定目标");
+  expect(record(ipcCalls.filter((call) => call.command === "batch_add_asset_tag").at(-1)?.payload).hashes).toEqual([H_STREET, H_NIGHT]);
+});
+
+test("批量关联候选读取失败可明确重试，不对旧候选或回收站提示词提交", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  promptFailure = true;
+  await chooseBatchMore("关联提示词");
+  await vi.waitFor(() => expect(batchDialog().textContent).toContain("候选读取失败"));
+  expect(batchDialogButton("关联到所选图片").disabled).toBe(true);
+  promptFailure = false;
+  await act(async () => batchDialogButton("重试读取提示词").click());
+  await vi.waitFor(() => expect(batchDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
+  expect(batchDialog().querySelector('input[value="prompt-1"]')).toBeNull();
+  await act(async () => batchDialogButton("关闭").click());
+  expect(ipcCalls.filter((call) => call.command === "batch_link_to_prompt")).toHaveLength(0);
+});
+
+test("回收站多选只读且不加载单张信息", async () => {
+  trashSnapshotA.assets = [...trashSnapshotA.assets, assetRow({ hash: H_NIGHT, display_filename: "另一张.png", deleted_at: "2026-08-28T00:00:00Z" })];
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true, cancelable: true })));
+  expect(inspector().textContent).toContain("已选 2 张图片");
+  expect(inspector().textContent).toContain("回收站中的组织信息只读");
+  expect(inspector().querySelectorAll("input, textarea")).toHaveLength(0);
+  expect(barButton("还原所选图片")).toBeDefined();
+  expect(ipcCalls.filter((call) => call.command === "image_detail")).toHaveLength(0);
+});
+
+test("回收站单选还原恢复原文件夹，成功报告在图片离开回收站后仍可见", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => card(H_TRASHED).click());
+  await act(async () => inspectorButton("还原图片").click());
+  await vi.waitFor(() => expect(container?.textContent).toContain("图片回收站为空"));
+  expect(document.querySelector('[aria-label="回收站操作结果"]')?.textContent).toContain("已还原 1 张图片");
+  expect(appTaskCenter.snapshot().at(-1)?.kind).toBe("batch_organization");
+  expect(appTaskCenter.snapshot().at(-1)?.title).toBe("还原图片");
+  await act(async () => railButton("全部图片").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => card(H_TRASHED).click());
+  expect(inspector().querySelector<HTMLSelectElement>('select[aria-label="图片所在文件夹"]')?.value).toBe("folder:参考");
+});
+
+test("多选还原区分缺失文件夹成功与事务失败，失败图片保留在回收站可重试", async () => {
+  trashSnapshotA.assets.push(assetRow({ hash: H_NIGHT, display_filename: "待恢复.png", deleted_at: "2026-08-28T00:00:00Z" }));
+  trashSnapshotA.trash_count = 2;
+  deletedFolders.set(H_TRASHED, "已删除文件夹");
+  deletedFolders.set(H_NIGHT, "参考");
+  failedRestoreId = H_NIGHT;
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true, cancelable: true })));
+  expect(inspector().textContent).toContain("还原时恢复删除前位置");
+  await act(async () => barButton("还原所选图片").click());
+  await vi.waitFor(() => expect(container?.querySelectorAll('[role="option"]')).toHaveLength(1));
+  const report = document.querySelector('[aria-label="回收站操作结果"]');
+  expect(report?.textContent).toContain("已还原 1 张图片，失败 1 张");
+  expect(report?.textContent).toContain("废弃草图.png：已还原到未分类");
+  expect(report?.textContent).toContain("已删除文件夹");
+  expect(report?.textContent).toContain("trash.restore_target_folder_missing");
+  expect(report?.textContent).toContain("待恢复.png");
+  expect(report?.textContent).toContain("trash.restore_failed");
+  expect(inspector().textContent).not.toContain("原文件夹：未分类");
+  failedRestoreId = null;
+  await vi.waitFor(() => expect(inspectorButton("还原图片").disabled).toBe(false));
+  await act(async () => inspectorButton("还原图片").click());
+  await vi.waitFor(() => expect(container?.textContent).toContain("图片回收站为空"));
+  expect(report?.textContent).toContain("trash.restore_failed");
+});
+
+function purgeButton(): HTMLButtonElement {
+  const button = [...document.querySelectorAll("button")].find((element) => element.textContent === "清空图片回收站");
+  if (button === undefined) throw new Error("缺少清空回收站入口");
+  return button;
+}
+
+function purgeConfirmationButton(label: string): HTMLButtonElement {
+  const button = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find((element) => element.textContent === label);
+  if (button === undefined) throw new Error(`缺少清空确认按钮：${label}`);
+  return button;
+}
+
+test("永久清空明确覆盖整个回收站，取消不写入，部分失败显示未在筛选中的显示文件名", async () => {
+  applyFilenameFilter = true;
+  trashSnapshotA.assets.push(assetRow({ hash: H_NIGHT, display_filename: "已改名.png", original_filename: "CAMERA_02.PNG", deleted_at: "2026-08-28T00:00:00Z" }));
+  trashSnapshotA.trash_count = 2;
+  failedPurgeId = H_NIGHT;
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => setInput(searchInput(), "废弃"));
+  await vi.waitFor(() => expect(container?.querySelectorAll('[role="option"]')).toHaveLength(1));
+  await act(async () => purgeButton().click());
+  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("全部 2 张图片");
+  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("包括当前筛选未显示的图片");
+  await act(async () => purgeConfirmationButton("取消").click());
+  expect(ipcCalls.filter((call) => call.command === "purge_trash")).toHaveLength(0);
+  await act(async () => purgeButton().click());
+  await act(async () => purgeConfirmationButton("永久清空").click());
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="回收站操作结果"]')?.textContent).toContain("已永久删除 1 张图片，失败 1 张"));
+  expect(appTaskCenter.snapshot().at(-1)?.kind).toBe("batch_organization");
+  expect(appTaskCenter.snapshot().at(-1)?.title).toBe("清空图片回收站");
+  const report = document.querySelector('[aria-label="回收站操作结果"]');
+  expect(report?.textContent).toContain("已改名.png");
+  expect(report?.textContent).not.toContain("CAMERA_02.PNG");
+  expect(report?.textContent).toContain("trash.purge_failed");
+  await act(async () => setInput(searchInput(), ""));
+  await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
+  expect(container?.querySelectorAll('[role="option"]')).toHaveLength(1);
+  failedPurgeId = null;
+  await act(async () => purgeButton().click());
+  await act(async () => purgeConfirmationButton("永久清空").click());
+  await vi.waitFor(() => expect(container?.textContent).toContain("图片回收站为空"));
+  expect(purgeButton().disabled).toBe(true);
+  await vi.waitFor(() => expect(document.activeElement).toBe(searchInput()));
+});
+
+test("清空前读取回收站失败不执行永久删除，读取错误可明确重试", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => purgeButton().click());
+  filenameQueryFailure = true;
+  await act(async () => purgeConfirmationButton("永久清空").click());
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="回收站操作结果"]')?.textContent).toContain("library.io_failed"));
+  expect(ipcCalls.filter((call) => call.command === "purge_trash")).toHaveLength(0);
+  const retry = [...document.querySelectorAll("button")].find((button) => button.textContent === "重试读取图片");
+  expect(retry).toBeDefined();
+  filenameQueryFailure = false;
+  await act(async () => retry?.click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+});
+
+test("切库后不继续还原旧库目标，返回原库仍能查看未处理报告", async () => {
+  trashSnapshotA.assets.push(assetRow({ hash: H_NIGHT, display_filename: "另一张.png", deleted_at: "2026-08-28T00:00:00Z" }));
+  trashSnapshotA.trash_count = 2;
+  deletedFolders.set(H_NIGHT, null);
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true, cancelable: true })));
+  let finish!: () => void;
+  restoreGate = new Promise<void>((resolve) => { finish = resolve; });
+  await act(async () => barButton("还原所选图片").click());
+  await vi.waitFor(() => expect(ipcCalls.filter((call) => call.command === "restore_asset")).toHaveLength(1));
+  await mountWorkspace({ session: makeSession(LIB_B, "乙库"), active: true });
+  await act(async () => finish());
+  await flush();
+  expect(ipcCalls.filter((call) => call.command === "restore_asset").map((call) => call.currentLibrary)).toEqual([LIB_A]);
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="回收站操作结果"]')?.textContent).toContain("未处理 1 张"));
+});
+
+test("清空在部分删除后报错仍刷新真实剩余图片，不宣称全部未删除", async () => {
+  trashSnapshotA.assets.push(assetRow({ hash: H_NIGHT, display_filename: "仍在回收站.png", deleted_at: "2026-08-28T00:00:00Z" }));
+  trashSnapshotA.trash_count = 2;
+  purgeFailsAfterDelete = true;
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => purgeButton().click());
+  await act(async () => purgeConfirmationButton("永久清空").click());
+  await vi.waitFor(() => expect(container?.querySelectorAll('[role="option"]')).toHaveLength(1));
+  expect(card(H_NIGHT)).toBeDefined();
+  const report = document.querySelector('[aria-label="回收站操作结果"]');
+  expect(report?.textContent).toContain("删除后索引重建失败");
+  expect(report?.textContent).toContain("请以刷新后的回收站内容为准");
+  expect(report?.textContent).not.toContain("已永久删除 0");
+});
+
+function lightbox(): HTMLElement {
+  const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find((element) => element.getAttribute("data-lightbox") === "true");
+  if (dialog === undefined) throw new Error("灯箱未打开");
+  return dialog;
+}
+
+function lightboxButton(label: string): HTMLButtonElement {
+  const button = [...lightbox().querySelectorAll("button")].find((element) => (element.getAttribute("aria-label") ?? element.textContent) === label);
+  if (button === undefined) throw new Error(`灯箱缺少按钮：${label}`);
+  return button;
+}
+
+test("双击才打开原图灯箱，按当前排序切图并在 Esc 后恢复滚动和最后活动项", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
+  await act(async () => card(H_NIGHT).click());
+  expect(document.querySelector('[data-lightbox]')).toBeNull();
+  expect(ipcCalls.filter((call) => call.command === "asset_original")).toHaveLength(0);
+  const gallery = collectionScroll();
+  await act(async () => { gallery.scrollTop = 240; card(H_NIGHT).dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
+  await vi.waitFor(() => expect(lightbox().querySelector('img[alt="雨夜霓虹.jpg"]')).not.toBeNull());
+  expect(lightboxButton("上一张").disabled).toBe(true);
+  await act(async () => lightboxButton("下一张").click());
+  await vi.waitFor(() => expect(lightbox().querySelector('img[alt="晨光街道.png"]')).not.toBeNull());
+  expect(lightboxButton("下一张").disabled).toBe(true);
+  await act(async () => lightbox().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(document.querySelector('[data-lightbox]')).toBeNull());
+  expect(collectionScroll()).toBe(gallery);
+  expect(gallery.scrollTop).toBe(240);
+  expect(card(H_STREET).getAttribute("aria-current")).toBe("true");
+  expect(card(H_STREET).getAttribute("aria-selected")).toBe("true");
+});
+
+test("灯箱支持适合窗口、100%、有界平移、键盘平移和背景切换", async () => {
+  installPointerStubs();
+  snapshotsByLibrary[LIB_A] = { ...SNAPSHOT_A, assets: SNAPSHOT_A.assets.map((asset) => asset.hash === H_NIGHT ? { ...asset, width: 2400, height: 1600 } : asset) };
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
+  await act(async () => card(H_NIGHT).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(lightbox().querySelector("img")).not.toBeNull());
+  const img = lightbox().querySelector("img")!;
+  await act(async () => img.dispatchEvent(new Event("load")));
+  expect(lightbox().querySelector('[aria-label="缩放比例"]')?.textContent).toBe("50%");
+  await act(async () => lightboxButton("100%").click());
+  expect(lightbox().querySelector('[aria-label="缩放比例"]')?.textContent).toBe("100%");
+  const stage = lightbox().querySelector<HTMLElement>('[aria-label="原图画布"]')!;
+  await pointer(stage, "pointerdown", 600, 400);
+  await pointer(stage, "pointermove", 800, 500);
+  await pointer(stage, "pointerup", 800, 500);
+  expect(img.style.transform).toBe("translate(200px, 100px) scale(1)");
+  await act(async () => stage.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true, cancelable: true })));
+  expect(img.style.transform).toBe("translate(240px, 100px) scale(1)");
+  await pointer(stage, "pointerdown", 600, 400);
+  await pointer(stage, "pointermove", 20000, 20000);
+  await pointer(stage, "pointerup", 20000, 20000);
+  expect(img.style.transform).toBe("translate(600px, 400px) scale(1)");
+  await act(async () => lightboxButton("适合窗口").click());
+  expect(img.style.transform).toBe("translate(0px, 0px) scale(0.5)");
+  await act(async () => lightboxButton("放大").click());
+  expect(lightbox().querySelector('[aria-label="缩放比例"]')?.textContent).toBe("62.5%");
+  const background = lightbox().querySelector<HTMLSelectElement>('select[aria-label="灯箱背景"]')!;
+  await act(async () => { background.value = "checker"; background.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(stage.dataset.background).toBe("checker");
+});
+
+test("灯箱原图读取或显示失败保留明确错误，只有手动重试才再次读取", async () => {
+  originalFailure = true;
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
+  await act(async () => card(H_NIGHT).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(lightbox().textContent).toContain("library.io_failed"));
+  expect(lightbox().querySelector("img")).toBeNull();
+  expect(lightboxButton("放大").disabled).toBe(true);
+  expect(ipcCalls.filter((call) => call.command === "asset_original")).toHaveLength(1);
+  originalFailure = false;
+  await act(async () => lightboxButton("重试读取原图").click());
+  await vi.waitFor(() => expect(lightbox().querySelector("img")).not.toBeNull());
+  await act(async () => lightbox().querySelector("img")!.dispatchEvent(new Event("error")));
+  expect(lightbox().textContent).toContain("viewer.decode_failed");
+  expect(lightbox().querySelector("img")).toBeNull();
+  expect(ipcCalls.filter((call) => call.command === "asset_original")).toHaveLength(2);
+  await act(async () => lightboxButton("重试读取原图").click());
+  await vi.waitFor(() => expect(lightbox().querySelector("img")).not.toBeNull());
+  expect(lightbox().textContent).not.toContain("viewer.decode_failed");
+});
+
+test("灯箱切图丢弃迟到原图，并在换源和关闭时释放租约", async () => {
+  let nextUrl = 0;
+  const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:lightbox-${++nextUrl}`);
+  const releaseUrl = vi.spyOn(URL, "revokeObjectURL");
+  let finish!: (bytes: ArrayBuffer) => void;
+  originalGate = new Promise<ArrayBuffer>((resolve) => { finish = resolve; });
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
+  await act(async () => card(H_NIGHT).dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  await act(async () => lightboxButton("下一张").click());
+  await vi.waitFor(() => expect(lightbox().querySelector("img")).not.toBeNull());
+  const currentUrl = lightbox().querySelector("img")!.src;
+  await act(async () => finish(new ArrayBuffer(8)));
+  const lateResult = createUrl.mock.results.at(-1);
+  if (lateResult?.type !== "return") throw new Error("迟到原图没有创建租约");
+  expect(releaseUrl).toHaveBeenCalledWith(lateResult.value);
+  expect(lightbox().querySelector("img")!.src).toBe(currentUrl);
+  await act(async () => lightboxButton("上一张").click());
+  await vi.waitFor(() => expect(lightbox().querySelector('img[alt="雨夜霓虹.jpg"]')).not.toBeNull());
+  expect(releaseUrl).toHaveBeenCalledWith(currentUrl);
+  const finalUrl = lightbox().querySelector("img")!.src;
+  expect(finalUrl).not.toBe(lateResult.value);
+  await act(async () => lightboxButton("关闭灯箱").click());
+  await vi.waitFor(() => expect(document.querySelector('[data-lightbox]')).toBeNull());
+  expect(releaseUrl).toHaveBeenCalledWith(finalUrl);
+});
+
+test("停用工作区和切库关闭灯箱，回收站也可显式查看原图", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => railButton("回收站").click());
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await act(async () => card(H_TRASHED).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(lightbox().querySelector('img[alt="废弃草图.png"]')).not.toBeNull());
+  await rerenderWorkspace({ session: makeSession(LIB_A, "甲库"), active: false });
+  expect(document.querySelector('[data-lightbox]')).toBeNull();
+  await rerenderWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  expect(document.querySelector('[data-lightbox]')).toBeNull();
+  await vi.waitFor(() => expect(recordedQueries().length).toBeGreaterThan(2));
+  await vi.waitFor(() => expect(card(H_TRASHED)).toBeDefined());
+  await flush();
+  await flush();
+  await act(async () => card(H_TRASHED).dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  await vi.waitFor(() => expect(lightbox().querySelector("img")).not.toBeNull());
+  await mountWorkspace({ session: makeSession(LIB_B, "乙库"), active: true });
+  expect(document.querySelector('[data-lightbox]')).toBeNull();
+});
+
+test("虚拟集合项换源或切库卸载时释放全部缩略图租约", async () => {
+  applyFilenameFilter = true;
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await vi.waitFor(() => expect(createObjectUrlMock).toHaveBeenCalled());
+  await act(async () => setInput(searchInput(), "不会匹配的图片"));
+  await vi.waitFor(() => expect(document.querySelector(`[data-hash="${H_STREET}"]`)).toBeNull());
+  expect(revokeObjectUrlMock).toHaveBeenCalled();
+  const releasedAfterFilter = revokeObjectUrlMock.mock.calls.length;
+  await mountWorkspace({ session: makeSession(LIB_B, "乙库"), active: true });
+  await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
+  await teardown();
+  expect(revokeObjectUrlMock.mock.calls.length).toBeGreaterThan(releasedAfterFilter);
+});
+
+test("非空图片工作区不重复导入按钮，Ctrl+V 仍把结果交给任务中心", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  expect([...document.querySelectorAll("button")].some((button) => button.textContent === "导入图片")).toBe(false);
+  expect([...document.querySelectorAll("button")].some((button) => button.textContent === "导入文件夹")).toBe(false);
+  expect([...document.querySelectorAll("button")].some((button) => button.textContent === "从剪贴板导入")).toBe(false);
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "paste_import")).toBe(true));
+  await act(async () => [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.startsWith("任务中心"))?.click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("粘贴导入"));
+});
+
+test("顶栏图片和文件夹意图复用同一导入协调器，并把当前逻辑文件夹作为目标", async () => {
+  savedLayouts[LIB_A] = { assets: savedAssetsSectionA(), prompts: {} };
+  dialogImageFiles = ["E:\\素材\\一张.png", "E:\\素材\\两张.jpg"];
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await rerenderWorkspace({ session: makeSession(LIB_A, "甲库"), active: true, importRequest: { requestId: createRequestId(), kind: "images" } });
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "import_sources")).toBe(true));
+  const imageImport = record(ipcCalls.find((call) => call.command === "import_sources")?.payload);
+  expect(imageImport.paths).toEqual(dialogImageFiles);
+  expect(imageImport.currentFolder).toBe("参考");
+  await rerenderWorkspace({ session: makeSession(LIB_A, "甲库"), active: true, importRequest: { requestId: createRequestId(), kind: "folder" } });
+  await vi.waitFor(() => expect(ipcCalls.filter((call) => call.command === "import_sources")).toHaveLength(2));
+  const folderImport = record(ipcCalls.filter((call) => call.command === "import_sources").at(-1)?.payload);
+  expect(folderImport.paths).toEqual(["E:\\待导入"]);
+  expect(folderImport.currentFolder).toBe("参考");
+});
+
+test("图片工作区的文本输入保持原生 Ctrl+V，导入任务运行时拒绝第二个任务并显示稳定码", async () => {
+  let finish!: (outcome: ImportOutcome) => void;
+  importGate = new Promise<ImportOutcome>((resolve) => { finish = resolve; });
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => searchInput().dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+  expect(ipcCalls.filter((call) => call.command === "paste_import")).toHaveLength(0);
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(ipcCalls.filter((call) => call.command === "paste_import")).toHaveLength(1));
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("transfer.already_running"));
+  await act(async () => finish({ task_id: "task-import-test", imported: 1, skipped_non_images: 0, duplicates: 0, pending_count: 0, failures: [] }));
+  await act(async () => [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.startsWith("任务中心"))?.click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("粘贴导入"));
+  expect(ipcCalls.filter((call) => call.command === "paste_import")).toHaveLength(1);
+});
+
+test("导入任务取得后端任务 ID 后可真实请求停止，并等待 stopped 确认", async () => {
+  emitImportProgress = true;
+  let finish!: (outcome: ImportOutcome) => void;
+  importGate = new Promise<ImportOutcome>((resolve) => { finish = resolve; });
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "paste_import")).toBe(true));
+  await act(async () => [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.startsWith("任务中心"))?.click());
+  const taskPanel = document.querySelector<HTMLElement>('[data-ui="task-center"]');
+  if (taskPanel === null) throw new Error("任务中心未打开");
+  expect(taskPanel.textContent).toContain("停止");
+  importStopState = "stopping";
+  await act(async () => [...taskPanel.querySelectorAll("button")].find((button) => button.textContent === "停止")?.click());
+  await vi.waitFor(() => expect(taskPanel.textContent).toContain("正在停止"));
+  expect(taskPanel.textContent).not.toContain("已停止");
+  importStopState = "stopped";
+  await act(async () => [...taskPanel.querySelectorAll("button")].find((button) => button.textContent === "正在停止…")?.click());
+  await act(async () => finish({ task_id: "backend-import-test", imported: 1, skipped_non_images: 0, duplicates: 0, pending_count: 2, failures: [] }));
+  await vi.waitFor(() => expect(taskPanel.textContent).toContain("已停止"));
+  expect(ipcCalls.filter((call) => call.command === "import_stop")).toHaveLength(2);
+  expect(taskPanel.textContent).toContain("未处理 2");
+});
+
+test("停止先返回 stopping 时，导入结果到达后再次向后端确认终态", async () => {
+  emitImportProgress = true;
+  let finish!: (outcome: ImportOutcome) => void;
+  importGate = new Promise<ImportOutcome>((resolve) => { finish = resolve; });
+  importStopState = "stopping";
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "paste_import")).toBe(true));
+  const taskButton = document.querySelector<HTMLButtonElement>('[aria-label^="任务中心"]');
+  if (taskButton === null) throw new Error("任务中心按钮不存在");
+  await act(async () => taskButton.click());
+  const taskPanel = document.querySelector<HTMLElement>('[data-ui="task-center"]');
+  if (taskPanel === null) throw new Error("任务中心未打开");
+  await act(async () => [...taskPanel.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "停止")?.click());
+  importStopState = "stopped";
+  await act(async () => finish({ task_id: "backend-import-test", imported: 1, skipped_non_images: 0, duplicates: 0, pending_count: 1, failures: [] }));
+  await vi.waitFor(() => expect(taskPanel.textContent).toContain("已停止"));
+  expect(ipcCalls.filter((call) => call.command === "import_stop").length).toBeGreaterThanOrEqual(2);
+});
+
+test("停止终态确认失败在任务中心保留稳定错误码并允许重试", async () => {
+  emitImportProgress = true;
+  let finish!: (outcome: ImportOutcome) => void;
+  importGate = new Promise<ImportOutcome>((resolve) => { finish = resolve; });
+  importStopState = "stopping";
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true })));
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "paste_import")).toBe(true));
+  const transferTask = appTaskCenter.snapshot().at(-1);
+  if (transferTask === undefined || transferTask.title !== "粘贴导入") throw new Error("停止失败回归缺少粘贴任务记录");
+  const taskButton = document.querySelector<HTMLButtonElement>('[aria-label^="任务中心"]');
+  if (taskButton === null) throw new Error("任务中心按钮不存在");
+  await act(async () => taskButton.click());
+  const taskPanel = document.querySelector<HTMLElement>('[data-ui="task-center"]');
+  if (taskPanel === null) throw new Error("任务中心未打开");
+  const taskItem = (): HTMLElement => {
+    const item = taskPanel.querySelector<HTMLElement>(`[data-task-id="${transferTask.id}"]`);
+    if (item === null) throw new Error("停止失败回归缺少粘贴任务项目");
+    return item;
+  };
+  await act(async () => [...taskItem().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "停止")?.click());
+  importStopFailure = true;
+  await act(async () => finish({ task_id: "backend-import-test", imported: 1, skipped_non_images: 0, duplicates: 0, pending_count: 1, failures: [] }));
+  await vi.waitFor(() => expect(taskItem().textContent).toContain("transfer.task_not_active"));
+  expect(taskItem().textContent).toContain("正在停止");
+  importStopFailure = false;
+  importStopState = "stopped";
+  await act(async () => [...taskItem().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "正在停止…")?.click());
+  await vi.waitFor(() => expect(taskItem().textContent).toContain("已停止"));
+  appTaskCenter.dismiss(transferTask.id);
+});
+
+test("单选提供复制与默认程序打开，多选只提供原图导出并进入任务中心", async () => {
+  dialogExportDirectory = "E:\\导出";
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => namedButton("复制图像").click());
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "copy_asset_to_clipboard")).toBe(true));
+  expect(document.body.textContent).toContain("已复制图片到剪贴板");
+  await act(async () => namedButton("用默认程序打开").click());
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "open_with_default_app")).toBe(true));
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  expect([...document.querySelectorAll<HTMLButtonElement>("button")].some((button) => button.getAttribute("aria-label") === "复制图像")).toBe(false);
+  expect([...document.querySelectorAll<HTMLButtonElement>("button")].some((button) => button.getAttribute("aria-label") === "导出原图")).toBe(true);
+  await act(async () => namedButton("导出原图").click());
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "plan_export")).toBe(true));
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "export_assets")).toBe(true));
+  await act(async () => [...document.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.startsWith("任务中心"))?.click());
+  expect(document.body.textContent).toContain("导出图片");
+});
+
+test("导出冲突先提供跳过/自动编号，覆盖必须二次确认，取消不写入目标目录", async () => {
+  dialogExportDirectory = "E:\\导出";
+  exportConflict = true;
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => namedButton("导出原图").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("导出文件冲突"));
+  expect(ipcCalls.filter((call) => call.command === "export_assets")).toHaveLength(0);
+  const conflict = document.querySelector<HTMLElement>('[role="dialog"]');
+  if (conflict === null) throw new Error("冲突 Dialog 未打开");
+  await act(async () => [...conflict.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "跳过冲突并导出")?.click());
+  await vi.waitFor(() => expect(ipcCalls.filter((call) => call.command === "export_assets")).toHaveLength(1));
+  await act(async () => namedButton("导出原图").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("导出文件冲突"));
+  const conflictAgain = document.querySelector<HTMLElement>('[role="dialog"]');
+  if (conflictAgain === null) throw new Error("第二次冲突 Dialog 未打开");
+  await act(async () => [...conflictAgain.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "覆盖并导出")?.click());
+  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("覆盖现有导出文件");
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find((button) => button.textContent === "取消")?.click());
+  expect(ipcCalls.filter((call) => call.command === "export_assets")).toHaveLength(1);
+  await act(async () => [...conflictAgain.querySelectorAll("button")].find((button) => button.textContent === "覆盖并导出")?.click());
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find((button) => button.textContent === "确认覆盖")?.click());
+  await vi.waitFor(() => expect(ipcCalls.filter((call) => call.command === "export_assets")).toHaveLength(2));
+  expect(record(ipcCalls.filter((call) => call.command === "export_assets").at(-1)?.payload).policy).toBe("overwrite");
+});
+
+test("导出冲突选择自动编号后才提交对应策略", async () => {
+  dialogExportDirectory = "E:\\导出";
+  exportConflict = true;
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => namedButton("导出原图").click());
+  const conflict = document.querySelector<HTMLElement>('[role="dialog"]');
+  if (conflict === null) throw new Error("冲突 Dialog 未打开");
+  await act(async () => [...conflict.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "自动编号并导出")?.click());
+  await vi.waitFor(() => expect(record(ipcCalls.filter((call) => call.command === "export_assets").at(-1)?.payload).policy).toBe("auto_number"));
+});
+
+test("复制和默认程序打开失败显示稳定错误，成功后提供轻量状态反馈", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  outboundFailure = "copy";
+  await act(async () => namedButton("复制图像").click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("clipboard.write_failed"));
+  outboundFailure = null;
+  await act(async () => namedButton("复制图像").click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("已复制图片到剪贴板"));
+  outboundFailure = "open";
+  await act(async () => namedButton("用默认程序打开").click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("external.open_failed"));
+  expect(document.body.textContent).not.toContain("已交给 Windows 默认程序打开");
 });

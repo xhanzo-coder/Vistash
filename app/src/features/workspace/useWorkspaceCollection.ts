@@ -10,7 +10,7 @@ import {
 
 import { asAppError } from "../../shared/errors";
 import type { AppError, FolderFilter } from "../../shared/types";
-import type { GlobalLocateRequest } from "./GlobalSearch";
+import type { GlobalLocateRequest } from "./locate";
 import type { AppliedFilterChip } from "./AppliedFilterChips";
 import {
   useWorkspacePreferences,
@@ -53,7 +53,7 @@ export function useWorkspaceQueryController(
   } = preferences;
   const deferredText = useDeferredValue(text);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const handledLocateNonce = useRef(-1);
+  const handledLocateNonce = useRef<number>(-1);
   const activation =
     locate !== null && (libraryId === null || ready)
       ? { id: locate.id, nonce: locate.nonce }
@@ -150,8 +150,8 @@ export function useWorkspaceQueryController(
 /** 共享的异步快照加载接缝；领域差异只体现在传入的 load 函数与 DTO 类型。 */
 export function useWorkspaceSnapshot<TQuery, TSnapshot>(
   query: TQuery,
-  refreshVersion: number,
   load: (query: TQuery) => Promise<TSnapshot>,
+  enabled = true,
 ): {
   snapshot: TSnapshot | null;
   loading: boolean;
@@ -164,9 +164,7 @@ export function useWorkspaceSnapshot<TQuery, TSnapshot>(
   const [error, setError] = useState<AppError | null>(null);
   const requestKey = useMemo(() => JSON.stringify(query), [query]);
   const currentRequestKeyRef = useRef(requestKey);
-  const loadCurrentRequest = useEffectEvent(
-    (_requestKey: string, _refreshVersion: number) => load(query),
-  );
+  const loadCurrentRequest = useEffectEvent((_requestKey: string) => load(query));
 
   useEffect(() => {
     currentRequestKeyRef.current = requestKey;
@@ -187,10 +185,11 @@ export function useWorkspaceSnapshot<TQuery, TSnapshot>(
   }, [load, query, requestKey]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let cancelled = false;
     void (async () => {
       try {
-        const next = await loadCurrentRequest(requestKey, refreshVersion);
+        const next = await loadCurrentRequest(requestKey);
         if (cancelled || currentRequestKeyRef.current !== requestKey) return;
         setSnapshot(next);
         setError(null);
@@ -205,7 +204,7 @@ export function useWorkspaceSnapshot<TQuery, TSnapshot>(
     return () => {
       cancelled = true;
     };
-  }, [refreshVersion, requestKey]);
+  }, [enabled, requestKey]);
 
   return { snapshot, loading, error, setError, refresh };
 }

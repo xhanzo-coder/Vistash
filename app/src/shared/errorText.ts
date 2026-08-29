@@ -9,6 +9,9 @@
  * 那样就失去了这道检查。
  */
 export const ERROR_TEXT: Readonly<Record<string, string>> = {
+  "transfer.already_running": "当前库已有导入任务正在运行，请等待任务完成。",
+  // viewer 域由前端图片元素报告，不表示导入事务失败。
+  "viewer.decode_failed": "原图字节已读取，但无法显示。请检查文件是否损坏或格式是否受支持。",
   // import 域
   "import.source_unreadable": "读不到源文件。它可能已被移动、删除，或当前账户没有读取权限。",
   "import.unsupported_media_type": "不支持这种图片格式。本版支持 PNG、JPEG、WebP、GIF 与 BMP。",
@@ -98,4 +101,5 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
 
   // transfer 域：导入与导出共享的任务身份
   "transfer.task_not_active": "这个传输任务已不是当前运行任务，停止请求未作用于其他任务。",
+  "transfer.stop_confirmation_timeout": "后端迟迟没有确认任务已停止。任务仍保持正在停止状态，可继续重试。",
 };

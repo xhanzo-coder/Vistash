@@ -107,6 +107,7 @@ export function AppShellShowcase(): ReactNode {
       appVersion="0.1.0"
       onImportImages={() => toast.publish({ tone: "info", title: "已提交导入图片意图" })}
       onImportFolder={() => toast.publish({ tone: "info", title: "已提交导入文件夹意图" })}
+      onImportClipboard={() => toast.publish({ tone: "info", title: "已提交剪贴板导入意图" })}
       onOpenOtherLibrary={() => toast.publish({ tone: "info", title: "已提交打开其他库意图" })}
       assets={<WorkspacePlaceholder kind="assets" />}
       prompts={<WorkspacePlaceholder kind="prompts" />}

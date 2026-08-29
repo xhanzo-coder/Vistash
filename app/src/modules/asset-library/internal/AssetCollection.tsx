@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useVirtualizer } from "@tanstack/react-virtual";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { parseAssetId, type AssetId } from "../../../app/common";
-import { createTauriPlatform } from "../../../app/platformTauri";
+import { appPlatform } from "../../../app/runtime";
 import type { ImageLease } from "../../../app/platform";
 import type { AssetRow } from "../../../shared/types";
 import { IpcError } from "../../../shared/errors";
@@ -10,10 +10,9 @@ import type { ThumbnailSize } from "./preferences";
 import { useBoxSelection } from "./useBoxSelection";
 import styles from "./AssetLibraryWorkspace.module.css";
 
-const media = createTauriPlatform();
 const GAP = 12;
 /** 各缩略图档位对应的卡片基准宽度；实际列宽按容器宽度均分剩余空间。 */
-const TILE_WIDTHS: Record<ThumbnailSize, number> = { small: 200, medium: 280, large: 380 };
+const TILE_WIDTHS: Record<ThumbnailSize, number> = { small: 160, medium: 200, large: 280 };
 /** 滚动偏移回写的防抖间隔；键名与落盘表由上层拥有。 */
 const SCROLL_SAVE_DEBOUNCE_MS = 300;
 
@@ -23,7 +22,7 @@ export function AssetThumbnail({ asset }: { asset: AssetRow }): ReactNode {
   useEffect(() => {
     let mounted = true;
     let owned: ImageLease | null = null;
-    void media.acquireThumbnail(asset.hash).then((acquired) => {
+    void appPlatform.acquireThumbnail(asset.hash).then((acquired) => {
       if (!mounted) { acquired.release(); return undefined; }
       owned = acquired;
       setLease(acquired);
@@ -48,6 +47,9 @@ export type AssetContextMenuActions = {
 };
 
 type CollectionProps = {
+  onOpen: (id: AssetId) => void;
+  previewOpen: boolean;
+  previewReturn: { id: number; hash: string | null; scrollTop: number } | null;
   assets: readonly AssetRow[];
   view: "waterfall" | "list";
   /** 唯一活动项；aria-current 与键盘位置语义由上层选择模型拥有。 */
@@ -70,7 +72,7 @@ type CollectionProps = {
 
 /** 两种呈现复用同一查询、排序与选择；窗口化、密度、框选与图片租约留在集合内部。 */
 export function AssetCollection(props: CollectionProps): ReactNode {
-  const { assets, view, activeId, focusedId, onNavigate, selectedIds, onItemSelect, onBoxSelect, tileSize, initialScrollTop, onScrollOffset, contextMenu } = props;
+  const { assets, view, activeId, focusedId, onNavigate, selectedIds, onItemSelect, onBoxSelect, tileSize, initialScrollTop, onScrollOffset, contextMenu, onOpen, previewOpen, previewReturn } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -100,14 +102,35 @@ export function AssetCollection(props: CollectionProps): ReactNode {
     count: assets.length,
     getScrollElement: () => scrollRef.current,
     getItemKey,
-    estimateSize: (index) => view === "list" ? 68 : itemWidth * getAsset(index).height / getAsset(index).width + 42,
+    // 卡片文字叠在图片底部，不再为常驻文字条预留高度；两侧边框不参与画幅。
+    estimateSize: (index) => view === "list" ? 68 : (itemWidth - 2) * getAsset(index).height / getAsset(index).width + 2,
     lanes,
     gap: GAP,
     overscan: 2,
   });
+  useLayoutEffect(() => {
+    // 窗口变化可能只改变列宽而不改变列数；此时必须清除旧高度缓存。
+    // 否则原画幅卡片会保留上次宽度对应的高度，形成留白或错误框选区域。
+    virtualizer.measure();
+  }, [itemWidth, view, virtualizer]);
   const lastFocusedId = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (previewOpen || previewReturn === null) return undefined;
+    const element = scrollRef.current;
+    if (element === null) return undefined;
+    lastFocusedId.current = previewReturn.hash;
+    element.scrollTop = previewReturn.scrollTop;
+    const frame = requestAnimationFrame(() => {
+      const target = previewReturn.hash === null ? null : element.querySelector<HTMLElement>(`[data-hash="${previewReturn.hash}"]`);
+      const viewport = element.getBoundingClientRect();
+      const rect = target?.getBoundingClientRect();
+      if (target !== null && rect !== undefined && rect.bottom > viewport.top && rect.top < viewport.bottom) target.focus({ preventScroll: true });
+      else element.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [previewOpen, previewReturn]);
   useEffect(() => {
-    if (focusedId === null || width === 0 || lastFocusedId.current === focusedId) return undefined;
+    if (previewOpen || focusedId === null || width === 0 || lastFocusedId.current === focusedId) return undefined;
     const index = assets.findIndex((asset) => asset.hash === focusedId);
     if (index === -1) return undefined;
     virtualizer.scrollToIndex(index, { align: "auto" });
@@ -126,7 +149,7 @@ export function AssetCollection(props: CollectionProps): ReactNode {
     };
     frame = requestAnimationFrame(focusVisibleItem);
     return () => cancelAnimationFrame(frame);
-  }, [focusedId, assets, virtualizer, width]);
+  }, [focusedId, assets, virtualizer, width, previewOpen]);
 
   const box = useBoxSelection({
     virtualizer,
@@ -214,6 +237,7 @@ export function AssetCollection(props: CollectionProps): ReactNode {
         onClick={(event) =>
           onItemSelect(parseAssetId(asset.hash), { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey })
         }
+        onDoubleClick={() => onOpen(parseAssetId(asset.hash))}
       >
         <div className={styles.thumbnail}><AssetThumbnail asset={asset} /></div>
         <div className={styles.caption}><span>{asset.display_filename}</span><span>{asset.width} × {asset.height}</span></div>
@@ -257,6 +281,12 @@ export function AssetCollection(props: CollectionProps): ReactNode {
         onKeyDownCapture={box.onKeyDownCapture}
         onKeyDown={(event) => {
           if (event.defaultPrevented || event.altKey || event.metaKey || event.ctrlKey) return;
+          if (event.key === "Enter" && !event.shiftKey) {
+            const target = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-hash]") : null;
+            const hash = target?.dataset.hash ?? activeId;
+            if (hash !== null && hash !== undefined) { event.preventDefault(); onOpen(parseAssetId(hash)); }
+            return;
+          }
           let step: "next" | "prev" | "first" | "last";
           switch (event.key) {
             case "ArrowDown": case "ArrowRight": step = "next"; break;

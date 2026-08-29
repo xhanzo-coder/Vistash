@@ -1,4 +1,4 @@
-import { useId, useRef, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { parseAssetId, type LibraryId } from "../../../app/common";
@@ -42,7 +42,7 @@ function Colors({ asset }: { asset: AssetRow }): ReactNode {
   if (asset.color_card_status !== "ok" && asset.color_card_status !== "failed") throw new TypeError(`未知色卡状态：${asset.color_card_status}`);
   if (asset.color_card_status !== "ok") {
     if (asset.color_card_failure_reason === null) throw new TypeError("失败色卡缺少原因");
-    return <p role="alert" className={styles.error}>色卡不可用：{asset.color_card_failure_reason}</p>;
+    return <div role="alert" className={styles.error}><p>暂时无法生成色卡。</p><details><summary>技术详情</summary><code>{asset.color_card_failure_reason}</code></details></div>;
   }
   return asset.colors.length === 0 ? <p className={styles.hint}>暂无色卡数据。</p> : <ul className={styles.colors}>
     {asset.colors.map((color, index) => <li key={`${index}-${color.hex}`}>
@@ -54,14 +54,16 @@ function Colors({ asset }: { asset: AssetRow }): ReactNode {
 
 export type AssetInspectorProps = {
   libraryId: LibraryId; asset: AssetRow | null; count: number; active: boolean;
-  editable: boolean; onEdit: () => void; sections: InspectorSections | undefined;
+  editable: boolean; sections: InspectorSections | undefined;
   onSectionsChange: (sections: InspectorSections) => void;
   notes: AssetNotes;
   folders: readonly string[];
+  onRestore: () => void;
+  restorable: boolean;
+  actions?: ReactNode;
 };
 
-export function AssetInspector({ libraryId, asset, count, active, editable, onEdit, sections, onSectionsChange, notes, folders }: AssetInspectorProps): ReactNode {
-  const root = useRef<HTMLDivElement>(null);
+export function AssetInspector({ libraryId, asset, count, active, editable, sections, onSectionsChange, notes, folders, onRestore, restorable, actions }: AssetInspectorProps): ReactNode {
   const detail = useQuery({
     queryKey: asset === null ? [...assetKeys.details(libraryId), null] : assetKeys.detail(libraryId, parseAssetId(asset.hash)),
     queryFn: async ({ signal }) => {
@@ -75,21 +77,16 @@ export function AssetInspector({ libraryId, asset, count, active, editable, onEd
     staleTime: Infinity,
   });
   if (detail.error !== null && !(detail.error instanceof IpcError)) throw detail.error;
-  if (asset === null) return <div className={styles.empty}><h2>图片检查器</h2><p>{count > 1 ? `已选 ${count} 项。请从底部操作栏批量整理，单张信息仅在单选时显示。` : "选择一张图片，查看色卡、组织与来源信息。"}</p></div>;
+  if (asset === null) return <div className={styles.empty}><h2 tabIndex={-1} data-inspector-heading>图片检查器</h2><p>{count > 1 ? `已选 ${count} 项。请从底部操作栏批量整理，单张信息仅在单选时显示。` : "选择一张图片，查看色卡、组织与来源信息。"}</p></div>;
   const contents: Record<InspectorSection, ReactNode> = {
-    summary: <>{active && sections?.summary !== false ? <div className={styles.preview}><AssetThumbnail key={asset.hash} asset={asset} /></div> : null}<p className={styles.filename}>{asset.display_filename}</p><p className={styles.hint}>{asset.width} × {asset.height} · {asset.ext.toUpperCase()} · {asset.deleted_at === null ? "库内图片" : "已移入回收站"}</p></>,
+    summary: <>{active && sections?.summary !== false ? <div className={styles.preview}><AssetThumbnail key={asset.hash} asset={asset} /></div> : null}<div className={styles.summaryHeading}><div><p className={styles.filename}>{asset.display_filename}</p><p className={styles.hint}>{asset.width} × {asset.height} · {asset.ext.toUpperCase()}{asset.deleted_at === null ? "" : " · 回收站"}</p></div>{actions}</div></>,
     colors: <Colors asset={asset} />,
-    organization: <AssetOrganization key={asset.hash} libraryId={libraryId} asset={asset} folders={folders} disabled={!editable} />,
+    organization: <><AssetOrganization key={asset.hash} libraryId={libraryId} asset={asset} folders={folders} disabled={!editable} />{asset.deleted_at === null ? null : <Button size="compact" disabled={!restorable} onClick={onRestore}>还原图片</Button>}</>,
     note: <NoteEditor asset={asset} notes={notes} disabled={!editable} />,
     links: detail.isError ? <div><p role="alert" className={styles.error}>{detail.error.message}</p><Button size="compact" onClick={() => void detail.refetch()}>重试读取详情</Button></div> : detail.isPending ? <p role="status">正在读取关联…</p> : <AssetPromptLinks key={asset.hash} libraryId={libraryId} hash={asset.hash} linked={detail.data.linked_prompts} disabled={!editable} active={active} />,
-    files: <FileInformation asset={asset} count={count} editable={editable} onEdit={onEdit} />,
+    files: <FileInformation asset={asset} />,
   };
-  return <div ref={root} className={styles.inspector}>
-    <nav aria-label="检查器分区定位" className={styles.jumpList}>{INSPECTOR_SECTIONS.map((name) => <Button key={name} variant="ghost" size="compact" aria-label={`定位${TITLES[name]}`} onClick={() => {
-      onSectionsChange({ ...sections, [name]: true });
-      const heading = root.current?.querySelector<HTMLButtonElement>(`[data-inspector-section="${name}"] h2 button`);
-      heading?.focus();
-    }}>{TITLES[name]}</Button>)}</nav>
+  return <div className={styles.inspector}>
     {INSPECTOR_SECTIONS.map((name) => <Section key={name} name={name} expanded={sections?.[name] !== false} toggle={() => onSectionsChange({ ...sections, [name]: sections?.[name] === false })}>{contents[name]}</Section>)}
   </div>;
 }

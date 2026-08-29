@@ -23,6 +23,8 @@ import {
   openWithDefaultApp,
   pasteImport,
   pickImageFiles,
+  pickImportDirectory,
+  pickExportDirectory,
   pickLibraryDirectory,
   releaseImageUrl,
 } from "../shared/ipc";
@@ -63,6 +65,8 @@ export function createTauriPlatform(): PlatformPort {
     acquireOriginal: (hash) => toLease(loadOriginal(hash)),
 
     pickImageFiles,
+    pickImportDirectory,
+    pickExportDirectory,
     pickLibraryDirectory,
 
     onFileDrag: (handler) => {
