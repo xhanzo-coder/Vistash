@@ -12,15 +12,16 @@ use std::path::Path;
 
 /// 缩略图长边像素数。
 ///
-/// 网格卡片在 2 倍 DPI 下的实际像素需求约 400，512 留出余量。缩略图是派生数据，
-/// 调整该值的代价是一次全库重建而不是格式迁移。
-pub const THUMBNAIL_LONG_EDGE: u32 = 512;
+/// 普通画幅的卡片宽度不大，但超长图会在保留画幅时产生 500px 以上的 CSS 长边。
+/// 512 长边会被 WebView 再放大；1024 让当前中等密度在 1× DPI 下不放大，
+/// 并为高 DPI 留出明显余量。缩略图是派生数据，调整该值只触发缩略图树重建。
+pub const THUMBNAIL_LONG_EDGE: u32 = 1024;
 
 /// 色卡取样用的长边像素数。
 ///
 /// 聚类在降采样后的图上进行，因此色卡耗时与原图尺寸无关。该值参与色卡的确定性，
 /// 改动必须提升 `colorcard::ALGO_VERSION`。
-pub const COLOR_SAMPLE_LONG_EDGE: u32 = 256;
+pub const COLOR_SAMPLE_LONG_EDGE: u32 = 160;
 
 /// 重采样滤波器。写死而不做可配置项：它参与色卡的确定性。
 pub const RESAMPLE_FILTER: FilterType = FilterType::Lanczos3;
@@ -302,6 +303,14 @@ mod tests {
     }
 
     #[test]
+    fn tall_material_thumbnail_covers_the_medium_waterfall_card_without_upscaling() {
+        let image = solid(676, 1726, Rgba([25, 45, 65, 255]));
+        let bytes = encode_thumbnail(&image).expect("编码超长图缩略图");
+        let decoded = image::load_from_memory(&bytes).expect("解回超长图缩略图");
+        assert_eq!((decoded.width(), decoded.height()), (401, 1024));
+    }
+
+    #[test]
     fn extreme_aspect_ratios_keep_at_least_one_pixel() {
         let (w, h) = fit_within(10_000, 3, 512);
         assert_eq!(w, 512);
@@ -318,7 +327,7 @@ mod tests {
         assert_eq!(&bytes[8..12], b"WEBP", "不是 WebP");
 
         let decoded = image::load_from_memory(&bytes).expect("解回缩略图");
-        assert_eq!((decoded.width(), decoded.height()), (512, 256));
+        assert_eq!((decoded.width(), decoded.height()), (800, 400));
         assert_eq!(decoded.to_rgba8().get_pixel(0, 0)[3], 0, "透明通道丢失");
     }
 
@@ -334,7 +343,7 @@ mod tests {
     fn color_sample_downscales_to_the_documented_long_edge() {
         let img = solid(4000, 2000, Rgba([9, 9, 9, 255]));
         let s = sample_for_color_card(&img);
-        assert_eq!((s.width(), s.height()), (256, 128));
+        assert_eq!((s.width(), s.height()), (160, 80));
     }
 
     #[test]

@@ -392,13 +392,14 @@ fn materialize_import(
 
 /// 缩略图编码格式的版本。
 ///
-/// 编码器、质量参数与长边任一改动都必须提升它。1 是最初的无损 WebP，2 起为有损。
+/// 编码器、质量参数与长边任一改动都必须提升它。1 是最初的无损 WebP，
+/// 2 起为有损，3 起长边为 1024。
 ///
 /// 没有这个版本号会怎样：换了编码参数之后，既有缩略图文件仍然存在，于是
 /// [`ensure_thumbnail`] 认为它们没缺失而直接读回旧格式的字节。同一个库里混着两代
 /// 缩略图，且这件事不会有任何报错——这正是设计第四条"调整该值的代价是一次全库重建"
 /// 那句话得以成立的机制。
-pub const THUMBNAIL_FORMAT_VERSION: u32 = 2;
+pub const THUMBNAIL_FORMAT_VERSION: u32 = 3;
 
 /// 缩略图树内记录格式版本的标记文件名。
 const THUMBNAIL_FORMAT_MARKER: &str = ".format";
@@ -515,6 +516,13 @@ fn collect_images(dir: &Path, out: &mut Vec<PathBuf>, skipped: &mut usize) -> Re
     Ok(())
 }
 
+/// 缩略图重建时的权威本体位置。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThumbnailSource {
+    Active,
+    Trash,
+}
+
 /// 读取缩略图，缺失时按需重新生成。
 ///
 /// 放在 `import` 而不是 `media`：生成缩略图既要知道库布局又要解码，而 `media` 刻意不接触
@@ -523,7 +531,12 @@ fn collect_images(dir: &Path, out: &mut Vec<PathBuf>, skipped: &mut usize) -> Re
 ///
 /// 缺失即重算，不用占位图代替：规格明确禁止"以占位图代替而不重建"。缩略图全部被删掉
 /// 也只是触发重算，不构成库损坏。
-pub fn ensure_thumbnail(lib: &Library, hash: &ContentHash, ext: &str) -> Result<Vec<u8>> {
+pub fn ensure_thumbnail(
+    lib: &Library,
+    hash: &ContentHash,
+    ext: &str,
+    source: ThumbnailSource,
+) -> Result<Vec<u8>> {
     let thumb = lib.thumbnail_path(hash);
     if thumb.is_file() {
         return std::fs::read(&thumb).map_err(|e| {
@@ -533,7 +546,10 @@ pub fn ensure_thumbnail(lib: &Library, hash: &ContentHash, ext: &str) -> Result<
             )
         });
     }
-    let body = lib.body_path(hash, ext);
+    let body = match source {
+        ThumbnailSource::Active => lib.body_path(hash, ext),
+        ThumbnailSource::Trash => lib.trash_body_path(hash, ext),
+    };
     // 解码与编码失败统一归到 library.thumbnail_failed：底层给出的是 import.* 码，
     // 而这里并不是一次导入，原样透出会让使用者以为导入出了问题。原始码进 detail，
     // 诊断信息不丢。
@@ -1403,6 +1419,7 @@ mod tests {
 
     #[test]
     fn a_fresh_library_gets_the_current_thumbnail_format_marker() {
+        assert_eq!(THUMBNAIL_FORMAT_VERSION, 3, "1024 长边必须使用新缩略图代际");
         let f = fixture();
         ensure_thumbnail_format(&f.lib).expect("写入格式标记");
         let marker = f.lib.thumbnails_dir().join(THUMBNAIL_FORMAT_MARKER);
@@ -1432,7 +1449,8 @@ mod tests {
 
         // 清空不影响素材本体与侧车，重算即可恢复。
         assert!(f.lib.body_path(&s.hash, &s.ext).is_file());
-        ensure_thumbnail(&f.lib, &s.hash, &s.ext).expect("重算缩略图");
+        ensure_thumbnail(&f.lib, &s.hash, &s.ext, ThumbnailSource::Active)
+            .expect("重算缩略图");
         assert!(thumb.is_file());
     }
 
@@ -1465,9 +1483,34 @@ mod tests {
         let original = std::fs::read(&thumb).expect("读取缩略图");
         std::fs::remove_file(&thumb).expect("删除缩略图");
 
-        let regenerated = ensure_thumbnail(&f.lib, &s.hash, &s.ext).expect("按需重新生成");
+        let regenerated = ensure_thumbnail(&f.lib, &s.hash, &s.ext, ThumbnailSource::Active)
+            .expect("按需重新生成");
         assert_eq!(regenerated, original, "重新生成的缩略图应与导入时一致");
         assert!(thumb.is_file(), "重新生成后应落盘，而不是只返回内存中的字节");
+    }
+
+    #[test]
+    fn a_trashed_asset_regenerates_its_thumbnail_from_the_trash_body() {
+        let f = fixture();
+        let path = write_png(&f.src, "回收站样例.png", 676, 1726, [20, 40, 80, 255]);
+        let sidecar = import_one(
+            &f.lib,
+            &path,
+            &ImportOptions::default(),
+            &mut NoopTransferObserver,
+        )
+        .expect("导入回收站样例");
+        let active_body = f.lib.body_path(&sidecar.hash, &sidecar.ext);
+        let trash_body = f.lib.trash_body_path(&sidecar.hash, &sidecar.ext);
+        std::fs::create_dir_all(trash_body.parent().expect("回收站本体必须有父目录"))
+            .expect("建立回收站扇出目录");
+        std::fs::rename(active_body, &trash_body).expect("把权威本体移入回收站");
+        std::fs::remove_file(f.lib.thumbnail_path(&sidecar.hash)).expect("删除旧缩略图");
+
+        let bytes = ensure_thumbnail(&f.lib, &sidecar.hash, &sidecar.ext, ThumbnailSource::Trash)
+            .expect("回收站素材应从回收站本体重建缩略图");
+        let decoded = image::load_from_memory(&bytes).expect("解回回收站缩略图");
+        assert_eq!((decoded.width(), decoded.height()), (401, 1024));
     }
 
     #[test]
@@ -1480,7 +1523,8 @@ mod tests {
         let marker = "这不是真的 WebP".as_bytes().to_vec();
         std::fs::write(f.lib.thumbnail_path(&s.hash), &marker).expect("覆盖缩略图");
         assert_eq!(
-            ensure_thumbnail(&f.lib, &s.hash, &s.ext).expect("读取缩略图"),
+            ensure_thumbnail(&f.lib, &s.hash, &s.ext, ThumbnailSource::Active)
+                .expect("读取缩略图"),
             marker,
             "既有缩略图应被直接读取而不是重算"
         );
@@ -1494,7 +1538,8 @@ mod tests {
             .expect("导入");
         std::fs::remove_file(f.lib.thumbnail_path(&s.hash)).expect("删除缩略图");
         std::fs::remove_file(f.lib.body_path(&s.hash, &s.ext)).expect("删除本体");
-        let err = ensure_thumbnail(&f.lib, &s.hash, &s.ext).expect_err("本体缺失时本应失败");
+        let err = ensure_thumbnail(&f.lib, &s.hash, &s.ext, ThumbnailSource::Active)
+            .expect_err("本体缺失时本应失败");
         assert_eq!(err.code, Code::LibraryThumbnailFailed);
     }
 

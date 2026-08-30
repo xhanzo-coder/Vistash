@@ -205,19 +205,14 @@ impl ClipboardPort for MemoryClipboard {
 /// 上抛而不是产出空字节。
 pub fn bitmap_to_png(image: &BitmapImage) -> Result<Vec<u8>> {
     use image::ImageEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 
-    let canvas = image::RgbaImage::from_raw(
-        image.width() as u32,
-        image.height() as u32,
-        image.rgba().to_vec(),
-    )
-    .ok_or_else(|| AppError::detailed(Code::ClipboardImageInvalid, "像素缓冲与宽高不符"))?;
     let mut png = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut png)
+    PngEncoder::new_with_quality(&mut png, CompressionType::Fast, FilterType::Sub)
         .write_image(
-            canvas.as_raw(),
-            canvas.width(),
-            canvas.height(),
+            image.rgba(),
+            image.width() as u32,
+            image.height() as u32,
             image::ExtendedColorType::Rgba8,
         )
         .map_err(|e| {

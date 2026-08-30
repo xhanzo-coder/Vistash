@@ -107,6 +107,10 @@ impl Catalog {
         self.index()?.asset_ext(hash)
     }
 
+    pub fn asset_is_deleted(&self, hash: &ContentHash) -> Result<bool> {
+        self.index()?.asset_is_deleted(hash.as_str())
+    }
+
     pub fn read_asset_body(&self, hash: &ContentHash) -> Result<Vec<u8>> {
         let index = self.index()?;
         let ext = index.asset_ext(hash.as_str())?;

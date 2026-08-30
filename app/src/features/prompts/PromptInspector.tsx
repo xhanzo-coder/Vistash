@@ -80,7 +80,6 @@ export function PromptInspector({
     if (trashLocation) {
       return (
         <div className="inspector-multi">
-          <p className="eyebrow">MULTI SELECT</p>
           <h3>已选 {selected.length} 条</h3>
           <p className="muted">回收站中的批量操作只提供还原；逐项还原见单选检查器。</p>
         </div>
@@ -93,7 +92,6 @@ export function PromptInspector({
           data-inspector-section="batch"
           aria-labelledby="inspector-batch-heading"
         >
-          <p className="eyebrow">MULTI SELECT</p>
           <div className="inspector-heading-row">
             <h3 id="inspector-batch-heading">已选 {selected.length} 条</h3>
           </div>
@@ -112,7 +110,6 @@ export function PromptInspector({
           data-inspector-section="batch-links"
           aria-labelledby="inspector-batch-links-heading"
         >
-          <p className="eyebrow">LINKS</p>
           <h3 id="inspector-batch-links-heading">批量建立图片关联</h3>
           <BatchLinkImages
             count={ids.length}
@@ -143,9 +140,8 @@ export function PromptInspector({
   if (active === null) {
     return (
       <div className="inspector-placeholder">
-        <p className="eyebrow">INSPECTOR</p>
-        <h3>提示词检查器</h3>
-        <p className="muted">单击一张卡片查看正文、组织归属与关联图片。</p>
+        <h3>选择一条提示词</h3>
+        <p className="muted">查看正文、文件夹、标签和关联图片。</p>
       </div>
     );
   }
@@ -157,7 +153,6 @@ export function PromptInspector({
         data-inspector-section="info"
         aria-labelledby="prompt-inspector-info-heading"
       >
-        <p className="eyebrow">PROMPT</p>
         <div className="inspector-heading-row">
           <h3 id="prompt-inspector-info-heading">{promptDisplayTitle(active)}</h3>
           <button
@@ -211,7 +206,6 @@ export function PromptInspector({
         data-inspector-section="organization"
         aria-labelledby="prompt-inspector-organization-heading"
       >
-        <p className="eyebrow">ORGANIZE</p>
         <h3 id="prompt-inspector-organization-heading">组织</h3>
         {trashLocation ? (
           <>
@@ -312,7 +306,6 @@ export function PromptInspector({
         data-inspector-section="note"
         aria-labelledby="prompt-inspector-note-heading"
       >
-        <p className="eyebrow">NOTE</p>
         <h3 id="prompt-inspector-note-heading">备注</h3>
         <PromptNoteEditor key={active.id} id={active.id} note={active.note} />
       </section>
@@ -322,7 +315,6 @@ export function PromptInspector({
         data-inspector-section="images"
         aria-labelledby="prompt-inspector-images-heading"
       >
-        <p className="eyebrow">IMAGES</p>
         <h3 id="prompt-inspector-images-heading">关联图片</h3>
         {/*
           关联的建立/解除/封面/回收站标记全部由 PromptImageLinks 承担（任务 10.5）：

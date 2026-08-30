@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -71,9 +72,16 @@ export function PromptCardWaterfall({
   const [containerWidth, setContainerWidth] = useState(0);
 
   // 容器宽度驱动列数密度；jsdom 无布局时保持 0，组件退化为单列等待真实读数。
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el === null) throw new Error("提示词瀑布流滚动容器在挂载后不存在");
+    const initialWidth = el.getBoundingClientRect().width;
+    if (initialWidth > 0) {
+      // 首次从列表切回卡片时，在浏览器绘制前建立虚拟列，避免等待
+      // ResizeObserver 的下一轮投递才出现首批卡片。
+      // oxlint-disable-next-line react/set-state-in-effect
+      setContainerWidth(initialWidth);
+    }
     const observer = new ResizeObserver((entries) => {
       const width = entries.at(-1)?.contentRect.width;
       if (width !== undefined) setContainerWidth(width);

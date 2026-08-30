@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ClipboardIcon } from "@phosphor-icons/react/dist/csr/Clipboard";
 import { FileImageIcon } from "@phosphor-icons/react/dist/csr/FileImage";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { UploadSimpleIcon } from "@phosphor-icons/react/dist/csr/UploadSimple";
@@ -11,11 +10,9 @@ import { Menu, MenuItem } from "../../ui/overlays/Menu";
 export function ImportMenu({
   onImportFolder,
   onImportImages,
-  onImportClipboard,
 }: {
   onImportFolder: () => void;
   onImportImages: () => void;
-  onImportClipboard: () => void;
 }): ReactNode {
   return (
     <Menu
@@ -37,9 +34,6 @@ export function ImportMenu({
       </MenuItem>
       <MenuItem icon={<FolderOpenIcon />} onSelect={onImportFolder}>
         导入文件夹…
-      </MenuItem>
-      <MenuItem icon={<ClipboardIcon />} onSelect={onImportClipboard} shortcut="Ctrl V">
-        从剪贴板导入
       </MenuItem>
     </Menu>
   );

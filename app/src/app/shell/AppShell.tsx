@@ -1,15 +1,13 @@
 import { useCallback, useSyncExternalStore, type ReactNode } from "react";
 
 import type { LibraryId } from "../common";
-import type { AppError } from "../../shared/types";
 import type { GlobalSearch } from "../globalSearch";
-import type { TaskCenter } from "../taskCenter";
 import type { WorkspaceId, WorkspaceNavigation } from "../navigation";
 import { TopBar } from "./TopBar";
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
 import { ImportMenu } from "./ImportMenu";
-import { TaskCenterPopover } from "./TaskCenterPopover";
 import { SettingsDialog } from "./SettingsDialog";
+import { LibrarySwitcher } from "./LibrarySwitcher";
 import styles from "./AppShell.module.css";
 
 export type ShellLibraryInfo = {
@@ -22,15 +20,11 @@ export type ShellLibraryInfo = {
 export type AppShellProps = {
   navigation: WorkspaceNavigation;
   globalSearch: GlobalSearch;
-  taskCenter: TaskCenter;
   library: ShellLibraryInfo;
   appVersion: string;
   onImportImages: () => void;
   onImportFolder: () => void;
-  onImportClipboard: () => void;
-  onStopTask?: (taskId: string) => Promise<void>;
-  canStopTask?: (taskId: string) => boolean;
-  getStopError?: (taskId: string) => AppError | null;
+  onCreateNewLibrary: () => void;
   onOpenOtherLibrary: () => void;
   assets: ReactNode;
   prompts: ReactNode;
@@ -61,23 +55,18 @@ export function AppShell(props: AppShellProps): ReactNode {
       <TopBar
         active={active}
         onActivate={activate}
+        libraryControl={<LibrarySwitcher library={props.library} onCreateNewLibrary={props.onCreateNewLibrary} onOpenOtherLibrary={props.onOpenOtherLibrary} />}
         actions={
           <>
             <GlobalSearchDialog search={props.globalSearch} navigation={props.navigation} />
             <ImportMenu
               onImportImages={props.onImportImages}
               onImportFolder={props.onImportFolder}
-              onImportClipboard={props.onImportClipboard}
-            />
-            <TaskCenterPopover
-              taskCenter={props.taskCenter}
-              {...(props.onStopTask === undefined ? {} : { onStopTask: props.onStopTask })}
-              {...(props.canStopTask === undefined ? {} : { canStopTask: props.canStopTask })}
-              {...(props.getStopError === undefined ? {} : { getStopError: props.getStopError })}
             />
             <SettingsDialog
               appVersion={props.appVersion}
               library={props.library}
+              onCreateNewLibrary={props.onCreateNewLibrary}
               onOpenOtherLibrary={props.onOpenOtherLibrary}
             />
           </>

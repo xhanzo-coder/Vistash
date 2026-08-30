@@ -166,6 +166,16 @@ export function renameFolder(
   return call<string>("rename_folder", { path, newName, onProgress: progress });
 }
 
+/** 把完整逻辑文件夹子树移动到目标父节点；null 表示移动到库根位置。 */
+export function moveFolder(
+  path: string,
+  destinationParent: string | null,
+  onProgress: (progress: FolderMutationProgress) => void,
+): Promise<string> {
+  const progress = new Channel<FolderMutationProgress>(onProgress);
+  return call<string>("move_folder", { path, destinationParent, onProgress: progress });
+}
+
 export function deleteFolder(path: string): Promise<void> {
   return call<void>("delete_folder", { path });
 }
@@ -181,6 +191,11 @@ export function renameAssetDisplayFilename(hash: string, stem: string): Promise<
 
 export function setAssetTags(hash: string, tags: string[]): Promise<void> {
   return call<void>("set_asset_tags", { hash, tags });
+}
+
+/** 从库内权威原图重新生成色卡；像素始终留在 Rust 侧。 */
+export function regenerateColorCard(hash: string): Promise<void> {
+  return call<void>("regenerate_color_card", { hash });
 }
 
 export function deleteAsset(hash: string): Promise<void> {
@@ -427,6 +442,11 @@ export function createPromptFolder(parent: string | null, name: string): Promise
 /** 重命名提示词文件夹子树，并由核心事务同步更新成员归属。 */
 export function renamePromptFolder(path: string, newName: string): Promise<string> {
   return call<string>("rename_prompt_folder", { path, newName });
+}
+
+/** 把完整提示词文件夹子树移动到目标父节点；null 表示提示词文件夹树顶层。 */
+export function movePromptFolder(path: string, destinationParent: string | null): Promise<string> {
+  return call<string>("move_prompt_folder", { path, destinationParent });
 }
 
 /** 删除提示词文件夹子树；提示词素材本身保留并按核心语义回到根位置。 */

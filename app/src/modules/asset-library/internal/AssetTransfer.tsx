@@ -1,42 +1,95 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "../../../ui/button/Button";
 import { appPlatform, appTaskCenter } from "../../../app/runtime";
-import { createLibraryTransferKey, type TaskCenter, type TaskOutcome, type TaskRecord } from "../../../app/taskCenter";
+import { createLibraryTransferKey, type TaskOutcome, type TaskRecord } from "../../../app/taskCenter";
 import { IpcError, formatError } from "../../../shared/errors";
 import type { LibraryId } from "../../../app/common";
 import type { AppError, ImportOutcome, TransferProgress, TransferRunStatus } from "../../../shared/types";
 import { assetKeys } from "./queryKeys";
 import styles from "./AssetTransfer.module.css";
+import { useToast } from "../../../ui/toast/Toast";
 
 export type TransferHandle = {
   readonly appTaskId: string;
+  readonly libraryId: LibraryId;
   backendTaskId: string | null;
   stopRequested: boolean;
   stopAcknowledged: boolean;
   stopError: AppError | null;
   outcome: TaskOutcome | null;
+  reportId: number | null;
 };
 
 const transferHandles = new Map<string, TransferHandle>();
+let nextTransferReportId = 0;
+export type TransferReportKind = "import" | "export";
+export type TransferReportStatus = "completed" | "stopping" | "stopped";
+export type TransferReportRecord = { id: number; kind: TransferReportKind; status: TransferReportStatus; outcome: TaskOutcome };
+const EMPTY_TRANSFER_REPORTS: readonly TransferReportRecord[] = [];
+const transferReportsByLibrary = new Map<LibraryId, readonly TransferReportRecord[]>();
+const transferReportListeners = new Map<LibraryId, Set<() => void>>();
 const STOP_CONFIRMATION_RETRY_MS = 100;
 const STOP_CONFIRMATION_MAX_ATTEMPTS = 100;
+
+function transferReports(libraryId: LibraryId): readonly TransferReportRecord[] {
+  return transferReportsByLibrary.get(libraryId) ?? EMPTY_TRANSFER_REPORTS;
+}
+
+function publishTransferReports(libraryId: LibraryId, reports: readonly TransferReportRecord[]): void {
+  if (reports.length === 0) transferReportsByLibrary.delete(libraryId);
+  else transferReportsByLibrary.set(libraryId, reports);
+  transferReportListeners.get(libraryId)?.forEach((listener) => listener());
+}
+
+/** 异常传输报告属于素材库会话；只有明确关闭才会从该库移除。 */
+export function appendTransferReport(kind: TransferReportKind, outcome: TaskOutcome, handle: TransferHandle): void {
+  const id = ++nextTransferReportId;
+  const status: TransferReportStatus = !handle.stopRequested ? "completed" : handle.stopAcknowledged ? "stopped" : "stopping";
+  handle.reportId = id;
+  publishTransferReports(handle.libraryId, [...transferReports(handle.libraryId), { id, kind, status, outcome }]);
+}
+
+function markTransferReportStopped(handle: TransferHandle): void {
+  if (handle.reportId === null) return;
+  publishTransferReports(handle.libraryId, transferReports(handle.libraryId).map((report) =>
+    report.id === handle.reportId ? { ...report, status: "stopped" } : report));
+}
+
+export function dismissTransferReport(libraryId: LibraryId, id: number): void {
+  publishTransferReports(libraryId, transferReports(libraryId).filter((report) => report.id !== id));
+}
+
+export function usePersistentTransferReports(libraryId: LibraryId, kind: TransferReportKind): readonly TransferReportRecord[] {
+  const subscribe = useCallback((listener: () => void) => {
+    const listeners = transferReportListeners.get(libraryId) ?? new Set<() => void>();
+    listeners.add(listener);
+    transferReportListeners.set(libraryId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) transferReportListeners.delete(libraryId);
+    };
+  }, [libraryId]);
+  const snapshot = useCallback(() => transferReports(libraryId), [libraryId]);
+  const reports = useSyncExternalStore(subscribe, snapshot, snapshot);
+  return useMemo(() => reports.filter((report) => report.kind === kind), [kind, reports]);
+}
 
 export function registerTransferTask(libraryId: LibraryId, title: string, kind: "import" | "export"): { kind: "registered"; appTaskId: string; handle: TransferHandle } | { kind: "rejected"; conflictingTaskId: string } {
   const registration = appTaskCenter.register({ kind, title, libraryId, stoppable: true, concurrencyKey: createLibraryTransferKey(libraryId) });
   if (registration.kind === "rejected_by_concurrency") return { kind: "rejected", conflictingTaskId: registration.conflictingTaskId };
-  const handle: TransferHandle = { appTaskId: registration.record.id, backendTaskId: null, stopRequested: false, stopAcknowledged: false, stopError: null, outcome: null };
+  const handle: TransferHandle = { appTaskId: registration.record.id, libraryId, backendTaskId: null, stopRequested: false, stopAcknowledged: false, stopError: null, outcome: null, reportId: null };
   transferHandles.set(handle.appTaskId, handle);
   return { kind: "registered", appTaskId: handle.appTaskId, handle };
 }
 
-/** 任务中心只有在后端 task ID 已到达后才应显示真实停止按钮。 */
+/** 只有后端 task ID 已到达后，内部协调器才允许提交真实停止请求。 */
 export function canStopTransferTask(appTaskId: string): boolean {
   const handle = transferHandles.get(appTaskId);
   return handle !== undefined && handle.backendTaskId !== null;
 }
 
-/** 任务结束后的终态确认失败仍属于当前传输任务，供全局任务中心稳定呈现错误码。 */
+/** 任务结束后的终态确认失败仍属于当前传输任务，供内部记录保留稳定错误码。 */
 export function getTransferTaskStopError(appTaskId: string): AppError | null {
   return transferHandles.get(appTaskId)?.stopError ?? null;
 }
@@ -48,10 +101,15 @@ function reportStopError(handle: TransferHandle, error: AppError): void {
   if (record.progress !== null) appTaskCenter.reportProgress(handle.appTaskId, record.progress);
 }
 
-function useTaskRecords(center: TaskCenter): readonly TaskRecord[] {
-  const [records, setRecords] = useState<readonly TaskRecord[]>(() => center.snapshot());
-  useEffect(() => center.subscribe(() => setRecords(center.snapshot())), [center]);
+function useTaskRecords(): readonly TaskRecord[] {
+  const [records, setRecords] = useState<readonly TaskRecord[]>(() => appTaskCenter.snapshot());
+  useEffect(() => appTaskCenter.subscribe(() => setRecords(appTaskCenter.snapshot())), []);
   return records;
+}
+
+export function useLibraryTransferBusy(libraryId: LibraryId): boolean {
+  const records = useTaskRecords();
+  return records.some((record) => record.libraryId === libraryId && (record.state === "running" || record.state === "stopping"));
 }
 
 function importOutcome(outcome: ImportOutcome): TaskOutcome {
@@ -99,6 +157,7 @@ async function confirmStopAfterOutcome(handle: TransferHandle): Promise<void> {
       if (handle.stopAcknowledged || transferHandles.get(handle.appTaskId) !== handle) return;
       handle.stopAcknowledged = true;
       appTaskCenter.confirmStopped(handle.appTaskId, handle.outcome);
+      markTransferReportStopped(handle);
       transferHandles.delete(handle.appTaskId);
       return;
     }
@@ -140,6 +199,7 @@ export async function stopTransferTask(appTaskId: string): Promise<void> {
     handle.stopAcknowledged = true;
     if (handle.outcome !== null) {
       appTaskCenter.confirmStopped(appTaskId, handle.outcome);
+      markTransferReportStopped(handle);
       transferHandles.delete(appTaskId);
     }
   } else if (handle.outcome !== null) {
@@ -158,7 +218,9 @@ function hasTauriRuntime(): boolean {
 
 export function useAssetTransfer(libraryId: LibraryId, active: boolean, currentFolder: string | null, onImported: () => void) {
   const client = useQueryClient();
+  const toast = useToast();
   const [error, setError] = useState<AppError | null>(null);
+  const reports = usePersistentTransferReports(libraryId, "import");
   const [dragging, setDragging] = useState(false);
   const run = useCallback(async (paths: readonly string[] | null): Promise<void> => {
     if (paths !== null && paths.length === 0) return;
@@ -166,6 +228,7 @@ export function useAssetTransfer(libraryId: LibraryId, active: boolean, currentF
     const registration = registerTransferTask(libraryId, paths === null ? "粘贴导入" : paths.length === 1 ? "导入图片文件夹" : "导入图片", "import");
     if (registration.kind === "rejected") {
       setError({ code: "transfer.already_running", detail: `任务 ${registration.conflictingTaskId} 正在运行` });
+      toast.publish({ tone: "warning", title: "导入任务正在运行", description: "请等待当前导入结束后重试。" });
       return;
     }
     const { appTaskId, handle } = registration;
@@ -175,23 +238,34 @@ export function useAssetTransfer(libraryId: LibraryId, active: boolean, currentF
     };
     try {
       const outcome = paths === null ? await appPlatform.pasteImport(currentFolder, progress) : await appPlatform.importSources([...paths], currentFolder, progress);
-      completeTransfer(handle, importOutcome(outcome));
+      const completed = importOutcome(outcome);
+      completeTransfer(handle, completed);
+      if (completed.failures.length > 0 || completed.counts.unprocessed > 0 || handle.stopRequested) {
+        appendTransferReport("import", completed, handle);
+      }
+      if (paths === null) {
+        if (outcome.duplicates > 0) toast.publish({ tone: "info", title: "图片已经在素材库中" });
+        else if (outcome.imported === 0 && outcome.failures.length === 0) toast.publish({ tone: "info", title: "剪贴板中没有可导入的图片", description: "请复制图片或图片文件后重试。" });
+      }
       await client.invalidateQueries({ queryKey: assetKeys.collections(libraryId) });
-      onImported();
+      if (outcome.imported > 0) onImported();
     } catch (raw) {
       if (!(raw instanceof IpcError)) throw raw;
-      completeTransfer(handle, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError });
-      setError(raw.appError);
+      const failed: TaskOutcome = { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError };
+      completeTransfer(handle, failed);
+      appendTransferReport("import", failed, handle);
+      toast.publish({ tone: "warning", title: paths === null ? "剪贴板导入失败" : "图片导入失败", description: formatError(raw.appError) });
     }
-  }, [client, currentFolder, libraryId, onImported]);
+  }, [client, currentFolder, libraryId, onImported, toast]);
   const chooseImages = useCallback(async (): Promise<void> => {
     try {
       await run(await appPlatform.pickImageFiles());
     } catch (raw) {
       if (!(raw instanceof IpcError)) throw raw;
       setError(raw.appError);
+      toast.publish({ tone: "warning", title: "无法选择图片", description: formatError(raw.appError) });
     }
-  }, [run]);
+  }, [run, toast]);
   const chooseFolder = useCallback(async (): Promise<void> => {
     try {
       const path = await appPlatform.pickImportDirectory();
@@ -199,8 +273,9 @@ export function useAssetTransfer(libraryId: LibraryId, active: boolean, currentF
     } catch (raw) {
       if (!(raw instanceof IpcError)) throw raw;
       setError(raw.appError);
+      toast.publish({ tone: "warning", title: "无法选择文件夹", description: formatError(raw.appError) });
     }
-  }, [run]);
+  }, [run, toast]);
   const paste = useCallback(() => void run(null), [run]);
   useEffect(() => {
     if (!active || import.meta.env.MODE === "test" || !hasTauriRuntime()) return undefined;
@@ -222,21 +297,60 @@ export function useAssetTransfer(libraryId: LibraryId, active: boolean, currentF
     window.addEventListener("keydown", onPaste);
     return () => window.removeEventListener("keydown", onPaste);
   }, [active, paste]);
-  const records = useTaskRecords(appTaskCenter);
-  const busy = records.some((record) => record.libraryId === libraryId && (record.state === "running" || record.state === "stopping"));
-  return { chooseImages, chooseFolder, paste, error, dragging, busy };
+  useEffect(() => {
+    if (!active) return undefined;
+    const onNativePaste = (event: Event): void => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], [role="alertdialog"], [role="menu"]') !== null) return;
+      event.preventDefault();
+      paste();
+    };
+    window.addEventListener("paste", onNativePaste);
+    return () => window.removeEventListener("paste", onNativePaste);
+  }, [active, paste]);
+  const busy = useLibraryTransferBusy(libraryId);
+  return { chooseImages, chooseFolder, paste, error, reports, dragging, busy,
+    clearError: () => setError(null),
+    dismissReport: (id: number) => dismissTransferReport(libraryId, id),
+  };
 }
 
 export type AssetTransferController = ReturnType<typeof useAssetTransfer>;
 
+const SKIP_LABELS = {
+  duplicate: "重复内容",
+  unsupported: "不支持的格式",
+  conflict: "同名冲突",
+} satisfies Record<NonNullable<TaskOutcome["skipDetails"]>[number]["kind"], string>;
+
+export function TransferOutcomeReport({ report, label, title, onDismiss }: {
+  report: TransferReportRecord;
+  label: string;
+  title: string;
+  onDismiss: () => void;
+}): ReactNode {
+  const { id, outcome, status } = report;
+  return <section className={styles.result} aria-label={label}>
+    <div><strong>{title}</strong>{status === "completed" ? null : <span>{status === "stopped" ? "已停止" : "正在停止"}</span>}<p>成功 {outcome.counts.succeeded} · 跳过 {outcome.counts.skipped} · 失败 {outcome.counts.failed} · 未处理 {outcome.counts.unprocessed}</p></div>
+    <Button size="compact" variant="ghost" aria-label={`关闭${label}`} onClick={onDismiss}>关闭</Button>
+    {outcome.error === null ? null : <p role="alert"><code>{outcome.error.code}</code>{outcome.error.detail === null ? null : <small>{outcome.error.detail}</small>}</p>}
+    {outcome.skipDetails === undefined || outcome.skipDetails.length === 0 ? null : <ul>{outcome.skipDetails.map((detail) => <li key={`${id}:skip:${detail.kind}`}><span>{SKIP_LABELS[detail.kind]}</span><small>{detail.count} 项</small></li>)}</ul>}
+    {outcome.failures.length === 0 ? null : <ul>{outcome.failures.map((failure, index) => <li key={`${id}:failure:${index}`}><span>{failure.displayName}</span><code>{failure.error.code}</code>{failure.error.detail === null ? null : <small>{failure.error.detail}</small>}</li>)}</ul>}
+  </section>;
+}
+
 /** 非空工作区只呈现传输状态；实际入口由顶栏、拖放和 Ctrl+V 统一拥有。 */
 export function AssetTransferFeedback({ transfer }: { transfer: AssetTransferController }): ReactNode {
   return <>
-    {transfer.error === null ? null : <p className={styles.error} role="alert">{formatError(transfer.error)}</p>}
     {transfer.dragging ? <div className={styles.dragNotice} role="status">松开以导入图片或文件夹</div> : null}
+    {transfer.error === null ? null : <section className={styles.result} aria-label="导入错误">
+      <div><strong>导入失败</strong><p role="alert">{formatError(transfer.error)}</p><code>{transfer.error.code}</code></div>
+      <Button size="compact" variant="ghost" aria-label="关闭导入错误" onClick={transfer.clearError}>关闭</Button>
+    </section>}
+    {transfer.reports.map((report) => <TransferOutcomeReport key={report.id} report={report} label="导入结果" title="导入未完全完成" onDismiss={() => transfer.dismissReport(report.id)} />)}
   </>;
 }
 
-export function ImportGuide({ onImportImages, onImportFolder, onPaste }: { onImportImages: () => void; onImportFolder: () => void; onPaste: () => void }): ReactNode {
-  return <div className={styles.guide}><p className={styles.eyebrow}>IMAGE ARCHIVE</p><h2>建立本地视觉档案</h2><p>图片会复制进入当前库，源文件不会被移动或修改。你可以选择图片、导入文件夹，或直接粘贴剪贴板内容。</p><div className={styles.guideActions}><Button variant="primary" onClick={onImportImages}>导入图片</Button><Button onClick={onImportFolder}>导入文件夹</Button><Button onClick={onPaste}>从剪贴板导入</Button></div></div>;
+export function ImportGuide({ onImportImages, onImportFolder }: { onImportImages: () => void; onImportFolder: () => void }): ReactNode {
+  return <div className={styles.guide}><h2>建立本地视觉档案</h2><p>图片会复制进入当前库，源文件不会被移动或修改。也可以复制图片或图片文件后，直接按 <kbd>Ctrl V</kbd> 导入。</p><div className={styles.guideActions}><Button variant="primary" onClick={onImportImages}>导入图片</Button><Button onClick={onImportFolder}>导入文件夹</Button></div></div>;
 }

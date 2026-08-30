@@ -15,6 +15,7 @@ const GAP = 12;
 const TILE_WIDTHS: Record<ThumbnailSize, number> = { small: 160, medium: 200, large: 280 };
 /** 滚动偏移回写的防抖间隔；键名与落盘表由上层拥有。 */
 const SCROLL_SAVE_DEBOUNCE_MS = 300;
+const IMPORT_DATE_FORMAT = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
 
 export function AssetThumbnail({ asset }: { asset: AssetRow }): ReactNode {
   const [lease, setLease] = useState<ImageLease | null>(null);
@@ -62,6 +63,7 @@ type CollectionProps = {
   /** 框选提交：命中 ID 已按当前查询域过滤。 */
   onBoxSelect: (ids: readonly string[], additive: boolean) => void;
   tileSize: ThumbnailSize;
+  scrollScopeKey: string;
   /** 会话恢复用的初始滚动偏移；仅在本次挂载内消费一次。 */
   initialScrollTop?: number | undefined;
   /** 滚动防抖后的偏移回写入口；由上层并入布局偏好统一持久化。 */
@@ -72,8 +74,10 @@ type CollectionProps = {
 
 /** 两种呈现复用同一查询、排序与选择；窗口化、密度、框选与图片租约留在集合内部。 */
 export function AssetCollection(props: CollectionProps): ReactNode {
-  const { assets, view, activeId, focusedId, onNavigate, selectedIds, onItemSelect, onBoxSelect, tileSize, initialScrollTop, onScrollOffset, contextMenu, onOpen, previewOpen, previewReturn } = props;
+  const { assets, view, activeId, focusedId, onNavigate, selectedIds, onItemSelect, onBoxSelect, tileSize, scrollScopeKey, initialScrollTop, onScrollOffset, contextMenu, onOpen, previewOpen, previewReturn } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const restoredRef = useRef(false);
+  const previousScrollScopeRef = useRef(scrollScopeKey);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -103,9 +107,9 @@ export function AssetCollection(props: CollectionProps): ReactNode {
     getScrollElement: () => scrollRef.current,
     getItemKey,
     // 卡片文字叠在图片底部，不再为常驻文字条预留高度；两侧边框不参与画幅。
-    estimateSize: (index) => view === "list" ? 68 : (itemWidth - 2) * getAsset(index).height / getAsset(index).width + 2,
+    estimateSize: (index) => view === "list" ? 60 : (itemWidth - 2) * getAsset(index).height / getAsset(index).width + 2,
     lanes,
-    gap: GAP,
+    gap: view === "list" ? 0 : GAP,
     overscan: 2,
   });
   useLayoutEffect(() => {
@@ -113,6 +117,16 @@ export function AssetCollection(props: CollectionProps): ReactNode {
     // 否则原画幅卡片会保留上次宽度对应的高度，形成留白或错误框选区域。
     virtualizer.measure();
   }, [itemWidth, view, virtualizer]);
+  useLayoutEffect(() => {
+    if (previousScrollScopeRef.current === scrollScopeKey) return;
+    previousScrollScopeRef.current = scrollScopeKey;
+    const element = scrollRef.current;
+    if (element === null) return;
+    const requested = initialScrollTop ?? 0;
+    const maximum = element.clientHeight > 0 ? Math.max(0, virtualizer.getTotalSize() - element.clientHeight) : requested;
+    element.scrollTop = Math.min(requested, maximum);
+    virtualizer.measure();
+  }, [initialScrollTop, scrollScopeKey, virtualizer]);
   const lastFocusedId = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (previewOpen || previewReturn === null) return undefined;
@@ -173,17 +187,20 @@ export function AssetCollection(props: CollectionProps): ReactNode {
   );
 
   // 恢复只发生一次：数据首次就绪后把保存的偏移写回容器，之后的滚动归使用者。
-  const restoredRef = useRef(false);
   useEffect(() => {
     if (restoredRef.current || width === 0 || assets.length === 0) return undefined;
     restoredRef.current = true;
-    const target = initialScrollTop ?? 0;
-    if (target > 0 && scrollRef.current !== null) {
+    const element = scrollRef.current;
+    if (element === null) return undefined;
+    const requested = initialScrollTop ?? 0;
+    const maximum = element.clientHeight > 0 ? Math.max(0, virtualizer.getTotalSize() - element.clientHeight) : requested;
+    const target = Math.min(requested, maximum);
+    if (target > 0) {
       // 直接赋值而非 scrollTo：行为一致，且不依赖运行环境补齐滚动方法。
-      scrollRef.current.scrollTop = target;
+      element.scrollTop = target;
     }
     return undefined;
-  }, [assets.length, initialScrollTop, width]);
+  }, [assets.length, initialScrollTop, virtualizer, width]);
 
   // 滚动按防抖节流回写：频繁拖动不产生偏好写入风暴。
   const latestOffsetRef = useRef(0);
@@ -224,6 +241,8 @@ export function AssetCollection(props: CollectionProps): ReactNode {
         data-hash={asset.hash}
         data-waterfall-item={view === "waterfall" ? "" : undefined}
         data-list-item={view === "list" ? "" : undefined}
+        data-list-row-style={view === "list" ? "table" : undefined}
+        data-last-row={view === "list" && index === assets.length - 1 ? "true" : undefined}
         aria-label={asset.display_filename}
         aria-selected={isSelected}
         aria-current={isActive ? "true" : undefined}
@@ -240,8 +259,15 @@ export function AssetCollection(props: CollectionProps): ReactNode {
         onDoubleClick={() => onOpen(parseAssetId(asset.hash))}
       >
         <div className={styles.thumbnail}><AssetThumbnail asset={asset} /></div>
-        <div className={styles.caption}><span>{asset.display_filename}</span><span>{asset.width} × {asset.height}</span></div>
-        {view === "list" ? <span className={styles.fileKind}>{asset.ext.toUpperCase()}</span> : null}
+        {view === "waterfall" ? <div className={styles.caption} data-card-caption="overlay"><span>{asset.display_filename}</span><span>{asset.width} × {asset.height}</span></div> : <>
+          <strong className={styles.listName} data-column="name" title={asset.display_filename}>{asset.display_filename}</strong>
+          <span className={styles.listFolder} data-column="folder" title={asset.folder ?? "未分类"}>{asset.folder ?? "未分类"}</span>
+          <span className={styles.listTags} data-column="tags" title={asset.tags.join("、")}>{asset.tags.length === 0 ? "—" : asset.tags.map((tag, tagIndex) => <span key={tag} className={styles.listTagGroup}><span className={styles.listTag} data-list-tag>{tag}</span>{tagIndex === asset.tags.length - 1 ? null : <span className={styles.visuallyHidden}>、</span>}</span>)}</span>
+          <span className={styles.listDimensions} data-column="dimensions">{asset.width} × {asset.height}</span>
+          <span className={styles.fileKind} data-column="format">{asset.ext.toUpperCase()}</span>
+          <time className={styles.listImported} data-column="imported" dateTime={asset.imported_at}>{IMPORT_DATE_FORMAT.format(new Date(asset.imported_at))}</time>
+          <span className={styles.listNote} data-column="note" title={asset.note}>{asset.note.length === 0 ? "—" : asset.note}</span>
+        </>}
       </button>
     );
     if (contextMenu === undefined) return button;
@@ -269,7 +295,11 @@ export function AssetCollection(props: CollectionProps): ReactNode {
   };
 
   return (
-    <div className={styles.collectionFrame}>
+    <div className={styles.collectionFrame} data-view={view} data-list-surface={view === "list" ? "" : undefined}>
+      {view === "list" ? <div className={styles.listHeader} aria-label="详情列表列标题">
+        <span aria-hidden="true" />
+        <span>名称</span><span>文件夹</span><span>标签</span><span>尺寸</span><span>格式</span><span>导入时间</span><span>备注</span>
+      </div> : null}
       <div
         ref={scrollRef}
         className={styles.collection}

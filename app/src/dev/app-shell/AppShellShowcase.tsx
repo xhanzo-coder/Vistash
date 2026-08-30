@@ -4,7 +4,6 @@ import { parseLibraryId } from "../../app/common";
 import type { GlobalSearch } from "../../app/globalSearch";
 import { createWorkspaceNavigation } from "../../app/navigation";
 import { AppShell } from "../../app/shell/AppShell";
-import { createTaskCenterStore } from "../../app/taskCenterStore";
 import type { AssetRow, PromptRow } from "../../shared/types";
 import { Button } from "../../ui/button/Button";
 import { EmptyState, Panel } from "../../ui/surface/Surface";
@@ -12,21 +11,6 @@ import { useToast } from "../../ui/toast/Toast";
 import styles from "./AppShellShowcase.module.css";
 
 const navigation = createWorkspaceNavigation();
-const taskCenter = createTaskCenterStore();
-const registered = taskCenter.register({
-  kind: "import",
-  title: "导入灵感参考",
-  libraryId: "018f3c9e-6c00-7000-8000-0000000000aa",
-  stoppable: true,
-  concurrencyKey: "library:018f3c9e-6c00-7000-8000-0000000000aa:transfer",
-});
-if (registered.kind !== "registered") throw new Error("组件展台无法注册示例任务");
-taskCenter.reportProgress(registered.record.id, {
-  kind: "transfer",
-  done: 42,
-  total: 100,
-  currentFilename: "雨夜街道.png",
-});
 
 const ASSET_RESULT: AssetRow = {
   hash: "a".repeat(64),
@@ -97,7 +81,6 @@ export function AppShellShowcase(): ReactNode {
     <AppShell
       navigation={navigation}
       globalSearch={search}
-      taskCenter={taskCenter}
       library={{
         id: parseLibraryId("018f3c9e-6c00-7000-8000-0000000000aa"),
         displayName: "视觉档案",
@@ -107,7 +90,7 @@ export function AppShellShowcase(): ReactNode {
       appVersion="0.1.0"
       onImportImages={() => toast.publish({ tone: "info", title: "已提交导入图片意图" })}
       onImportFolder={() => toast.publish({ tone: "info", title: "已提交导入文件夹意图" })}
-      onImportClipboard={() => toast.publish({ tone: "info", title: "已提交剪贴板导入意图" })}
+      onCreateNewLibrary={() => toast.publish({ tone: "info", title: "已提交新建素材库意图" })}
       onOpenOtherLibrary={() => toast.publish({ tone: "info", title: "已提交打开其他库意图" })}
       assets={<WorkspacePlaceholder kind="assets" />}
       prompts={<WorkspacePlaceholder kind="prompts" />}

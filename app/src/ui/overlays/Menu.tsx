@@ -92,12 +92,12 @@ export function MenuSeparator(): ReactNode {
   return <DropdownMenuPrimitive.Separator className={styles.separator} />;
 }
 
-export function ContextMenu({ children, content }: { children: ReactElement; content: ReactNode }): ReactNode {
+export function ContextMenu({ children, content, label }: { children: ReactElement; content: ReactNode; label?: string }): ReactNode {
   return (
     <ContextMenuPrimitive.Root>
       <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
-        <ContextMenuPrimitive.Content className={styles.menu}>
+        <ContextMenuPrimitive.Content className={styles.menu} {...(label === undefined ? {} : { "aria-label": label })}>
           {content}
         </ContextMenuPrimitive.Content>
       </ContextMenuPrimitive.Portal>

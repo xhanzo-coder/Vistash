@@ -20,10 +20,19 @@
 .hint { color: var(--text-secondary); line-height: 1.6; }
 .plainText { white-space: pre-wrap; overflow-wrap: anywhere; }
 .error { color: var(--text-danger); overflow-wrap: anywhere; }
-.colors { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); font-size: var(--text-size-xs); }
-.colors li { display: grid; align-items: center; grid-template-columns: 24px 1fr auto auto; gap: var(--space-2); }
-.colors code { font-size: inherit; }
-.swatch { width: 24px; height: 24px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
+.palette { display: grid; gap: var(--space-3); }
+.paletteStrip { display: flex; height: 2.75rem; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: var(--radius-media); background: var(--surface-sunken); }
+.paletteStrip span { min-width: 3px; }
+.paletteLegend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-1) var(--space-3); margin: 0; padding: 0; list-style: none; }
+.paletteLegend li { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); min-width: 0; padding-block: var(--space-1); }
+.paletteLegend code { display: block; overflow: hidden; color: var(--text-primary); font-size: var(--text-size-xs); text-overflow: ellipsis; }
+.paletteLegend small { display: block; color: var(--text-tertiary); font-size: var(--text-size-xs); }
+.paletteLegend strong { color: var(--text-secondary); font-size: var(--text-size-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
+.paletteMarker { width: 8px; height: 22px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); }
+.paletteFailure { display: grid; justify-items: start; gap: var(--space-3); }
+.paletteFailure p { margin: 0; color: var(--text-secondary); }
+.paletteFailure details { color: var(--text-tertiary); font-size: var(--text-size-xs); }
+.paletteActions { display: flex; align-items: center; gap: var(--space-2); }
 .form { display: grid; gap: var(--space-3); min-width: 0; }
 .form input, .form textarea, .form select { min-width: 0; width: 100%; padding: var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-input); color: var(--text-primary); font-size: var(--text-size-sm); }
 .form textarea { resize: vertical; min-height: 6rem; max-height: 20rem; line-height: 1.6; }

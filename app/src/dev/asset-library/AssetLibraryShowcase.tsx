@@ -327,7 +327,7 @@ export function AssetLibraryShowcase(): ReactNode {
       <Button size="compact" aria-pressed={batchFailure} onClick={() => { failBatch = !batchFailure; setBatchFailure(!batchFailure); }}>模拟部分失败</Button>
       <Button size="compact" aria-pressed={originalFailure} onClick={() => { rejectOriginal = !originalFailure; setOriginalFailure(!originalFailure); }}>模拟原图失败</Button>
       <Button size="compact" aria-pressed={exportConflictState} onClick={() => { exportConflict = !exportConflictState; setExportConflict(!exportConflictState); }}>模拟导出冲突</Button>
-      <ImportMenu onImportImages={() => setImportRequest({ requestId: createRequestId(), kind: "images" })} onImportFolder={() => setImportRequest({ requestId: createRequestId(), kind: "folder" })} onImportClipboard={() => setImportRequest({ requestId: createRequestId(), kind: "clipboard" })} />
+      <ImportMenu onImportImages={() => setImportRequest({ requestId: createRequestId(), kind: "images" })} onImportFolder={() => setImportRequest({ requestId: createRequestId(), kind: "folder" })} />
       <TaskCenterPopover taskCenter={appTaskCenter} onStopTask={stopAssetTransferTask} canStopTask={canStopTransferTask} />
     </div>
     <div className={styles.workspace}><AssetLibraryWorkspace session={LIBRARIES[libraryIndex]} active entry={entry} {...(importRequest === undefined ? {} : { importRequest })} onImportRequestHandled={(requestId) => setImportRequest((current) => current?.requestId === requestId ? undefined : current)} /></div>

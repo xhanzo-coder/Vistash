@@ -123,7 +123,9 @@ export function useTrashActions(libraryId: LibraryId) {
       const taskId = requireTaskId(restoreTaskIds.current.get(targets), "还原");
       restoreTaskIds.current.delete(targets);
       appTaskCenter.complete(taskId, restoreTaskOutcome(report));
-      history.append({ kind: "restored", report });
+      if (report.failures.length > 0 || report.missing.length > 0 || report.unprocessed.length > 0) {
+        history.append({ kind: "restored", report });
+      }
     },
     onError: (error, targets) => {
       const taskId = requireTaskId(restoreTaskIds.current.get(targets), "还原");
@@ -157,7 +159,7 @@ export function useTrashActions(libraryId: LibraryId) {
       const taskId = requireTaskId(purgeTaskId.current, "清空回收站");
       purgeTaskId.current = null;
       appTaskCenter.complete(taskId, purgeTaskOutcome(outcome));
-      history.append(outcome);
+      if (outcome.kind === "not-started" || outcome.failures.length > 0) history.append(outcome);
     },
     onError: (error) => {
       const taskId = requireTaskId(purgeTaskId.current, "清空回收站");

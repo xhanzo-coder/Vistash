@@ -35,6 +35,7 @@ export type OpenLibraryContext = {
 
 /** 已通过开库门禁的工作现场可请求的生命周期动作。 */
 export type LibraryLifecycleControls = {
+  createNewLibrary: () => void;
   openOtherLibrary: () => void;
 };
 

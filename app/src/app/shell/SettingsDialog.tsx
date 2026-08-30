@@ -26,11 +26,13 @@ const THEMES: ReadonlyArray<{ id: ThemePreference; label: string }> = [
 function SettingsContent({
   appVersion,
   library,
+  onCreateNewLibrary,
   onOpenOtherLibrary,
   section,
 }: {
   appVersion: string;
   library: ShellLibraryInfo;
+  onCreateNewLibrary: () => void;
   onOpenOtherLibrary: () => void;
   section: SettingsSection;
 }): ReactNode {
@@ -69,9 +71,10 @@ function SettingsContent({
             <div><dt>位置</dt><dd>{library.path}</dd></div>
             <div><dt>格式</dt><dd>格式版本 {library.formatVersion}</dd></div>
           </dl>
-          <DialogClose>
-            <Button onClick={onOpenOtherLibrary}>打开其他库</Button>
-          </DialogClose>
+          <div className={styles.libraryActions}>
+            <DialogClose><Button onClick={onCreateNewLibrary}>新建素材库</Button></DialogClose>
+            <DialogClose><Button onClick={onOpenOtherLibrary}>打开其他库</Button></DialogClose>
+          </div>
         </section>
       );
     case "shortcuts":
@@ -103,10 +106,12 @@ function SettingsContent({
 export function SettingsDialog({
   appVersion,
   library,
+  onCreateNewLibrary,
   onOpenOtherLibrary,
 }: {
   appVersion: string;
   library: ShellLibraryInfo;
+  onCreateNewLibrary: () => void;
   onOpenOtherLibrary: () => void;
 }): ReactNode {
   const [section, setSection] = useState<SettingsSection>("appearance");
@@ -134,6 +139,7 @@ export function SettingsDialog({
         <SettingsContent
           appVersion={appVersion}
           library={library}
+          onCreateNewLibrary={onCreateNewLibrary}
           onOpenOtherLibrary={onOpenOtherLibrary}
           section={section}
         />

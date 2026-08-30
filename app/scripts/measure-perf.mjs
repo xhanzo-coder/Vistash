@@ -154,11 +154,21 @@ async function measure(context, port, scenario) {
 
   let switchMetrics = {};
   if (scenario.switchTo !== undefined) {
+    // 先解析并确认按钮可见；选择器扫描、鼠标移动与 Playwright actionability
+    // 等待不属于应用视图切换成本。计时覆盖浏览器 click、React 提交与目标 DOM 出现。
+    const switchButton = page.getByRole("button", { name: scenario.switchTo.button });
+    await switchButton.waitFor({ state: "visible" });
+    const switchHandle = await switchButton.elementHandle();
+    if (switchHandle === null) throw new Error(`未找到视图切换按钮：${scenario.switchTo.button}`);
     const t0 = Date.now();
-    await page.getByRole("button", { name: scenario.switchTo.button }).click();
+    await switchHandle.evaluate((element) => { if (!(element instanceof HTMLButtonElement)) throw new TypeError("视图切换目标不是按钮"); element.click(); });
+    const dispatchedAt = Date.now();
     await page.waitForSelector(scenario.switchTo.selector, { state: "attached" });
+    const attachedAt = Date.now();
     switchMetrics = {
-      switchMs: Date.now() - t0,
+      switchMs: attachedAt - t0,
+      switchDispatchMs: dispatchedAt - t0,
+      switchWaitMs: attachedAt - dispatchedAt,
       heapAfterSwitchMiB: round((await page.evaluate(() => {
         if (typeof globalThis.gc === "function") globalThis.gc();
         return performance.memory.usedJSHeapSize;

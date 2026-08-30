@@ -637,6 +637,34 @@ pub async fn rename_folder(
 }
 
 #[tauri::command]
+pub async fn move_folder(
+    path: String,
+    destination_parent: Option<String>,
+    on_progress: Channel<FolderMutationProgress>,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let path = FolderPath::parse(&path)?;
+    let destination_parent = destination_parent
+        .as_deref()
+        .map(FolderPath::parse)
+        .transpose()?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .move_folder(&path, destination_parent.as_ref(), |progress| {
+                on_progress.send(progress).map_err(|error| {
+                    AppError::detailed(
+                        Code::LibraryAssetMetadataWriteFailed,
+                        format!("发送文件夹移动进度失败：{error}"),
+                    )
+                })
+            })?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn delete_folder(path: String, state: tauri::State<'_, Shared>) -> Result<()> {
     let path = FolderPath::parse(&path)?;
     with_catalog(state, move |catalog| catalog.delete_folder(&path)).await
@@ -681,6 +709,18 @@ pub async fn set_asset_tags(
         .map(|tag| Tag::parse(tag))
         .collect::<Result<Vec<_>>>()?;
     with_catalog(state, move |catalog| catalog.set_asset_tags(&hash, &tags)).await
+}
+
+#[tauri::command]
+pub async fn regenerate_color_card(
+    hash: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| {
+        catalog.regenerate_color_card(&hash).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -906,10 +946,12 @@ fn read_bitmap_via_plugin(
 
         // ClipboardExt 把官方插件的 Clipboard 实体挂到所有 Manager 类型上；
         // read_image 内部经 arboard 打开系统剪贴板并复制出像素。
-        let image = match app.clipboard().read_image() {
-            Ok(image) => image,
-            Err(_) => return Ok(None),
-        };
+        let image = app.clipboard().read_image().map_err(|error| {
+            AppError::detailed(
+                Code::ClipboardReadFailed,
+                format!("Windows 已报告位图格式，但读取像素失败：{error}"),
+            )
+        })?;
         BitmapImage::new(
             image.width() as usize,
             image.height() as usize,
@@ -1237,11 +1279,16 @@ pub fn asset_thumbnail(
     // 先校验再用。ContentHash 存在的意义就是让未校验的字符串无法参与库内路径拼接。
     let hash = ContentHash::parse(&hash)?;
     let opened = current_opened(&state)?;
-    let (library, ext) = {
+    let (library, ext, source) = {
         let catalog = lock(&opened.catalog)?;
-        (catalog.library().clone(), ext_of(&catalog, &hash)?)
+        let source = if catalog.asset_is_deleted(&hash)? {
+            import::ThumbnailSource::Trash
+        } else {
+            import::ThumbnailSource::Active
+        };
+        (catalog.library().clone(), ext_of(&catalog, &hash)?, source)
     };
-    let bytes = import::ensure_thumbnail(&library, &hash, ext)?;
+    let bytes = import::ensure_thumbnail(&library, &hash, ext, source)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -1392,6 +1439,26 @@ pub async fn rename_prompt_folder(
     with_catalog(state, move |catalog| {
         Ok(catalog
             .rename_prompt_folder(&path, &new_name)?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn move_prompt_folder(
+    path: String,
+    destination_parent: Option<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let path = FolderPath::parse(&path)?;
+    let destination_parent = destination_parent
+        .as_deref()
+        .map(FolderPath::parse)
+        .transpose()?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .move_prompt_folder(&path, destination_parent.as_ref())?
             .as_str()
             .to_owned())
     })

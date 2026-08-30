@@ -6,7 +6,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { appTaskCenter } from "./app/runtime";
 import { createRequestId } from "./app/common";
 import type { NavigationEntry, WorkspaceNavigation } from "./app/navigation";
 import { createWorkspaceNavigation } from "./app/navigation";
@@ -15,9 +14,6 @@ import type { GlobalSearch } from "./app/globalSearch";
 import { globalSearch as runGlobalSearch } from "./shared/ipc";
 import {
   AssetLibraryWorkspace,
-  canStopTransferTask,
-  getTransferTaskStopError,
-  stopAssetTransferTask,
   type AssetImportRequest,
   type AssetLibraryEntry,
 } from "./modules/asset-library";
@@ -219,7 +215,6 @@ function WorkspaceApp({
     <AppShell
       navigation={guardedNavigation}
       globalSearch={globalSearch}
-      taskCenter={appTaskCenter}
       library={{
         id: context.session.id,
         displayName: context.session.displayName,
@@ -229,10 +224,10 @@ function WorkspaceApp({
       appVersion="0.1.0"
       onImportImages={() => queueImport("images")}
       onImportFolder={() => queueImport("folder")}
-      onImportClipboard={() => queueImport("clipboard")}
-      onStopTask={stopAssetTransferTask}
-      canStopTask={canStopTransferTask}
-      getStopError={getTransferTaskStopError}
+      onCreateNewLibrary={() => {
+        if (blockIfPromptDraftDirty(controls.createNewLibrary)) return;
+        controls.createNewLibrary();
+      }}
       onOpenOtherLibrary={() => {
         if (blockIfPromptDraftDirty(controls.openOtherLibrary)) return;
         controls.openOtherLibrary();

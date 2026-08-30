@@ -11,7 +11,6 @@ import {
 import { asAppError } from "../../shared/errors";
 import type { AppError, FolderFilter } from "../../shared/types";
 import type { GlobalLocateRequest } from "./locate";
-import type { AppliedFilterChip } from "./AppliedFilterChips";
 import {
   useWorkspacePreferences,
   type LibraryWorkspaceLayout,
@@ -40,15 +39,10 @@ export function useWorkspaceQueryController(
   const {
     update,
     text,
-    setText,
     selectedTags,
-    setSelectedTags,
     folder,
-    setFolder,
     favoriteOnly,
-    setFavoriteOnly,
     location,
-    setLocation,
     ready,
   } = preferences;
   const deferredText = useDeferredValue(text);
@@ -95,56 +89,7 @@ export function useWorkspaceQueryController(
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const chips = useMemo<AppliedFilterChip[]>(() => {
-    const list: AppliedFilterChip[] = [];
-    const trimmedText = text.trim();
-    if (trimmedText !== "") {
-      list.push({
-        key: "text",
-        label: `搜索：${trimmedText}`,
-        removeLabel: `移除搜索条件 ${trimmedText}`,
-        onRemove: () => setText(""),
-      });
-    }
-    for (const tag of selectedTags) {
-      list.push({
-        key: `tag:${tag}`,
-        label: `标签：${tag}`,
-        removeLabel: `移除标签条件 ${tag}`,
-        onRemove: () => setSelectedTags((current) => current.filter((item) => item !== tag)),
-      });
-    }
-    if (favoriteOnly) {
-      list.push({
-        key: "favorite",
-        label: "只看收藏",
-        removeLabel: "移除收藏条件",
-        onRemove: () => setFavoriteOnly(false),
-      });
-    }
-    if (folder.kind === "path") {
-      list.push({
-        key: "folder",
-        label: `文件夹：${folder.path}`,
-        removeLabel: `移除文件夹条件 ${folder.path}`,
-        onRemove: () => setFolder({ kind: "all" }),
-      });
-    }
-    if (location === "trash") {
-      list.push({
-        key: "location",
-        label: "位置：回收站",
-        removeLabel: "移除回收站位置条件",
-        onRemove: () => {
-          setLocation("active");
-          setFolder({ kind: "all" });
-        },
-      });
-    }
-    return list;
-  }, [favoriteOnly, folder, location, selectedTags, setFavoriteOnly, setFolder, setLocation, setSelectedTags, setText, text]);
-
-  return { ...preferences, query, activation, searchInputRef, chips };
+  return { ...preferences, query, activation, searchInputRef };
 }
 
 /** 共享的异步快照加载接缝；领域差异只体现在传入的 load 函数与 DTO 类型。 */

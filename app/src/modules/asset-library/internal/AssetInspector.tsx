@@ -1,8 +1,8 @@
 import { useId, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { parseAssetId, type LibraryId } from "../../../app/common";
-import { imageDetail } from "../../../shared/ipc";
+import { imageDetail, regenerateColorCard } from "../../../shared/ipc";
 import { IpcError } from "../../../shared/errors";
 import type { AssetRow } from "../../../shared/types";
 import { Button } from "../../../ui/button/Button";
@@ -38,18 +38,56 @@ function colorRole(role: string): string {
   }
 }
 
-function Colors({ asset }: { asset: AssetRow }): ReactNode {
+function colorFailureMessage(reason: string): string {
+  switch (reason) {
+    case "color_card.insufficient_opaque_pixels": return "图片中可参与分析的可见像素太少。";
+    case "color_card.decode_failed": return "无法读取原图像素。";
+    case "color_card.cluster_failed": return "色彩聚类没有得到可靠结果。";
+    default: return "暂时无法生成可靠色卡。";
+  }
+}
+
+function Colors({ libraryId, asset, editable }: { libraryId: LibraryId; asset: AssetRow; editable: boolean }): ReactNode {
+  const client = useQueryClient();
+  const regenerate = useMutation({
+    scope: { id: `asset-color-card:${libraryId}` },
+    mutationFn: () => regenerateColorCard(asset.hash),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: assetKeys.collections(libraryId) }),
+        client.invalidateQueries({ queryKey: assetKeys.details(libraryId) }),
+      ]);
+    },
+  });
+  if (regenerate.error !== null && !(regenerate.error instanceof IpcError)) throw regenerate.error;
   if (asset.color_card_status !== "ok" && asset.color_card_status !== "failed") throw new TypeError(`未知色卡状态：${asset.color_card_status}`);
   if (asset.color_card_status !== "ok") {
     if (asset.color_card_failure_reason === null) throw new TypeError("失败色卡缺少原因");
-    return <div role="alert" className={styles.error}><p>暂时无法生成色卡。</p><details><summary>技术详情</summary><code>{asset.color_card_failure_reason}</code></details></div>;
+    return <div role="alert" className={styles.paletteFailure}>
+      <p>{colorFailureMessage(asset.color_card_failure_reason)}</p>
+      <Button size="compact" disabled={!editable || regenerate.isPending} onClick={() => regenerate.mutate()}>{regenerate.isPending ? "正在分析…" : "重新分析色卡"}</Button>
+      {regenerate.error === null ? null : <p className={styles.error}>{regenerate.error.message}</p>}
+      <details><summary>技术详情</summary><code>{asset.color_card_failure_reason}</code></details>
+    </div>;
   }
-  return asset.colors.length === 0 ? <p className={styles.hint}>暂无色卡数据。</p> : <ul className={styles.colors}>
-    {asset.colors.map((color, index) => <li key={`${index}-${color.hex}`}>
-      <span className={styles.swatch} style={{ backgroundColor: color.hex }} aria-hidden="true" />
-      <code>{color.hex}</code><span>{colorRole(color.role)}</span><span>{(color.share * 100).toFixed(1)}%</span>
-    </li>)}
-  </ul>;
+  if (asset.colors.length === 0) return <p className={styles.hint}>暂无色卡数据。</p>;
+  const paletteLabel = asset.colors.map((color) => `${color.hex} ${(color.share * 100).toFixed(1)}%`).join("，");
+  return <div className={styles.palette}>
+    <div className={styles.paletteStrip} role="img" aria-label={`色彩比例：${paletteLabel}`}>
+      {asset.colors.map((color, index) => <span key={`${index}-${color.hex}`} style={{ backgroundColor: color.hex, flexGrow: color.share }} title={`${color.hex} · ${colorRole(color.role)} · ${(color.share * 100).toFixed(1)}%`} />)}
+    </div>
+    <ul className={styles.paletteLegend}>
+      {asset.colors.map((color, index) => <li key={`${index}-${color.hex}`}>
+        <span className={styles.paletteMarker} style={{ backgroundColor: color.hex }} aria-hidden="true" />
+        <span><code>{color.hex}</code><small>{colorRole(color.role)}</small></span>
+        <strong>{(color.share * 100).toFixed(1)}%</strong>
+      </li>)}
+    </ul>
+    <div className={styles.paletteActions}>
+      <Button size="compact" variant="ghost" disabled={!editable || regenerate.isPending} onClick={() => regenerate.mutate()}>{regenerate.isPending ? "正在分析…" : "重新分析"}</Button>
+      {regenerate.error === null ? null : <p className={styles.error}>{regenerate.error.message}</p>}
+    </div>
+  </div>;
 }
 
 export type AssetInspectorProps = {
@@ -80,7 +118,7 @@ export function AssetInspector({ libraryId, asset, count, active, editable, sect
   if (asset === null) return <div className={styles.empty}><h2 tabIndex={-1} data-inspector-heading>图片检查器</h2><p>{count > 1 ? `已选 ${count} 项。请从底部操作栏批量整理，单张信息仅在单选时显示。` : "选择一张图片，查看色卡、组织与来源信息。"}</p></div>;
   const contents: Record<InspectorSection, ReactNode> = {
     summary: <>{active && sections?.summary !== false ? <div className={styles.preview}><AssetThumbnail key={asset.hash} asset={asset} /></div> : null}<div className={styles.summaryHeading}><div><p className={styles.filename}>{asset.display_filename}</p><p className={styles.hint}>{asset.width} × {asset.height} · {asset.ext.toUpperCase()}{asset.deleted_at === null ? "" : " · 回收站"}</p></div>{actions}</div></>,
-    colors: <Colors asset={asset} />,
+    colors: <Colors libraryId={libraryId} asset={asset} editable={editable} />,
     organization: <><AssetOrganization key={asset.hash} libraryId={libraryId} asset={asset} folders={folders} disabled={!editable} />{asset.deleted_at === null ? null : <Button size="compact" disabled={!restorable} onClick={onRestore}>还原图片</Button>}</>,
     note: <NoteEditor asset={asset} notes={notes} disabled={!editable} />,
     links: detail.isError ? <div><p role="alert" className={styles.error}>{detail.error.message}</p><Button size="compact" onClick={() => void detail.refetch()}>重试读取详情</Button></div> : detail.isPending ? <p role="status">正在读取关联…</p> : <AssetPromptLinks key={asset.hash} libraryId={libraryId} hash={asset.hash} linked={detail.data.linked_prompts} disabled={!editable} active={active} />,

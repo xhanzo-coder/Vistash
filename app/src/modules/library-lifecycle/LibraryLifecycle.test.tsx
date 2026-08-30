@@ -85,6 +85,29 @@ test("兼容库直接产生会话并恢复工作现场，不显示欢迎页", as
   expect(lifecyclePort.status).toHaveBeenCalledTimes(1);
 });
 
+test("在已打开库中取消新建或打开目录对话框保留原工作现场", async () => {
+  const lifecyclePort = port(readyStatus());
+  mount(
+    <LibraryLifecycle port={lifecyclePort}>
+      {(context, controls) => <div data-testid="workspace">
+        <span>{context.session.displayName}</span>
+        <button type="button" onClick={controls.createNewLibrary}>新建素材库</button>
+        <button type="button" onClick={controls.openOtherLibrary}>打开其他库</button>
+      </div>}
+    </LibraryLifecycle>,
+  );
+  await vi.waitFor(() => expect(container?.querySelector('[data-testid="workspace"]')).not.toBeNull());
+  const create = [...(container?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent === "新建素材库");
+  await act(async () => create?.click());
+  await vi.waitFor(() => expect(lifecyclePort.pickLibraryDirectory).toHaveBeenCalledWith("create"));
+  expect(container?.querySelector('[data-testid="workspace"]')?.textContent).toContain("视觉档案");
+  const open = [...(container?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent === "打开其他库");
+  await act(async () => open?.click());
+  await vi.waitFor(() => expect(lifecyclePort.pickLibraryDirectory).toHaveBeenCalledWith("open"));
+  expect(container?.querySelector('[data-testid="workspace"]')?.textContent).toContain("视觉档案");
+  expect(lifecyclePort.open).not.toHaveBeenCalled();
+});
+
 test("首次运行解释本地库语义，创建新库后直接进入图片工作现场", async () => {
   const firstRun: LibraryStatus = {
     path: null,
@@ -110,6 +133,9 @@ test("首次运行解释本地库语义，创建新库后直接进入图片工�
   );
 
   await vi.waitFor(() => expect(container?.textContent).toContain("创建新库"));
+  const titlebar = container?.querySelector<HTMLElement>('header[data-tauri-drag-region]');
+  expect(titlebar).not.toBeNull();
+  expect(titlebar?.querySelector('button[aria-label="关闭窗口"]')).not.toBeNull();
   expect(container?.textContent).toContain("图片会复制进库");
   expect(container?.textContent).toContain("库会占用磁盘空间");
   expect(container?.textContent).toContain("源文件不会被修改");
@@ -214,10 +240,8 @@ test("多归属旧库必须完成唯一文件夹选择并二次确认后才提�
   await act(async () => inspect?.click());
 
   await vi.waitFor(() => expect(container?.textContent).toContain("雨夜街道.png"));
-  const taskTrigger = container?.querySelector<HTMLButtonElement>('button[aria-label^="任务中心"]');
-  if (taskTrigger === null || taskTrigger === undefined) throw new Error("迁移页缺少任务中心入口");
-  await act(async () => taskTrigger.click());
-  expect(document.body.querySelector('[data-ui="task-center"]')?.textContent).toContain("库迁移");
+  expect(container?.querySelector('button[aria-label^="任务中心"]')).toBeNull();
+  expect(document.body.querySelector('[data-ui="task-center"]')).toBeNull();
   const commit = [...(container?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
     (button) => button.textContent === "确认迁移",
   );

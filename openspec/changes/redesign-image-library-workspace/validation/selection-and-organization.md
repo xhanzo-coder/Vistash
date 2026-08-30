@@ -57,4 +57,4 @@ python -X utf8 scripts/asset-session-check.py --base-url http://127.0.0.1:4190
 
 按 `web-design-guidelines` 当日[上游规则](https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md)核对本轮新增表单、菜单、拖动等价操作和局部反馈：真实 label、原生控件、焦点环、错误码、确认层、深浅主题 select 颜色及无水平溢出均已核对。必需目标未选择时禁用提交遵循本项目已批准的安全约束。
 
-此记录不是第 11 节的最终全局审查：图像反推仍暂停；9.2 之后的文件名编辑、完整检查器、灯箱、全局任务中心接线、10,000 项完整性能与 release Tauri 原生交互验收仍按任务清单推进。新模块继续只在开发入口独立验收，生产入口在 11.3 达到整体等价后一次切换。
+此记录不是第 11 节的最终全局审查：图像反推仍暂停；9.2 之后的文件名编辑、完整检查器、灯箱、内部任务协调、10,000 项完整性能与 release Tauri 原生交互验收仍按任务清单推进。新模块继续只在开发入口独立验收，生产入口在 11.3 达到整体等价后一次切换。

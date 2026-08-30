@@ -64,8 +64,10 @@ export function useAssetActions(libraryId: LibraryId) {
       if (taskId === undefined) throw new Error("批量组织成功但缺少任务中心标识");
       const outcome: TaskOutcome = { counts: { succeeded: report.succeeded, skipped: 0, failed: report.failures.length, unprocessed: 0 }, failures: report.failures.map((failure) => ({ displayName: failure.display_name, error: failure.error })), error: null };
       appTaskCenter.complete(taskId, outcome);
-      const result: ActionResult = { id: ++nextResultId.current, title: titleOf(request), result: { kind: "completed", report } };
-      setResults((current) => [...current, result]);
+      if (report.failures.length > 0) {
+        const result: ActionResult = { id: ++nextResultId.current, title: titleOf(request), result: { kind: "completed", report } };
+        setResults((current) => [...current, result]);
+      }
       const ids = new Set(request.kind === "favorite-one" ? [request.hash] : request.hashes);
       await Promise.all([
         client.invalidateQueries({ queryKey: request.kind === "link" ? assetKeys.promptCandidatesRoot(libraryId) : assetKeys.collections(libraryId) }),

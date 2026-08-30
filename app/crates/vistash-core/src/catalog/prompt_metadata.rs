@@ -236,6 +236,50 @@ impl Catalog {
         source: &FolderPath,
         new_name: &FolderName,
     ) -> Result<FolderPath> {
+        let target = match source.parent() {
+            Some(parent) => parent.join(new_name),
+            None => FolderPath::parse(new_name.as_str())?,
+        };
+        self.relocate_prompt_folder(source, &target)
+    }
+
+    /// 把完整提示词文件夹子树移动到另一个父节点或提示词文件夹树顶层。
+    ///
+    /// 提示词仍保持多文件夹成员语义：只重映射来源子树内的归属，其他归属不变。
+    pub fn move_prompt_folder(
+        &mut self,
+        source: &FolderPath,
+        destination_parent: Option<&FolderPath>,
+    ) -> Result<FolderPath> {
+        let list = self.library.read_prompt_folders()?;
+        if let Some(parent) = destination_parent {
+            if !list.folders.iter().any(|path| path == parent.as_str()) {
+                return Err(AppError::detailed(
+                    Code::PromptFolderNotFound,
+                    format!("目标父文件夹不存在：{}", parent.as_str()),
+                ));
+            }
+            if parent == source || parent.is_descendant_of(source) {
+                return Err(AppError::detailed(
+                    Code::LibraryFolderInvalid,
+                    format!("不能把提示词文件夹移动到自身或后代：{}", parent.as_str()),
+                ));
+            }
+        }
+        let name = source.name();
+        let target = match destination_parent {
+            Some(parent) => parent.join(&name),
+            None => FolderPath::parse(name.as_str())?,
+        };
+        self.relocate_prompt_folder(source, &target)
+    }
+
+    /// 重命名与移动共用的事务边界：一次性改写清单和全部受影响提示词。
+    fn relocate_prompt_folder(
+        &mut self,
+        source: &FolderPath,
+        target: &FolderPath,
+    ) -> Result<FolderPath> {
         let original_list = self.library.read_prompt_folders()?;
         if !original_list
             .folders
@@ -247,10 +291,9 @@ impl Catalog {
                 format!("文件夹不存在：{}", source.as_str()),
             ));
         }
-        let target = match source.parent() {
-            Some(parent) => parent.join(new_name),
-            None => FolderPath::parse(new_name.as_str())?,
-        };
+        if target == source {
+            return Ok(target.clone());
+        }
         let source_tree: Vec<FolderPath> = original_list
             .folders
             .iter()
@@ -262,7 +305,7 @@ impl Catalog {
         let mapped_paths: Vec<FolderPath> = source_tree
             .iter()
             .map(|path| {
-                path.rebase(source, &target).ok_or_else(|| {
+                path.rebase(source, target).ok_or_else(|| {
                     AppError::detailed(
                         Code::PromptFolderNotFound,
                         format!("路径不在重命名子树中：{}", path.as_str()),
@@ -288,7 +331,7 @@ impl Catalog {
             .iter()
             .map(|existing| {
                 let path = FolderPath::parse(existing)?;
-                let mapped = match path.rebase(source, &target) {
+                let mapped = match path.rebase(source, target) {
                     Some(mapped) => mapped,
                     None => path,
                 };
@@ -323,7 +366,7 @@ impl Catalog {
                 .iter()
                 .map(|existing| {
                     let path = FolderPath::parse(existing)?;
-                    let mapped = match path.rebase(source, &target) {
+                    let mapped = match path.rebase(source, target) {
                         Some(mapped) => mapped,
                         None => path,
                     };
@@ -335,7 +378,7 @@ impl Catalog {
             changed_prompts.push((path, prompt));
         }
         self.commit_prompt_metadata(&changed_prompts, &next_list)?;
-        Ok(target)
+        Ok(target.clone())
     }
 
     /// 删除提示词文件夹子树，并从受影响提示词上摘除这些归属。
@@ -690,7 +733,7 @@ mod tests {
     #[test]
     fn prompt_folders_form_a_tree_independent_of_image_folders() {
         let mut fixture = fixture();
-        // 图片树先有同名根文件夹：提示词树必须允许同路径字面值各自存在。
+        // 图片树先有同名顶层文件夹：提示词树必须允许同路径字面值各自存在。
         fixture
             .catalog
             .create_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
@@ -698,7 +741,7 @@ mod tests {
         let root = fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
-            .expect("创建同名提示词根文件夹");
+            .expect("创建同名提示词顶层文件夹");
         fixture
             .catalog
             .create_prompt_folder(
@@ -723,7 +766,7 @@ mod tests {
         let people = fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
-            .expect("创建根文件夹");
+            .expect("创建顶层文件夹");
         fixture
             .catalog
             .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
@@ -731,7 +774,7 @@ mod tests {
         fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
-            .expect("创建另一根文件夹");
+            .expect("创建另一顶层文件夹");
         // 同名图片文件夹与其中一张图片：重命名提示词文件夹不得波及它们。
         fixture
             .catalog
@@ -793,7 +836,7 @@ mod tests {
         let people = fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
-            .expect("创建根文件夹");
+            .expect("创建顶层文件夹");
         fixture
             .catalog
             .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
@@ -801,7 +844,7 @@ mod tests {
         fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
-            .expect("创建另一根文件夹");
+            .expect("创建另一顶层文件夹");
         let created = fixture
             .catalog
             .create_prompt(&NewPrompt {
@@ -838,11 +881,11 @@ mod tests {
         fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
-            .expect("创建根文件夹");
+            .expect("创建顶层文件夹");
         fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
-            .expect("创建另一根文件夹");
+            .expect("创建另一顶层文件夹");
         let created = fixture.catalog.create_prompt(&draft("正文")).expect("创建");
 
         // 多文件夹成员：归属是集合语义，重复与顺序由权威写入规范化。
@@ -863,12 +906,76 @@ mod tests {
     }
 
     #[test]
+    fn moving_a_prompt_folder_reparents_the_subtree_and_preserves_other_memberships() {
+        let mut fixture = fixture();
+        let people = fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建人物文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
+            .expect("创建室内子文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
+            .expect("创建构图文件夹");
+        let created = fixture
+            .catalog
+            .create_prompt(&NewPrompt {
+                body: "正文".to_owned(),
+                title: None,
+                model: None,
+                parameters: None,
+                folders: vec!["人物/室内".to_owned(), "构图".to_owned()],
+                tags: vec![],
+            })
+            .expect("创建多归属提示词");
+
+        let moved = fixture
+            .catalog
+            .move_prompt_folder(&folder("人物/室内"), Some(&folder("构图")))
+            .expect("移动提示词文件夹");
+
+        assert_eq!(moved.as_str(), "构图/室内");
+        let folders = fixture.catalog.library().read_prompt_folders().expect("读回文件夹清单");
+        assert!(folders.folders.contains(&"人物".to_owned()));
+        assert!(folders.folders.contains(&"构图".to_owned()));
+        assert!(folders.folders.contains(&"构图/室内".to_owned()));
+        assert!(!folders.folders.contains(&"人物/室内".to_owned()));
+        let detail = fixture.catalog.prompt_detail(&created.id).expect("读回提示词");
+        assert_eq!(detail.folders, vec!["构图".to_owned(), "构图/室内".to_owned()]);
+    }
+
+    #[test]
+    fn moving_a_prompt_folder_into_its_descendant_is_rejected_without_changes() {
+        let mut fixture = fixture();
+        let people = fixture
+            .catalog
+            .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
+            .expect("创建人物文件夹");
+        fixture
+            .catalog
+            .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
+            .expect("创建室内子文件夹");
+        let before = fixture.catalog.library().read_prompt_folders().expect("读取原清单");
+
+        let error = fixture
+            .catalog
+            .move_prompt_folder(&folder("人物"), Some(&folder("人物/室内")))
+            .expect_err("不能移动到自己的后代");
+
+        assert_eq!(error.code, Code::LibraryFolderInvalid);
+        assert_eq!(fixture.catalog.library().read_prompt_folders().expect("读回清单"), before);
+    }
+
+    #[test]
     fn an_interrupted_prompt_folder_rename_rolls_back_every_byte() {
         let mut fixture = fixture();
         let people = fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
-            .expect("创建根文件夹");
+            .expect("创建顶层文件夹");
         fixture
             .catalog
             .create_prompt_folder(Some(&people), &crate::catalog::FolderName::parse("室内").expect("文件夹名"))
@@ -926,7 +1033,7 @@ mod tests {
         fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
-            .expect("创建根文件夹");
+            .expect("创建顶层文件夹");
         let error = fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("人物").expect("文件夹名"))
@@ -948,7 +1055,7 @@ mod tests {
         fixture
             .catalog
             .create_prompt_folder(None, &crate::catalog::FolderName::parse("构图").expect("文件夹名"))
-            .expect("创建另一根文件夹");
+            .expect("创建另一顶层文件夹");
         let error = fixture
             .catalog
             .rename_prompt_folder(&folder("人物"), &crate::catalog::FolderName::parse("构图").expect("文件夹名"))

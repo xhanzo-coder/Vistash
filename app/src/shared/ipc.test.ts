@@ -31,12 +31,15 @@ import {
   linkedImageStates,
   migrateLibrary,
   moveAssetToFolder,
+  moveFolder,
+  movePromptFolder,
   pasteImport,
   promptDetail,
   promptSnapshot,
   purgePromptTrash,
   purgeTrash,
   readLayout,
+  regenerateColorCard,
   renameFolder,
   renameAssetDisplayFilename,
   renamePromptFolder,
@@ -425,6 +428,13 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
       payload.onProgress.onmessage(renameProgress);
       return "参考";
     }
+    if (command === "move_folder") {
+      if (!isRecord(payload) || !(payload.onProgress instanceof Channel)) {
+        throw new TypeError("move_folder 缺少进度 Channel");
+      }
+      payload.onProgress.onmessage(renameProgress);
+      return "项目 A/构图";
+    }
     if (command === "restore_asset") return restore;
     if (command === "purge_trash") return purge;
     return null;
@@ -440,9 +450,11 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
   await catalogSnapshot(query);
   await createFolder(null, "参考");
   await renameFolder("参考", "灵感", receivedRenameProgress);
+  await moveFolder("灵感/构图", "项目 A", receivedRenameProgress);
   await deleteFolder("灵感");
   await moveAssetToFolder("a".repeat(64), "配色");
   await setAssetTags("a".repeat(64), ["人物"]);
+  await regenerateColorCard("a".repeat(64));
   await deleteAsset("a".repeat(64));
   await restoreAsset("a".repeat(64));
   await purgeTrash();
@@ -456,6 +468,15 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
     throw new TypeError("rename_folder 调用没有携带进度 Channel");
   }
   const renameChannel = renameCall.payload.onProgress;
+  const moveCall = calls.find((call) => call.command === "move_folder");
+  if (
+    moveCall === undefined ||
+    !isRecord(moveCall.payload) ||
+    !(moveCall.payload.onProgress instanceof Channel)
+  ) {
+    throw new TypeError("move_folder 调用没有携带进度 Channel");
+  }
+  const moveChannel = moveCall.payload.onProgress;
 
   expect(calls).toEqual([
     { command: "catalog_snapshot", payload: { query } },
@@ -463,6 +484,10 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
     {
       command: "rename_folder",
       payload: { path: "参考", newName: "灵感", onProgress: renameChannel },
+    },
+    {
+      command: "move_folder",
+      payload: { path: "灵感/构图", destinationParent: "项目 A", onProgress: moveChannel },
     },
     { command: "delete_folder", payload: { path: "灵感" } },
     {
@@ -473,11 +498,14 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
       command: "set_asset_tags",
       payload: { hash: "a".repeat(64), tags: ["人物"] },
     },
+    { command: "regenerate_color_card", payload: { hash: "a".repeat(64) } },
     { command: "delete_asset", payload: { hash: "a".repeat(64) } },
     { command: "restore_asset", payload: { hash: "a".repeat(64) } },
     { command: "purge_trash", payload: {} },
   ]);
-  expect(receivedRenameProgress).toHaveBeenCalledExactlyOnceWith(renameProgress);
+  expect(receivedRenameProgress).toHaveBeenCalledTimes(2);
+  expect(receivedRenameProgress).toHaveBeenNthCalledWith(1, renameProgress);
+  expect(receivedRenameProgress).toHaveBeenNthCalledWith(2, renameProgress);
 });
 
 test("IPC 保留后端错误码与详情", async () => {
@@ -548,6 +576,7 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
     if (command === "create_prompt") return prompt;
     if (command === "create_prompt_folder") return "灵感";
     if (command === "rename_prompt_folder") return "档案";
+    if (command === "move_prompt_folder") return "顶层";
     if (command === "update_prompt") return prompt;
     if (command === "prompt_detail") return prompt;
     if (command === "prompt_snapshot") return snapshot;
@@ -563,6 +592,7 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
   await promptSnapshot(promptQuery);
   await createPromptFolder(null, "灵感");
   await renamePromptFolder("灵感", "档案");
+  await movePromptFolder("档案/顶层", null);
   await deletePromptFolder("档案");
   await setPromptNote(PROMPT_ID, "备注");
   await setPromptFavorite(PROMPT_ID, true);
@@ -584,6 +614,7 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
     { command: "prompt_snapshot", payload: { query: promptQuery } },
     { command: "create_prompt_folder", payload: { parent: null, name: "灵感" } },
     { command: "rename_prompt_folder", payload: { path: "灵感", newName: "档案" } },
+    { command: "move_prompt_folder", payload: { path: "档案/顶层", destinationParent: null } },
     { command: "delete_prompt_folder", payload: { path: "档案" } },
     { command: "set_prompt_note", payload: { id: PROMPT_ID, note: "备注" } },
     { command: "set_prompt_favorite", payload: { id: PROMPT_ID, favorite: true } },

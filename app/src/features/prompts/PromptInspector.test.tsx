@@ -210,7 +210,7 @@ function setSelect(select: HTMLSelectElement, value: string): void {
 test("无活动项时呈现操作引导而不是空白", async () => {
   const harness = await setupInspector([]);
   expect(harness.root.querySelector(".inspector-placeholder")?.textContent).toContain(
-    "单击一张卡片",
+    "选择一条提示词",
   );
 });
 

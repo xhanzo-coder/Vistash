@@ -12,6 +12,7 @@ use crate::error::{AppError, Code, Result};
 use crate::hashing::ContentHash;
 use crate::library::FolderList;
 use crate::sidecar::AssetSidecar;
+use crate::{colorcard, colorcard::ColorCard, media};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -76,6 +77,15 @@ impl FolderPath {
 
     pub fn join(&self, name: &FolderName) -> Self {
         Self(format!("{}/{}", self.0, name.as_str()))
+    }
+
+    pub fn name(&self) -> FolderName {
+        let segment = self
+            .0
+            .rsplit('/')
+            .next()
+            .expect("FolderPath 构造保证至少包含一个非空路径段");
+        FolderName(segment.to_owned())
     }
 
     /// 只接受完整段边界，且路径自身不算自己的后代。
@@ -333,10 +343,106 @@ impl Catalog {
         Ok(())
     }
 
+    /// 从库内权威原图重新分析色卡并原子更新侧车与派生索引。
+    pub fn regenerate_color_card(&mut self, hash: &ContentHash) -> Result<ColorCard> {
+        let (sidecar_path, mut sidecar) = self.load_editable_sidecar(hash, "色卡")?;
+        let body_path = self.library.body_path(hash, &sidecar.ext);
+        let decoded = media::decode(&body_path).map_err(|error| {
+            AppError::detailed(
+                Code::ColorCardDecodeFailed,
+                format!("重新分析色卡时解码原图失败：{error}"),
+            )
+        })?;
+        let card = colorcard::analyze(&decoded.image);
+        sidecar.color_card = card.clone();
+        sidecar.write_atomic(&sidecar_path).map_err(|error| {
+            AppError::detailed(
+                Code::LibraryAssetMetadataWriteFailed,
+                format!("写入重新分析的色卡失败：{error:?}"),
+            )
+        })?;
+        if let Err(error) = self.index_mut()?.upsert_asset(&sidecar) {
+            self.rebuild_after_index_failure(error)?;
+        }
+        Ok(card)
+    }
+
     pub fn rename_folder<F>(
         &mut self,
         source: &FolderPath,
         new_name: &FolderName,
+        on_progress: F,
+    ) -> Result<FolderPath>
+    where
+        F: FnMut(FolderMutationProgress) -> Result<()>,
+    {
+        let target = match source.parent() {
+            Some(parent) => parent.join(new_name),
+            None => FolderPath::parse(new_name.as_str())?,
+        };
+        if target == *source {
+            return Ok(source.clone());
+        }
+        self.rebase_folder(source, &target, on_progress)
+    }
+
+    /// 把完整文件夹子树移动到另一个父节点或库根位置。
+    ///
+    /// 目标父节点必须存在，且不能是源节点或其后代。目标路径碰撞、任一侧车或
+    /// 文件夹清单写入失败时，权威元数据保持操作前状态。
+    pub fn move_folder<F>(
+        &mut self,
+        source: &FolderPath,
+        destination_parent: Option<&FolderPath>,
+        on_progress: F,
+    ) -> Result<FolderPath>
+    where
+        F: FnMut(FolderMutationProgress) -> Result<()>,
+    {
+        let original_list = self.library.read_folders()?;
+        if !original_list
+            .folders
+            .iter()
+            .any(|path| path == source.as_str())
+        {
+            return Err(AppError::detailed(
+                Code::LibraryFolderNotFound,
+                format!("文件夹不存在：{}", source.as_str()),
+            ));
+        }
+        if let Some(parent) = destination_parent {
+            if !original_list
+                .folders
+                .iter()
+                .any(|path| path == parent.as_str())
+            {
+                return Err(AppError::detailed(
+                    Code::LibraryFolderNotFound,
+                    format!("目标父文件夹不存在：{}", parent.as_str()),
+                ));
+            }
+            if parent == source || parent.is_descendant_of(source) {
+                return Err(AppError::detailed(
+                    Code::LibraryFolderInvalid,
+                    format!("不能把文件夹移动到自身或后代：{}", parent.as_str()),
+                ));
+            }
+        }
+        let name = source.name();
+        let target = match destination_parent {
+            Some(parent) => parent.join(&name),
+            None => FolderPath::parse(name.as_str())?,
+        };
+        if target == *source {
+            return Ok(source.clone());
+        }
+        self.rebase_folder(source, &target, on_progress)
+    }
+
+    fn rebase_folder<F>(
+        &mut self,
+        source: &FolderPath,
+        target: &FolderPath,
         mut on_progress: F,
     ) -> Result<FolderPath>
     where
@@ -353,10 +459,6 @@ impl Catalog {
                 format!("文件夹不存在：{}", source.as_str()),
             ));
         }
-        let target = match source.parent() {
-            Some(parent) => parent.join(new_name),
-            None => FolderPath::parse(new_name.as_str())?,
-        };
         let source_tree: Vec<FolderPath> = original_list
             .folders
             .iter()
@@ -368,7 +470,7 @@ impl Catalog {
         let mapped_paths: Vec<FolderPath> = source_tree
             .iter()
             .map(|path| {
-                path.rebase(source, &target).ok_or_else(|| {
+                path.rebase(source, target).ok_or_else(|| {
                     AppError::detailed(
                         Code::LibraryFolderInvalid,
                         format!("路径不在重命名子树中：{}", path.as_str()),
@@ -395,7 +497,7 @@ impl Catalog {
             .iter()
             .map(|existing| {
                 let path = FolderPath::parse(existing)?;
-                let mapped = match path.rebase(source, &target) {
+                let mapped = match path.rebase(source, target) {
                     Some(mapped) => mapped,
                     None => path,
                 };
@@ -422,7 +524,7 @@ impl Catalog {
             let sidecar_path = self.library.sidecar_path(&hash);
             let mut sidecar = AssetSidecar::read(&sidecar_path)?;
             // 命中即整棵子树内，单归属下 rebase 必然成功。
-            let mapped = path.rebase(source, &target).ok_or_else(|| {
+            let mapped = path.rebase(source, target).ok_or_else(|| {
                 AppError::detailed(
                     Code::LibraryFolderInvalid,
                     format!("路径不在重命名子树中：{}", path.as_str()),
@@ -439,7 +541,7 @@ impl Catalog {
                 current_filename: sidecar.source.filename().to_owned(),
             })
         })?;
-        Ok(target)
+        Ok(target.clone())
     }
 
     pub fn delete_folder(&mut self, source: &FolderPath) -> Result<()> {
@@ -960,6 +1062,30 @@ mod tests {
     }
 
     #[test]
+    fn regenerate_color_card_replaces_a_historical_failure_without_touching_other_metadata() {
+        let mut fixture = fixture();
+        let source = write_png(&fixture.source, "旧色卡.png", [40, 120, 180, 255]);
+        let imported = import_with(&mut fixture.catalog, &source, None, &[]);
+        let sidecar_path = fixture.catalog.library().sidecar_path(&imported.hash);
+        let mut historical = AssetSidecar::read(&sidecar_path).expect("读取侧车");
+        historical.note = "保留备注".to_owned();
+        historical.color_card = crate::colorcard::ColorCard::failed(
+            Code::ColorCardInsufficientOpaquePixels,
+        );
+        historical.write_atomic(&sidecar_path).expect("写入历史失败色卡");
+
+        let regenerated = fixture
+            .catalog
+            .regenerate_color_card(&imported.hash)
+            .expect("重新分析色卡");
+
+        assert!(regenerated.is_ok(), "不透明原图应生成色卡：{regenerated:?}");
+        let persisted = AssetSidecar::read(&sidecar_path).expect("读回侧车");
+        assert!(persisted.color_card.is_ok());
+        assert_eq!(persisted.note, "保留备注");
+    }
+
+    #[test]
     fn rename_folder_updates_descendants_and_every_asset_membership() {
         let mut fixture = fixture();
         let reference = fixture
@@ -1010,6 +1136,88 @@ mod tests {
                 .folder
                 .as_deref(),
             Some("灵感/构图")
+        );
+    }
+
+    #[test]
+    fn move_folder_reparents_the_whole_subtree_and_every_asset_membership() {
+        let mut fixture = fixture();
+        let reference = fixture
+            .catalog
+            .create_folder(None, &FolderName::parse("参考").expect("名称"))
+            .expect("创建来源父文件夹");
+        let composition = fixture
+            .catalog
+            .create_folder(Some(&reference), &FolderName::parse("构图").expect("名称"))
+            .expect("创建待移动文件夹");
+        fixture
+            .catalog
+            .create_folder(Some(&composition), &FolderName::parse("人物").expect("名称"))
+            .expect("创建后代文件夹");
+        let project = fixture
+            .catalog
+            .create_folder(None, &FolderName::parse("项目 A").expect("名称"))
+            .expect("创建目标父文件夹");
+        let source = write_png(&fixture.source, "三分法.png", [255, 0, 0, 255]);
+        let sidecar = import_with(
+            &mut fixture.catalog,
+            &source,
+            Some("参考/构图/人物"),
+            &[],
+        );
+
+        let moved = fixture
+            .catalog
+            .move_folder(&composition, Some(&project), |_| Ok(()))
+            .expect("移动文件夹子树");
+
+        assert_eq!(moved.as_str(), "项目 A/构图");
+        assert_eq!(
+            fixture
+                .catalog
+                .library()
+                .read_folders()
+                .expect("读取清单")
+                .folders,
+            vec![
+                "参考".to_owned(),
+                "项目 A".to_owned(),
+                "项目 A/构图".to_owned(),
+                "项目 A/构图/人物".to_owned(),
+            ]
+        );
+        assert_eq!(
+            AssetSidecar::read(&fixture.catalog.library().sidecar_path(&sidecar.hash))
+                .expect("读取侧车")
+                .folder
+                .as_deref(),
+            Some("项目 A/构图/人物")
+        );
+    }
+
+    #[test]
+    fn move_folder_refuses_its_own_descendant_without_changing_authority() {
+        let mut fixture = fixture();
+        let reference = fixture
+            .catalog
+            .create_folder(None, &FolderName::parse("参考").expect("名称"))
+            .expect("创建来源文件夹");
+        let composition = fixture
+            .catalog
+            .create_folder(Some(&reference), &FolderName::parse("构图").expect("名称"))
+            .expect("创建后代文件夹");
+        let folders_before = std::fs::read(fixture.catalog.library().folders_path())
+            .expect("读取原文件夹清单字节");
+
+        let error = fixture
+            .catalog
+            .move_folder(&reference, Some(&composition), |_| Ok(()))
+            .expect_err("本应拒绝移动到自身后代");
+
+        assert_eq!(error.code, Code::LibraryFolderInvalid);
+        assert_eq!(
+            std::fs::read(fixture.catalog.library().folders_path()).expect("读回文件夹清单字节"),
+            folders_before
         );
     }
 

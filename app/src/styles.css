@@ -216,11 +216,19 @@ button:disabled {
 }
 
 .prompt-workspace.rail-collapsed {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 3.5rem minmax(0, 1fr);
 }
 
 .prompt-workspace.rail-collapsed.with-inspector {
-  grid-template-columns: minmax(0, 1fr) var(--workspace-inspector-width, 300px);
+  grid-template-columns: 3.5rem minmax(0, 1fr) var(--workspace-inspector-width, 300px);
+}
+
+.prompt-workspace.with-inspector.inspector-collapsed {
+  grid-template-columns: var(--workspace-rail-width, 240px) minmax(0, 1fr) 3.5rem;
+}
+
+.prompt-workspace.rail-collapsed.with-inspector.inspector-collapsed {
+  grid-template-columns: 3.5rem minmax(0, 1fr) 3.5rem;
 }
 
 .catalog-rail {
@@ -484,41 +492,6 @@ button:disabled {
   color: inherit;
   font-family: var(--font-mono);
   font-size: var(--text-size-xs);
-}
-
-/* 已应用搜索条件（任务 11.1）：每条是一枚可单独移除的芯片，把当前查询
-   呈现为显式状态；无条件时组件不渲染，这里只负责外观。 */
-.filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding-block: var(--space-3) 0;
-}
-
-.filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.28rem 0.3rem 0.28rem 0.62rem;
-  color: var(--text-secondary);
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-size-sm);
-}
-
-.filter-chip button {
-  display: grid;
-  place-items: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  padding: 0;
-  color: var(--text-danger);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-size-md);
-  line-height: 1;
 }
 
 .trash-toolbar {

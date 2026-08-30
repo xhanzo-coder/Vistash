@@ -4,7 +4,7 @@
 
 ## 自动化浏览器检查
 
-- `app-shell-integration-check.py`：默认新版 App 的一级导航、全局定位、顶栏菜单、任务中心、设置、无水平溢出与页面错误。
+- `app-shell-integration-check.py`：默认新版 App 的一级导航、全局定位、顶栏菜单、无任务中心入口、设置、无水平溢出与页面错误。
 - `import-entry-check.py`：深浅主题与宽窄窗口下的文件/文件夹/剪贴板入口、文本框粘贴隔离和空状态引导。
 - `outbound-check.py`：复制、默认程序打开、导出、冲突跳过和四种主题/窗口组合。
 - `lightbox-check.py`：灯箱键盘、焦点、缩放、背景、错误重试、返回滚动位置和租约释放。

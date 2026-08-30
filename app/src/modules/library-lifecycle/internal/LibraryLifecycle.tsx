@@ -12,7 +12,7 @@ import { parseLibraryId } from "../../../app/common";
 import { Button } from "../../../ui/button/Button";
 import { ConfirmDialog } from "../../../ui/dialog/Dialog";
 import { Progress } from "../../../ui/progress/Progress";
-import { TaskCenterPopover } from "../../../app/shell/TaskCenterPopover";
+import { WindowControls } from "../../../app/shell/WindowControls";
 import brandMark from "../../../assets/brand/vistash-mark.svg";
 import type {
   MigrationProgress,
@@ -48,6 +48,22 @@ type V3ConflictEntry = Extract<V3MigrationPlanEntry, { kind: "conflict" }>;
 
 const NUMBER_FORMAT = new Intl.NumberFormat("zh-CN");
 
+function LifecycleWindowFrame({ children }: { children: ReactNode }): ReactNode {
+  return (
+    <div className={styles.windowFrame}>
+      <header className={styles.windowBar} data-tauri-drag-region>
+        <div className={styles.windowBrand} data-tauri-drag-region translate="no">
+          <img src={brandMark} width="24" height="24" alt="" aria-hidden="true" />
+          <span>Vistash</span>
+        </div>
+        <div className={styles.windowDragRegion} data-tauri-drag-region aria-hidden="true" />
+        <WindowControls />
+      </header>
+      <div className={styles.windowContent}>{children}</div>
+    </div>
+  );
+}
+
 function displayNameFromPath(path: string): string {
   const normalized = path.replace(/[\\/]+$/, "");
   if (normalized.length === 0) throw new TypeError(`库路径没有可显示名称：${path}`);
@@ -78,7 +94,7 @@ function Welcome({
   onChoose: (purpose: Extract<LibraryPickerPurpose, "create" | "open">) => void;
 }): ReactNode {
   return (
-    <main className={styles.welcome}>
+    <LifecycleWindowFrame><main className={styles.welcome}>
       <section className={styles.welcomeCopy}>
         <div className={styles.wordmark} translate="no">
           <img
@@ -112,7 +128,7 @@ function Welcome({
         <ArchiveIcon />
         <span>素材与可读元数据保存在你选择的位置</span>
       </aside>
-    </main>
+    </main></LifecycleWindowFrame>
   );
 }
 
@@ -129,7 +145,7 @@ function FailureView({
 }): ReactNode {
   const needsMigration = error.code === "library.format_too_old";
   return (
-    <main className={styles.failurePage}>
+    <LifecycleWindowFrame><main className={styles.failurePage}>
       <section className={styles.failureCard}>
         <WarningIcon className={styles.failureIcon} aria-hidden="true" />
         <p className={styles.eyebrow}>{needsMigration ? "LIBRARY MIGRATION" : "LIBRARY UNAVAILABLE"}</p>
@@ -157,7 +173,7 @@ function FailureView({
           <Button onClick={() => onChoose("open")}>打开其他库</Button>
         </div>
       </section>
-    </main>
+    </main></LifecycleWindowFrame>
   );
 }
 
@@ -170,13 +186,10 @@ function MigrationProgressView({
 }): ReactNode {
   const label = committing ? "正在提交库格式迁移" : "正在准备迁移方案";
   return (
-    <main className={styles.migrationProgressPage}>
+    <LifecycleWindowFrame><main className={styles.migrationProgressPage}>
       <section className={styles.migrationProgressCard}>
         <p className={styles.eyebrow}>LIBRARY MIGRATION</p>
         <h1>{label}</h1>
-        <div className={styles.migrationTaskCenter}>
-          <TaskCenterPopover taskCenter={appTaskCenter} />
-        </div>
         <p>
           {committing
             ? "正在替换权威元数据并重建索引，此阶段不能取消。"
@@ -191,7 +204,7 @@ function MigrationProgressView({
           <p className={styles.currentFile}>{progress.current_filename}</p>
         )}
       </section>
-    </main>
+    </main></LifecycleWindowFrame>
   );
 }
 
@@ -214,7 +227,7 @@ function MigrationPlanView({
   const automaticCount = plan.entries.length - conflicts.length;
   const complete = resolutions.size === conflicts.length;
   return (
-    <main className={styles.migrationPage}>
+    <LifecycleWindowFrame><main className={styles.migrationPage}>
       <header className={styles.migrationHeader}>
         <div>
           <p className={styles.eyebrow}>FOLDER RESOLUTION</p>
@@ -224,7 +237,6 @@ function MigrationPlanView({
           </p>
         </div>
         <div className={styles.migrationHeaderActions}>
-          <TaskCenterPopover taskCenter={appTaskCenter} />
           <Button variant="ghost" onClick={onCancel}>退出迁移</Button>
         </div>
       </header>
@@ -264,7 +276,7 @@ function MigrationPlanView({
           onConfirm={onCommit}
         />
       </footer>
-    </main>
+    </main></LifecycleWindowFrame>
   );
 }
 
@@ -276,7 +288,6 @@ export function LibraryLifecycle({
   children?: (context: OpenLibraryContext, controls: LibraryLifecycleControls) => ReactNode;
 }): ReactNode {
   const [localStatus, setLocalStatus] = useState<LibraryStatus | null>(null);
-  const [pickerRequested, setPickerRequested] = useState(false);
   const [operation, setOperation] = useState<OperationState>({ kind: "idle" });
   const migrationTaskId = useRef<string | null>(null);
   const status = useQuery({
@@ -296,7 +307,6 @@ export function LibraryLifecycle({
       }
       const next = await port.open(path);
       setLocalStatus(next);
-      setPickerRequested(false);
       setOperation({ kind: "idle" });
     } catch (raw) {
       setOperation({ kind: "failure", path, error: asAppError(raw) });
@@ -363,7 +373,6 @@ export function LibraryLifecycle({
       appTaskCenter.complete(registration.record.id, { counts: { succeeded: 1, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: null });
       migrationTaskId.current = null;
       setLocalStatus(next);
-      setPickerRequested(false);
       setOperation({ kind: "idle" });
     } catch (raw) {
       const error = asAppError(raw);
@@ -373,7 +382,7 @@ export function LibraryLifecycle({
     }
   };
 
-  if (status.isPending) return <main><p role="status">正在恢复上次的库…</p></main>;
+  if (status.isPending) return <LifecycleWindowFrame><main><p role="status">正在恢复上次的库…</p></main></LifecycleWindowFrame>;
   if (status.isError) {
     return (
       <FailureView
@@ -383,7 +392,7 @@ export function LibraryLifecycle({
       />
     );
   }
-  if (operation.kind === "busy") return <main className={styles.centered}><p role="status">{operation.label}</p></main>;
+  if (operation.kind === "busy") return <LifecycleWindowFrame><main className={styles.centered}><p role="status">{operation.label}</p></main></LifecycleWindowFrame>;
   if (operation.kind === "preparing") {
     return <MigrationProgressView committing={false} progress={operation.progress} />;
   }
@@ -421,18 +430,13 @@ export function LibraryLifecycle({
       />
     );
   }
-  const effectiveStatus = pickerRequested
-    ? { path: null, library_id: null, recorded_path: null, problem: null }
-    : localStatus ?? status.data;
+  const effectiveStatus = localStatus ?? status.data;
   const context = compatibleContext(effectiveStatus);
   if (context !== null) {
     if (children === undefined) throw new Error("LibraryLifecycle 缺少工作现场 render prop");
     return children(context, {
-      openOtherLibrary: () => {
-        setPickerRequested(true);
-        setLocalStatus(null);
-        setOperation({ kind: "idle" });
-      },
+      createNewLibrary: () => void chooseLibrary("create"),
+      openOtherLibrary: () => void chooseLibrary("open"),
     });
   }
   if (effectiveStatus.problem === null && effectiveStatus.recorded_path === null) {

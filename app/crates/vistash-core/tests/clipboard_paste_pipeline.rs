@@ -7,6 +7,7 @@
 //! 内容查重必须与文件导入完全一致（设计第十条）。
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use vistash_core::clipboard::{bitmap_to_png, clipboard_image_display_name, BitmapImage};
@@ -127,6 +128,52 @@ fn pasted_bitmap_becomes_a_new_png_asset_via_the_coordinator() {
         }
         other => panic!("来源身份必须是 Clipboard，实际是 {other:?}"),
     }
+}
+
+#[test]
+fn realistic_clipboard_bitmap_pipeline_stays_within_the_interaction_budget() {
+    const WIDTH: usize = 1254;
+    const HEIGHT: usize = 1254;
+    let mut rgba = Vec::with_capacity(WIDTH * HEIGHT * 4);
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            rgba.extend_from_slice(&[
+                (x % 251) as u8,
+                (y % 241) as u8,
+                ((x + y) % 239) as u8,
+                255,
+            ]);
+        }
+    }
+    let bitmap = BitmapImage::new(WIDTH, HEIGHT, rgba).expect("构造真实尺寸剪贴板位图");
+    let started = Instant::now();
+    let bytes = bitmap_to_png(&bitmap).expect("快速编码 PNG");
+    let f = fixture();
+    let runs = TransferRuns::new();
+    let run = runs.begin(&f.library).expect("开始剪贴板导入");
+    let request = ImportRequest {
+        sources: vec![ImportSource::PngBytes {
+            bytes,
+            filename: "剪贴板图片 性能门禁.png".to_owned(),
+            captured_at: Utc::now(),
+        }],
+        current_folder: None,
+    };
+    let report = import_sources(
+        &f.library,
+        &request,
+        &[],
+        &run,
+        &mut NoopTransferObserver,
+    )
+    .expect("真实尺寸剪贴板位图导入");
+    let elapsed = started.elapsed();
+
+    assert_eq!(report.imported.len(), 1);
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "1254×1254 剪贴板位图完整管线耗时 {elapsed:?}，超过 5 秒交互门禁"
+    );
 }
 
 #[test]

@@ -10,10 +10,51 @@ import { createFolder, deleteFolder, renameFolder } from "../../../shared/ipc";
 import { asAppError, IpcError } from "../../../shared/errors";
 import { Button } from "../../../ui/button/Button";
 import { ConfirmDialog, Dialog } from "../../../ui/dialog/Dialog";
+import { InlineFolderCreatorForm } from "../../../features/workspace/FolderTree";
 import styles from "./AssetLibraryWorkspace.module.css";
 
-export type FolderChange = { kind: "create"; path: string } | { kind: "rename"; previousPath: string; path: string } | { kind: "delete"; path: string };
+export type FolderChange =
+  | { kind: "create"; path: string }
+  | { kind: "rename" | "move"; previousPath: string; path: string }
+  | { kind: "delete"; path: string };
 type FolderRequest = { kind: "create"; parent: string | null; name: string } | { kind: "rename"; path: string; name: string };
+
+/** 树内即时创建：父位置由组件所在树节点表达，不再让使用者重复选择。 */
+export function InlineFolderCreator({ libraryId, parent, disabled, onCommitted, onCancel }: {
+  libraryId: LibraryId;
+  parent: string | null;
+  disabled: boolean;
+  onCommitted: (change: FolderChange) => Promise<void>;
+  onCancel: () => void;
+}): ReactNode {
+  const taskIds = useRef(new WeakMap<object, string>());
+  const create = useMutation({
+    scope: { id: `asset-organization:${libraryId}` },
+    mutationFn: async (request: { parent: string | null; name: string }) => {
+      const registration = appTaskCenter.register({ kind: "folder_mutation", title: "新建文件夹", libraryId, stoppable: false, concurrencyKey: null });
+      if (registration.kind !== "registered") throw new Error("新建文件夹任务意外触发并发拒绝");
+      taskIds.current.set(request, registration.record.id);
+      return createFolder(request.parent, request.name);
+    },
+    onSuccess: async (path, request) => {
+      const taskId = taskIds.current.get(request);
+      if (taskId === undefined) throw new Error("新建文件夹成功但缺少任务中心标识");
+      appTaskCenter.complete(taskId, { counts: { succeeded: 1, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: null });
+      await onCommitted({ kind: "create", path });
+      onCancel();
+    },
+    onError: (error, request) => {
+      const taskId = taskIds.current.get(request);
+      if (taskId === undefined) throw new Error("新建文件夹失败但缺少任务中心标识");
+      const appError = asAppError(error);
+      appTaskCenter.complete(taskId, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: appError });
+      if (!(error instanceof IpcError)) throw error;
+    },
+  });
+  if (create.error !== null && !(create.error instanceof IpcError)) throw create.error;
+  return <InlineFolderCreatorForm parent={parent} disabled={disabled} busy={create.isPending} error={create.error?.message ?? null}
+    onSubmit={(name) => create.mutate({ parent, name })} onCancel={onCancel} />;
+}
 
 /** 文件夹表单拥有未保存输入；后端成功之前不改查询和导航。 */
 type FolderControlsProps = {
@@ -22,13 +63,20 @@ type FolderControlsProps = {
   folders: readonly string[];
   disabled: boolean;
   onCommitted: (change: FolderChange) => Promise<void>;
+  /** 右键节点动作按需挂载时直接打开；标题栏入口保持默认关闭。 */
+  initiallyOpen?: boolean;
+  onClosed?: () => void;
 };
 
-export function FolderEditor({ mode, libraryId, currentFolder, folders, disabled, onCommitted }: FolderControlsProps & { mode: "create" | "rename" }): ReactNode {
+export function FolderEditor({ mode, libraryId, currentFolder, folders, disabled, onCommitted, initiallyOpen = false, onClosed }: FolderControlsProps & { mode: "create" | "rename" }): ReactNode {
   const nameId = useId();
   const parentId = useId();
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
+  const [open, setOpen] = useState(initiallyOpen);
+  const [name, setName] = useState(
+    mode === "rename" && currentFolder !== null
+      ? currentFolder.slice(currentFolder.lastIndexOf("/") + 1)
+      : "",
+  );
   const [parent, setParent] = useState<string | null>(currentFolder);
   const taskIds = useRef(new WeakMap<object, string>());
   const title = mode === "create" ? "新建文件夹" : "重命名文件夹";
@@ -47,6 +95,7 @@ export function FolderEditor({ mode, libraryId, currentFolder, folders, disabled
       appTaskCenter.complete(taskId, outcome);
       await onCommitted(request.kind === "create" ? { kind: "create", path } : { kind: "rename", previousPath: request.path, path });
       setOpen(false);
+      onClosed?.();
     },
     onError: (error, request) => {
       const taskId = taskIds.current.get(request);
@@ -57,12 +106,14 @@ export function FolderEditor({ mode, libraryId, currentFolder, folders, disabled
     },
   });
   if (save.error !== null && !(save.error instanceof IpcError)) throw save.error;
+  const trigger = initiallyOpen ? undefined : <Button size="compact" variant="ghost" className={styles.folderAction} title={title} startIcon={mode === "create" ? <PlusIcon /> : <PencilSimpleIcon />} disabled={disabled || (mode === "rename" && folders.length === 0)}>{title}</Button>;
   return <Dialog title={title} description={mode === "create" ? "创建逻辑文件夹，不会在磁盘建立素材目录。" : "重命名会更新所有子文件夹和素材归属，不改动图片本体。"}
     open={open} onOpenChange={(next) => {
       if (save.isPending) return;
       if (next) { setName(mode === "create" || currentFolder === null ? "" : currentFolder.slice(currentFolder.lastIndexOf("/") + 1)); setParent(currentFolder); save.reset(); }
       setOpen(next);
-    }} trigger={<Button size="compact" variant="ghost" className={styles.folderAction} title={title} startIcon={mode === "create" ? <PlusIcon /> : <PencilSimpleIcon />} disabled={disabled || (mode === "rename" && folders.length === 0)}>{title}</Button>}>
+      if (!next) onClosed?.();
+    }} {...(trigger === undefined ? {} : { trigger })}>
     <form className={styles.folderForm} onSubmit={(event) => {
       event.preventDefault();
       if (mode === "create") save.mutate({ kind: "create", parent, name });
@@ -78,7 +129,7 @@ export function FolderEditor({ mode, libraryId, currentFolder, folders, disabled
           setParent(path === "" ? null : path);
           if (mode === "rename") setName(path.slice(path.lastIndexOf("/") + 1));
         }}>
-        <option value="" disabled={mode === "rename"}>{mode === "create" ? "库根位置" : "请选择文件夹"}</option>
+        <option value="" disabled={mode === "rename"}>{mode === "create" ? "顶层" : "请选择文件夹"}</option>
         {folders.map((path) => <option key={path} value={path}>{path}</option>)}
       </select>
       <label htmlFor={nameId}>文件夹名称</label>
@@ -90,9 +141,9 @@ export function FolderEditor({ mode, libraryId, currentFolder, folders, disabled
 }
 
 /** 删除只作用于逻辑组织；二次确认明确告知子树范围与图片保留语义。 */
-export function DeleteFolderDialog({ libraryId, currentFolder, folders, disabled, onCommitted }: FolderControlsProps): ReactNode {
+export function DeleteFolderDialog({ libraryId, currentFolder, folders, disabled, onCommitted, initiallyOpen = false, onClosed }: FolderControlsProps): ReactNode {
   const targetId = useId();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const [target, setTarget] = useState<string | null>(currentFolder);
   const taskIdRef = useRef<string | null>(null);
   const deletion = useMutation({
@@ -103,7 +154,7 @@ export function DeleteFolderDialog({ libraryId, currentFolder, folders, disabled
       taskIdRef.current = registration.record.id;
       return deleteFolder(path);
     },
-    onSuccess: async (_result, path) => { await onCommitted({ kind: "delete", path }); setOpen(false); },
+    onSuccess: async (_result, path) => { await onCommitted({ kind: "delete", path }); setOpen(false); onClosed?.(); },
     onSettled: (_result, error) => {
       const taskId = taskIdRef.current;
       taskIdRef.current = null;
@@ -118,12 +169,14 @@ export function DeleteFolderDialog({ libraryId, currentFolder, folders, disabled
     },
   });
   if (deletion.error !== null && !(deletion.error instanceof IpcError)) throw deletion.error;
+  const trigger = initiallyOpen ? undefined : <Button size="compact" variant="ghost" className={styles.folderAction} title="删除文件夹" startIcon={<TrashIcon />} disabled={disabled || folders.length === 0}>删除文件夹</Button>;
   return <Dialog title="删除文件夹" description="仅删除文件夹组织关系，图片保留在素材库。" open={open}
     onOpenChange={(next) => {
       if (deletion.isPending) return;
       if (next) { setTarget(currentFolder); deletion.reset(); }
       setOpen(next);
-    }} trigger={<Button size="compact" variant="ghost" className={styles.folderAction} title="删除文件夹" startIcon={<TrashIcon />} disabled={disabled || folders.length === 0}>删除文件夹</Button>}>
+      if (!next) onClosed?.();
+    }} {...(trigger === undefined ? {} : { trigger })}>
     <div className={styles.folderForm}>
       <label htmlFor={targetId}>目标文件夹</label>
       <select id={targetId} name="folder-target" value={target === null ? "" : target} disabled={deletion.isPending}

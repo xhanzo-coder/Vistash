@@ -15,8 +15,10 @@ import type {
   PromptRow,
   PromptSnapshot,
 } from "../../../shared/types";
-import { PromptWorkspace } from "./PromptWorkspace";
+import { PromptLibraryWorkspace, blockIfPromptDraftDirty, type PromptLibraryEntry } from "../index";
+import { parseLibraryId, type LibraryId } from "../../../app/common";
 import { DEFAULT_LAYOUT } from "../../../features/workspace/libraryLayout";
+import { UiProvider } from "../../../ui/UiProvider";
 
 /** 合成一条最小 PromptRow；带图变体按序号决定关联数量，与瀑布流测试同构。 */
 function makePrompt(index: number): PromptRow {
@@ -48,6 +50,17 @@ const SNAPSHOT: PromptSnapshot = {
   trash_count: 3,
 };
 
+const LIB_TEST = parseLibraryId("018f3c9e-6c00-7000-8000-0000000000f0");
+const LIB_A = parseLibraryId("018f3c9e-6c00-7000-8000-0000000000fa");
+const LIB_B = parseLibraryId("018f3c9e-6c00-7000-8000-0000000000fb");
+
+function libraryIdOf(value: string | null): LibraryId {
+  if (value === null) return LIB_TEST;
+  if (value === "library-a") return LIB_A;
+  if (value === "library-b") return LIB_B;
+  return parseLibraryId(value);
+}
+
 let queries: PromptQuery[];
 let ipcCalls: Array<{ command: string; payload: unknown }>;
 /** 回收站位置应答的条目：默认空库，回收站动作测试按需放入。 */
@@ -68,8 +81,11 @@ let catalogReply: CatalogSnapshot | null;
 let savedLayouts: Record<string, unknown>;
 let excludeFilteredPrompts: boolean;
 let failPromptSave: boolean;
+let failPromptCreate: boolean;
 let simulateFolderMutation: boolean;
 let liveFolder: string | null;
+/** 正常区快照条目；空状态测试按需设为空，不修改共享 fixture。 */
+let activePrompts: PromptRow[];
 
 class DormantIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -152,8 +168,10 @@ beforeEach(() => {
   savedLayouts = {};
   excludeFilteredPrompts = false;
   failPromptSave = false;
+  failPromptCreate = false;
   simulateFolderMutation = false;
   liveFolder = "人像";
+  activePrompts = [...SNAPSHOT.prompts];
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:vistash-test"),
@@ -176,7 +194,7 @@ beforeEach(() => {
       }
       return query.location === "trash"
         ? { ...SNAPSHOT, prompts: trashPrompts, trash_count: SNAPSHOT.trash_count }
-        : SNAPSHOT;
+        : { ...SNAPSHOT, prompts: activePrompts };
     }
     if (
       command === "set_prompt_favorite" ||
@@ -189,7 +207,23 @@ beforeEach(() => {
     }
     if (command === "create_prompt_folder") return "人像/室外";
     if (command === "rename_prompt_folder") { liveFolder = "肖像"; return "肖像"; }
+    if (command === "move_prompt_folder") return "室内";
     if (command === "delete_prompt_folder") { liveFolder = null; return undefined; }
+    if (command === "create_prompt") {
+      if (failPromptCreate) throw { code: "library.prompt_write_failed", detail: "提示词目录只读" };
+      if (!isRecordPayload(payload) || !isRecordPayload(payload.prompt) || typeof payload.prompt.body !== "string") throw new TypeError("create_prompt 缺少正文");
+      const created: PromptRow = {
+        ...makePrompt(99),
+        id: "prompt-created",
+        body: payload.prompt.body,
+        title: typeof payload.prompt.title === "string" ? payload.prompt.title : null,
+        model: typeof payload.prompt.model === "string" ? payload.prompt.model : null,
+        parameters: typeof payload.prompt.parameters === "string" ? payload.prompt.parameters : null,
+        folders: Array.isArray(payload.prompt.folders) && payload.prompt.folders.every((folder) => typeof folder === "string") ? payload.prompt.folders : [],
+      };
+      activePrompts = [created, ...activePrompts];
+      return { ...created, format_version: 2, deleted_from_folders: null };
+    }
     if (command === "restore_prompt") return restoreOutcome;
     if (command === "purge_prompt_trash") return purgeReply;
     // 多选分区的批量关联选择器自取图片候选（任务 11.2）：默认空库。
@@ -264,7 +298,14 @@ test("收藏筛选先解决正文草稿：取消不切换，保存失败保留�
     if (editor === null) throw new Error("缺少正文编辑器");
     await act(async () => setInputValue(editor, "筛选前尚未保存的正文"));
     const queryCount = queries.length;
-    await act(async () => buttonWithText(harness.container, "★ 只看收藏").click());
+    const favoriteFilter = () => {
+      const button = harness.container.querySelector<HTMLButtonElement>(
+        'button[aria-label="收藏提示词"]',
+      );
+      if (button === null) throw new Error("缺少收藏提示词入口");
+      return button;
+    };
+    await act(async () => favoriteFilter().click());
     await flush();
     expect(harness.container.querySelector('[role="dialog"]')).not.toBeNull();
     expect(editor.isConnected).toBe(true);
@@ -273,7 +314,7 @@ test("收藏筛选先解决正文草稿：取消不切换，保存失败保留�
     expect(editor.value).toBe("筛选前尚未保存的正文");
     expect(queries).toHaveLength(queryCount);
 
-    await act(async () => buttonWithText(harness.container, "★ 只看收藏").click());
+    await act(async () => favoriteFilter().click());
     failPromptSave = true;
     await act(async () => buttonWithText(harness.container, "保存并离开").click());
     expect(harness.container.querySelector('[data-error-code="library.prompt_write_failed"]')).not.toBeNull();
@@ -282,7 +323,7 @@ test("收藏筛选先解决正文草稿：取消不切换，保存失败保留�
     expect(queries).toHaveLength(queryCount);
 
     failPromptSave = false;
-    await act(async () => buttonWithText(harness.container, "★ 只看收藏").click());
+    await act(async () => favoriteFilter().click());
     await act(async () => buttonWithText(harness.container, "保存并离开").click());
     await flush();
     expect(harness.container.querySelector('textarea[name="prompt-body"]')).toBeNull();
@@ -292,15 +333,11 @@ test("收藏筛选先解决正文草稿：取消不切换，保存失败保留�
   }
 });
 
-test.each(["搜索", "文件夹", "标签", "回收站", "移除条件"])("%s 查询入口放弃草稿后才执行原始意图", async (entry) => {
+test.each(["搜索", "文件夹", "标签", "回收站"])("%s 查询入口放弃草稿后才执行原始意图", async (entry) => {
   const harness = await setupWorkspace();
   try {
     const search = harness.container.querySelector<HTMLInputElement>('input[name="prompt-search"]');
     if (search === null) throw new Error("缺少搜索框");
-    if (entry === "移除条件") {
-      await act(async () => setInput(search, "旧搜索"));
-      await flush();
-    }
     const card = harness.container.querySelector<HTMLButtonElement>('[data-prompt-card][data-id="prompt-2"]');
     if (card === null) throw new Error("缺少提示词卡片");
     await act(async () => card.click());
@@ -314,9 +351,8 @@ test.each(["搜索", "文件夹", "标签", "回收站", "移除条件"])("%s �
       if (entry === "搜索") setInput(search, "新搜索");
       else {
         const selector = entry === "文件夹" ? 'button[data-folder="人像"]'
-          : entry === "标签" ? '.tag-filter button'
-          : entry === "回收站" ? 'button[aria-label="回收站"]'
-          : 'button[aria-label="移除搜索条件 旧搜索"]';
+          : entry === "标签" ? '[aria-label="标签筛选"] [data-tag]'
+          : 'button[aria-label="回收站"]';
         const trigger = harness.container.querySelector<HTMLButtonElement>(selector);
         if (trigger === null) throw new Error(`缺少 ${entry} 入口`);
         trigger.click();
@@ -334,7 +370,6 @@ test.each(["搜索", "文件夹", "标签", "回收站", "移除条件"])("%s �
     if (entry === "文件夹") expect(nextQuery?.folder).toEqual({ kind: "path", path: "人像" });
     if (entry === "标签") expect(nextQuery?.tags).toEqual(["夜景"]);
     if (entry === "回收站") expect(nextQuery?.location).toBe("trash");
-    if (entry === "移除条件") expect(nextQuery?.text).toBe("");
   } finally {
     await harness.unmount();
   }
@@ -398,12 +433,15 @@ test.each(["重命名", "删除"])("%s 当前文件夹在任何权威写入之�
     await act(async () => setInputValue(editor, "文件夹变更前的草稿"));
     const trigger = async () => {
       if (operation === "重命名") {
-        const name = harness.container.querySelector<HTMLInputElement>('input[name="rename-prompt-folder"]');
+        const openRename = await promptFolderMenuItem("人像", "重命名");
+        await act(async () => openRename.click());
+        const name = document.querySelector<HTMLInputElement>('input[name="rename-prompt-folder"]');
         if (name === null) throw new Error("缺少名称输入框");
         await act(async () => setInput(name, "肖像"));
-        await act(async () => buttonWithText(harness.container, "保存名称").click());
+        await act(async () => buttonWithText(document, "保存名称").click());
       } else {
-        await act(async () => buttonWithText(harness.container, "删除文件夹").click());
+        const deleteFolder = await promptFolderMenuItem("人像", "删除");
+        await act(async () => deleteFolder.click());
         const dialog = harness.container.querySelector('[role="dialog"]');
         if (dialog === null) throw new Error("缺少危险操作确认");
         await act(async () => buttonWithText(dialog, "删除文件夹").click());
@@ -485,6 +523,35 @@ function buttonWithText(container: ParentNode, text: string): HTMLButtonElement 
   return button;
 }
 
+async function promptFolderMenuItem(path: string, label: string): Promise<HTMLElement> {
+  const folder = document.querySelector<HTMLElement>(`[data-folder="${path}"]`);
+  if (folder === null) throw new Error(`缺少提示词文件夹：${path}`);
+  await act(async () => folder.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+  await flush();
+  const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === label);
+  if (item === undefined) throw new Error(`提示词文件夹快捷菜单缺少入口：${label}`);
+  return item;
+}
+
+function installPointerStubs(): void {
+  Object.defineProperty(HTMLElement.prototype, "setPointerCapture", { configurable: true, value: vi.fn() });
+  Object.defineProperty(HTMLElement.prototype, "releasePointerCapture", { configurable: true, value: vi.fn() });
+  Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", { configurable: true, value: () => true });
+}
+
+async function pointer(target: HTMLElement, type: string, x: number, y: number): Promise<void> {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 });
+  Object.defineProperties(event, {
+    pointerId: { value: 1 },
+    pointerType: { value: "mouse" },
+    isPrimary: { value: true },
+  });
+  await act(async () => {
+    target.dispatchEvent(event);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+}
+
 function isPromptQuery(value: unknown): value is PromptQuery {
   if (typeof value !== "object" || value === null) return false;
   if (!("text" in value) || typeof value.text !== "string") return false;
@@ -523,7 +590,15 @@ async function setupWorkspace(
     next: (GlobalLocateRequest & { nonce: number }) | null,
     id: string | null,
   ) => {
-    root.render(<PromptWorkspace libraryId={id} locate={next} />);
+    const sessionId = libraryIdOf(id);
+    const entry: PromptLibraryEntry = next === null
+      ? { kind: "resume" }
+      : { kind: "locate", requestId: `prompt-locate-${next.nonce}`, id: next.id, inTrash: next.inTrash };
+    root.render(
+      <UiProvider>
+        <PromptLibraryWorkspace session={{ id: sessionId, displayName: "测试提示词库" }} active entry={entry} />
+      </UiProvider>,
+    );
   };
   await act(async () => {
     render(locate, libraryId);
@@ -567,7 +642,9 @@ test("工作区组合查询：搜索、文件夹、标签、收藏与回收站�
   await flush();
   expect(queries.at(-1)?.tags).toEqual(["夜景"]);
 
-  const favorite = harness.container.querySelector<HTMLButtonElement>(".favorite-filter");
+  const favorite = harness.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="收藏提示词"]',
+  );
   if (favorite === null) throw new Error("缺少收藏筛选按钮");
   await act(async () => favorite.click());
   await flush();
@@ -584,7 +661,66 @@ test("工作区组合查询：搜索、文件夹、标签、收藏与回收站�
   await harness.unmount();
 });
 
-test("提示词分类栏可以在当前文件夹下新建子文件夹", async () => {
+test("Archive Desk 提示词骨架使用扁平导航与单行查询栏，不保留旧标签和文字折叠按钮", async () => {
+  const harness = await setupWorkspace();
+  try {
+    expect(harness.container.querySelector('[data-ui="prompt-workbench"]')).not.toBeNull();
+    const navigation = harness.container.querySelector('[aria-label="提示词导航"]');
+    expect(navigation).not.toBeNull();
+    expect(navigation?.querySelector('[aria-label="提示词文件夹操作"]')).not.toBeNull();
+    const toolbar = harness.container.querySelector('[aria-label="提示词查询与视图"]');
+    expect(toolbar).not.toBeNull();
+    expect(toolbar?.querySelector('button[aria-label="卡片瀑布流"]')).not.toBeNull();
+    expect(toolbar?.querySelector('button[aria-label="详情列表"]')).not.toBeNull();
+    expect(harness.container.querySelector('button[aria-label="收起提示词导航"]')?.textContent).toBe("");
+    expect(harness.container.querySelector('button[aria-label="收起提示词检查器"]')?.textContent).toBe("");
+    for (const obsolete of ["PROMPTS", "PROMPT LIBRARY", "INSPECTOR", "NO PROMPTS", "折叠分类栏", "折叠检查器"]) {
+      expect(harness.container.textContent).not.toContain(obsolete);
+    }
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("提示词空状态区分空库、筛选为空、文件夹为空和回收站为空，不提供虚假入口", async () => {
+  activePrompts = [];
+  excludeFilteredPrompts = true;
+  const harness = await setupWorkspace();
+  try {
+    const emptyState = () => {
+      const state = harness.container.querySelector<HTMLElement>("h3");
+      if (state === null) throw new Error("缺少提示词空状态");
+      return state;
+    };
+    expect(emptyState().textContent).toBe("提示词库还是空的");
+    expect(harness.container.textContent).not.toContain("从检查器新建");
+
+    const search = harness.container.querySelector<HTMLInputElement>('input[name="prompt-search"]');
+    if (search === null) throw new Error("缺少提示词搜索框");
+    await act(async () => setInput(search, "不存在"));
+    await flush();
+    await flush();
+    expect(emptyState().textContent).toBe("没有符合条件的提示词");
+
+    await act(async () => setInput(search, ""));
+    await flush();
+    await flush();
+    const rootFolder = buttonWithText(harness.container, "提示词根位置");
+    await act(async () => rootFolder.click());
+    await flush();
+    expect(emptyState().textContent).toBe("这个位置还没有提示词");
+
+    const trash = harness.container.querySelector<HTMLButtonElement>('button[aria-label="回收站"]');
+    if (trash === null) throw new Error("缺少提示词回收站入口");
+    await act(async () => trash.click());
+    await flush();
+    expect(emptyState().textContent).toBe("提示词回收站为空");
+  } finally {
+    await harness.unmount();
+  }
+});
+
+test("提示词文件夹在树内即时新建子文件夹，不弹出父位置对话框", async () => {
   const harness = await setupWorkspace();
   const currentFolder = harness.container.querySelector<HTMLButtonElement>(
     '[data-folder="人像"]',
@@ -592,7 +728,15 @@ test("提示词分类栏可以在当前文件夹下新建子文件夹", async ()
   if (currentFolder === null) throw new Error("缺少人像文件夹入口");
   await act(async () => currentFolder.click());
 
-  const input = harness.container.querySelector<HTMLInputElement>("#new-prompt-folder");
+  await act(async () =>
+    harness.container
+      .querySelector<HTMLButtonElement>('button[aria-label="新建提示词文件夹"]')
+      ?.click(),
+  );
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  const creator = harness.container.querySelector<HTMLElement>('[data-inline-folder-creator]');
+  expect(creator?.dataset.parent).toBe("人像");
+  const input = creator?.querySelector<HTMLInputElement>('input[name="inline-prompt-folder-name"]') ?? null;
   if (input === null) throw new Error("提示词分类栏缺少新建文件夹输入框");
   setInput(input, "室外");
   const form = input.closest("form");
@@ -615,10 +759,12 @@ test("提示词分类栏可以重命名当前文件夹", async () => {
   if (currentFolder === null) throw new Error("缺少人像文件夹入口");
   await act(async () => currentFolder.click());
 
-  const input = harness.container.querySelector<HTMLInputElement>("#rename-prompt-folder");
+  const rename = await promptFolderMenuItem("人像", "重命名");
+  await act(async () => rename.click());
+  const input = document.querySelector<HTMLInputElement>("#rename-prompt-folder");
   if (input === null) throw new Error("提示词分类栏缺少重命名输入框");
   setInput(input, "肖像");
-  await act(async () => buttonWithText(harness.container, "保存名称").click());
+  await act(async () => buttonWithText(document, "保存名称").click());
   await flush();
 
   expect(ipcCalls).toContainEqual({
@@ -635,7 +781,8 @@ test("提示词分类栏删除当前文件夹前要求确认", async () => {
   );
   if (currentFolder === null) throw new Error("缺少人像文件夹入口");
   await act(async () => currentFolder.click());
-  await act(async () => buttonWithText(harness.container, "删除文件夹").click());
+  const deleteFolder = await promptFolderMenuItem("人像", "删除");
+  await act(async () => deleteFolder.click());
 
   const dialog = harness.container.querySelector<HTMLElement>('[role="dialog"]');
   if (dialog === null) throw new Error("删除提示词文件夹没有二次确认");
@@ -975,7 +1122,7 @@ test("全局定位：查询重置到回收站并选中目标提示词，同一�
   await harness.unmount();
 });
 
-test("已应用条件呈现为可移除芯片：移除搜索保留其余条件", async () => {
+test("浏览范围互斥且不把收藏、文件夹或搜索重复显示成中央条件胶囊", async () => {
   const harness = await setupWorkspace();
 
   const search = harness.container.querySelector<HTMLInputElement>(
@@ -984,25 +1131,141 @@ test("已应用条件呈现为可移除芯片：移除搜索保留其余条件",
   if (search === null) throw new Error("缺少提示词搜索框");
   await act(async () => setInput(search, "人像"));
   await flush();
-  const favorite = harness.container.querySelector<HTMLButtonElement>(".favorite-filter");
+  const favorite = harness.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="收藏提示词"]',
+  );
   if (favorite === null) throw new Error("缺少收藏筛选按钮");
   await act(async () => favorite.click());
   await flush();
-
-  const chips = harness.container.querySelector<HTMLElement>('[aria-label="已应用的搜索条件"]');
-  if (chips === null) throw new Error("缺少已应用条件区");
-  expect(chips.textContent).toContain("搜索：人像");
-  expect(chips.textContent).toContain("只看收藏");
-
-  const removeSearch = chips.querySelector<HTMLButtonElement>('[aria-label="移除搜索条件 人像"]');
-  if (removeSearch === null) throw new Error("缺少搜索条件移除按钮");
-  await act(async () => removeSearch.click());
+  expect(queries.at(-1)).toMatchObject({ text: "", tags: [], folder: { kind: "all" }, favorite: true, location: "active" });
+  expect(harness.container.querySelector('[aria-label="已应用的搜索条件"]')).toBeNull();
+  const root = buttonWithText(harness.container, "提示词根位置");
+  await act(async () => root.click());
   await flush();
-  await flush();
+  expect(queries.at(-1)).toMatchObject({ text: "", tags: [], folder: { kind: "root" }, favorite: null, location: "active" });
+  expect(root.getAttribute("aria-current")).toBe("page");
+  expect(favorite.getAttribute("aria-current")).toBeNull();
   expect(queries.at(-1)?.text).toBe("");
-  expect(queries.at(-1)?.favorite).toBe(true);
-  expect(harness.container.querySelectorAll(".filter-chip").length).toBe(1);
 
+  await harness.unmount();
+});
+
+test("提示词文件夹右键可移到顶层，指针拖动复用同一移动命令", async () => {
+  installPointerStubs();
+  const harness = await setupWorkspace();
+  const moveToTop = await promptFolderMenuItem("人像/室内", "移到顶层");
+  await act(async () => moveToTop.click());
+  await flush();
+  expect(ipcCalls).toContainEqual({
+    command: "move_prompt_folder",
+    payload: { path: "人像/室内", destinationParent: null },
+  });
+
+  const root = harness.container.querySelector<HTMLElement>('[data-folder-tree-root]');
+  const child = harness.container.querySelector<HTMLElement>('[data-folder="人像/室内"]');
+  if (root === null || child === null) throw new Error("提示词文件夹树不完整");
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => root });
+  try {
+    await pointer(child, "pointerdown", 30, 120);
+    await pointer(root, "pointermove", 90, 180);
+    const rootDrop = harness.container.querySelector<HTMLElement>('[data-folder-root-drop]');
+    expect(rootDrop?.textContent).toContain("移到顶层");
+    expect(rootDrop?.dataset.dropActive).toBe("true");
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => rootDrop });
+    await pointer(root, "pointermove", 90, 190);
+    await pointer(root, "pointerup", 90, 190);
+    await flush();
+    expect(ipcCalls.filter((call) => call.command === "move_prompt_folder")).toHaveLength(2);
+  } finally {
+    Reflect.deleteProperty(document, "elementFromPoint");
+  }
+  await harness.unmount();
+});
+
+test("当前文件夹可以聚焦新建提示词，正文保存后沿用该文件夹并聚焦新条目", async () => {
+  const harness = await setupWorkspace();
+  const currentFolder = harness.container.querySelector<HTMLButtonElement>('[data-folder="人像"]');
+  if (currentFolder === null) throw new Error("缺少人像文件夹入口");
+  await act(async () => currentFolder.click());
+  await flush();
+  const create = harness.container.querySelector<HTMLButtonElement>('button[aria-label="新建提示词"]');
+  if (create === null) throw new Error("缺少新建提示词入口");
+  await act(async () => create.click());
+  const composer = harness.container.querySelector<HTMLElement>('[aria-label="新建提示词编辑器"]');
+  if (composer === null) throw new Error("缺少聚焦新建提示词编辑器");
+  const body = composer.querySelector<HTMLTextAreaElement>('textarea[name="prompt-create-body"]');
+  if (body === null) throw new Error("缺少新提示词正文");
+  await act(async () => setInputValue(body, "柔和侧光，克制的胶片颗粒"));
+  await act(async () => buttonWithText(composer, "保存提示词").click());
+  await flush();
+  await flush();
+
+  expect(ipcCalls).toContainEqual({
+    command: "create_prompt",
+    payload: { prompt: { body: "柔和侧光，克制的胶片颗粒", title: null, model: null, parameters: null, folders: ["人像"], tags: [] } },
+  });
+  expect(queries.at(-1)).toMatchObject({ folder: { kind: "path", path: "人像" }, favorite: null, location: "active" });
+  expect(harness.container.querySelector('[aria-label="新建提示词编辑器"]')).toBeNull();
+  const focused = harness.container.querySelector<HTMLElement>('[aria-label="聚焦阅读"]');
+  expect(focused?.textContent).toContain("柔和侧光，克制的胶片颗粒");
+  await harness.unmount();
+});
+
+test("收藏范围用 Ctrl+S 新建到根位置，失败保留草稿并在重试成功后退出收藏", async () => {
+  const harness = await setupWorkspace();
+  const favorite = harness.container.querySelector<HTMLButtonElement>('button[aria-label="收藏提示词"]');
+  if (favorite === null) throw new Error("缺少收藏入口");
+  await act(async () => favorite.click());
+  await flush();
+  const create = harness.container.querySelector<HTMLButtonElement>('button[aria-label="新建提示词"]');
+  if (create === null) throw new Error("缺少新建提示词入口");
+  await act(async () => create.click());
+  const composer = harness.container.querySelector<HTMLElement>('[aria-label="新建提示词编辑器"]');
+  const body = composer?.querySelector<HTMLTextAreaElement>('textarea[name="prompt-create-body"]');
+  if (composer === null || body === null || body === undefined) throw new Error("新建提示词编辑器不完整");
+  await act(async () => setInputValue(body, "高反差边缘光与深色背景"));
+  failPromptCreate = true;
+  await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true })));
+  await flush();
+  expect(harness.container.querySelector('[data-error-code="library.prompt_write_failed"]')).not.toBeNull();
+  expect(body.value).toBe("高反差边缘光与深色背景");
+
+  failPromptCreate = false;
+  await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true, cancelable: true })));
+  await flush();
+  await flush();
+  expect(ipcCalls.filter((call) => call.command === "create_prompt").at(-1)).toEqual({
+    command: "create_prompt",
+    payload: { prompt: { body: "高反差边缘光与深色背景", title: null, model: null, parameters: null, folders: [], tags: [] } },
+  });
+  expect(queries.at(-1)).toMatchObject({ folder: { kind: "root" }, favorite: null, location: "active" });
+  await harness.unmount();
+});
+
+test("新建提示词非空草稿接入全局守卫，留在当前页保留内容，放弃后才继续导航", async () => {
+  const harness = await setupWorkspace();
+  const create = harness.container.querySelector<HTMLButtonElement>('button[aria-label="新建提示词"]');
+  if (create === null) throw new Error("缺少新建提示词入口");
+  await act(async () => create.click());
+  const body = harness.container.querySelector<HTMLTextAreaElement>('textarea[name="prompt-create-body"]');
+  if (body === null) throw new Error("缺少新提示词正文");
+  await act(async () => setInputValue(body, "尚未保存的提示词草稿"));
+  const continued: string[] = [];
+
+  let blocked = false;
+  await act(async () => { blocked = blockIfPromptDraftDirty(() => continued.push("switch-library")); });
+  expect(blocked).toBe(true);
+  await vi.waitFor(() => expect(harness.container.querySelector('[role="dialog"]')).not.toBeNull());
+  await act(async () => buttonWithText(harness.container, "留在当前页").click());
+  expect(body.value).toBe("尚未保存的提示词草稿");
+  expect(continued).toEqual([]);
+
+  await act(async () => { blocked = blockIfPromptDraftDirty(() => continued.push("switch-library")); });
+  expect(blocked).toBe(true);
+  await vi.waitFor(() => expect(harness.container.querySelector('[role="dialog"]')).not.toBeNull());
+  await act(async () => buttonWithText(harness.container, "放弃草稿").click());
+  await vi.waitFor(() => expect(harness.container.querySelector('[aria-label="新建提示词编辑器"]')).toBeNull());
+  expect(continued).toEqual(["switch-library"]);
   await harness.unmount();
 });
 
@@ -1165,7 +1428,7 @@ test("批量移入回收站经二次确认发起 batch_delete_prompts 并回显�
 test("双库布局恢复：滚动偏移按库隔离，切换库各自恢复自己的位置", async () => {
   savedLayouts = {
     // 库 A 已保存过详情列表偏移；库 B 从未保存过。
-    "library-a": {
+    [LIB_A]: {
       assets: DEFAULT_LAYOUT,
       prompts: {
         ...DEFAULT_LAYOUT,
@@ -1173,7 +1436,7 @@ test("双库布局恢复：滚动偏移按库隔离，切换库各自恢复自�
         scrollOffsets: { "prompts-list": 240 },
       },
     },
-    "library-b": {
+    [LIB_B]: {
       assets: DEFAULT_LAYOUT,
       prompts: { ...DEFAULT_LAYOUT, view: "list" },
     },
@@ -1200,7 +1463,7 @@ test("双库布局恢复：滚动偏移按库隔离，切换库各自恢复自�
   await act(async () => harness.rerender(null, "library-b"));
   await flush();
   await flush();
-  const savedA = savedLayouts["library-a"];
+  const savedA = savedLayouts[LIB_A];
   if (!isRecordPayload(savedA) || !isRecordPayload(savedA.prompts)) {
     throw new TypeError("库 A 没有保存提示词 section");
   }
@@ -1256,12 +1519,27 @@ test("宽屏提示词工作台恢复折叠栏位并允许分别展开", async ()
   const harness = await setupWorkspace(null, libraryId);
   await flush();
 
-  expect(harness.container.querySelector(".catalog-rail")).toBeNull();
-  expect(harness.container.querySelector(".inspector-rail")).toBeNull();
-  await act(async () => buttonWithText(harness.container, "展开分类栏").click());
-  await act(async () => buttonWithText(harness.container, "展开检查器").click());
+  const collapsedNavigation = harness.container.querySelector<HTMLElement>(
+    '[aria-label="提示词导航"]',
+  );
+  const collapsedInspector = harness.container.querySelector<HTMLElement>(
+    'aside[aria-label="提示词检查器"]',
+  );
+  expect(collapsedNavigation?.closest("aside")?.dataset.collapsed).toBe("true");
+  expect(collapsedInspector?.dataset.collapsed).toBe("true");
+  const expandNavigation = harness.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="展开提示词导航"]',
+  );
+  const expandInspector = harness.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="展开提示词检查器"]',
+  );
+  if (expandNavigation === null || expandInspector === null) {
+    throw new Error("缺少提示词栏位展开按钮");
+  }
+  await act(async () => expandNavigation.click());
+  await act(async () => expandInspector.click());
 
-  expect(harness.container.querySelector(".catalog-rail")).not.toBeNull();
-  expect(harness.container.querySelector(".inspector-rail")).not.toBeNull();
+  expect(harness.container.querySelector('[aria-label="提示词导航"]')).not.toBeNull();
+  expect(harness.container.querySelector('aside[aria-label="提示词检查器"]')).not.toBeNull();
   await harness.unmount();
 });

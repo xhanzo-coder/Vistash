@@ -5,7 +5,6 @@ import { createRoot } from "react-dom/client";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
 import { createWorkspaceNavigation } from "../navigation";
-import { createTaskCenterStore } from "../taskCenterStore";
 import { parseLibraryId } from "../common";
 import { UiProvider } from "../../ui/UiProvider";
 import { ThemeProvider } from "../../ui/theme/ThemeProvider";
@@ -68,7 +67,6 @@ function shell(overrides: Partial<ComponentProps<typeof AppShell>> = {}): ReactN
     <AppShell
       navigation={navigation}
       globalSearch={globalSearch}
-      taskCenter={createTaskCenterStore()}
       library={{
         id: parseLibraryId("018f3c9e-6c00-7000-8000-0000000000aa"),
         displayName: "视觉档案",
@@ -78,7 +76,7 @@ function shell(overrides: Partial<ComponentProps<typeof AppShell>> = {}): ReactN
       appVersion="0.1.0"
       onImportImages={() => {}}
       onImportFolder={() => {}}
-      onImportClipboard={() => {}}
+      onCreateNewLibrary={() => {}}
       onOpenOtherLibrary={() => {}}
       assets={<div data-testid="assets-workspace">图片工作区</div>}
       prompts={<div data-testid="prompts-workspace">提示词工作区</div>}
@@ -86,6 +84,32 @@ function shell(overrides: Partial<ComponentProps<typeof AppShell>> = {}): ReactN
     />
   );
 }
+
+test("紧凑顶栏承担拖动区与三个窗口控制，不再依赖第二行原生标题栏", () => {
+  mount(shell());
+  const topbar = container?.querySelector<HTMLElement>("header[data-tauri-drag-region]");
+  expect(topbar).not.toBeNull();
+  for (const label of ["最小化", "最大化或还原", "关闭窗口"]) {
+    expect(topbar?.querySelector(`button[aria-label="${label}"]`)).not.toBeNull();
+  }
+});
+
+test("顶栏库名打开素材库切换器，分开新建库与打开其他库", async () => {
+  const onCreateNewLibrary = vi.fn<() => void>();
+  const onOpenOtherLibrary = vi.fn<() => void>();
+  mount(shell({ onCreateNewLibrary, onOpenOtherLibrary }));
+
+  const trigger = container?.querySelector<HTMLButtonElement>('button[aria-label="切换素材库：视觉档案"]');
+  await act(async () => trigger?.click());
+  const switcher = document.body.querySelector<HTMLElement>('[data-ui="library-switcher"]');
+  expect(switcher?.textContent).toContain("E:\\视觉档案");
+  const create = [...(switcher?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent === "新建素材库");
+  const open = [...(switcher?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent === "打开其他库");
+  await act(async () => create?.click());
+  await act(async () => open?.click());
+  expect(onCreateNewLibrary).toHaveBeenCalledTimes(1);
+  expect(onOpenOtherLibrary).toHaveBeenCalledTimes(1);
+});
 
 function promptResult(): PromptRow {
   return {
@@ -176,11 +200,10 @@ describe("AppShell 全局搜索", () => {
 });
 
 describe("AppShell 导入入口", () => {
-  test("顶栏是三种导入方式的唯一常驻入口，并分别转交意图", async () => {
+  test("顶栏只保留文件与文件夹导入，剪贴板作为系统粘贴功能不占菜单项", async () => {
     const onImportImages = vi.fn<() => void>();
     const onImportFolder = vi.fn<() => void>();
-    const onImportClipboard = vi.fn<() => void>();
-    mount(shell({ onImportImages, onImportFolder, onImportClipboard }));
+    mount(shell({ onImportImages, onImportFolder }));
 
     const trigger = container?.querySelector<HTMLButtonElement>('button[aria-label="导入"]');
     trigger?.focus();
@@ -193,12 +216,9 @@ describe("AppShell 导入入口", () => {
     const folderItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
       (item) => item.textContent?.includes("导入文件夹"),
     );
-    const clipboardItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-      (item) => item.textContent?.includes("从剪贴板导入"),
-    );
     expect(imageItem).toBeDefined();
     expect(folderItem).toBeDefined();
-    expect(clipboardItem).toBeDefined();
+    expect(document.body.textContent).not.toContain("从剪贴板导入");
 
     await act(async () => imageItem?.click());
     expect(onImportImages).toHaveBeenCalledTimes(1);
@@ -213,57 +233,20 @@ describe("AppShell 导入入口", () => {
     await act(async () => reopenedFolderItem?.click());
     expect(onImportFolder).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      trigger?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
-    });
-    const reopenedClipboardItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-      (item) => item.textContent?.includes("从剪贴板导入"),
-    );
-    await act(async () => reopenedClipboardItem?.click());
-    expect(onImportClipboard).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("AppShell 任务中心", () => {
-  test("顶栏聚合运行任务，关闭详情不会停止或移除任务", async () => {
-    const taskCenter = createTaskCenterStore();
-    const registration = taskCenter.register({
-      kind: "import",
-      title: "导入参考图片",
-      libraryId: "018f3c9e-6c00-7000-8000-0000000000aa",
-      stoppable: true,
-      concurrencyKey: "library:018f3c9e-6c00-7000-8000-0000000000aa:transfer",
-    });
-    if (registration.kind !== "registered") throw new Error("任务注册失败");
-    taskCenter.reportProgress(registration.record.id, {
-      kind: "transfer",
-      done: 42,
-      total: 100,
-      currentFilename: "雨夜街道.png",
-    });
-    mount(shell({ taskCenter }));
-
-    const trigger = container?.querySelector<HTMLButtonElement>('button[aria-label="任务中心，1 个运行中"]');
-    expect(trigger).not.toBeNull();
-    await act(async () => trigger?.click());
-    const popover = document.body.querySelector('[data-ui="task-center"]');
-    expect(popover?.textContent).toContain("导入参考图片");
-    expect(popover?.querySelector('[data-task-kind="import"]')?.textContent).toBe("导入");
-    expect(popover?.textContent).toContain("42%");
-    expect(popover?.textContent).toContain("雨夜街道.png");
-
-    await act(async () => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
-    });
-    expect(taskCenter.snapshot()).toHaveLength(1);
-    expect(taskCenter.snapshot()[0]?.state).toBe("running");
-  });
+test("AppShell 顶栏不展示任务中心入口", () => {
+  mount(shell());
+  expect(container?.querySelector('button[aria-label^="任务中心"]')).toBeNull();
+  expect(document.querySelector('[data-ui="task-center"]')).toBeNull();
 });
 
 describe("AppShell 设置", () => {
   test("设置只呈现真实能力，主题立即切换且素材库入口转交切库意图", async () => {
+    const onCreateNewLibrary = vi.fn<() => void>();
     const onOpenOtherLibrary = vi.fn<() => void>();
-    mount(shell({ onOpenOtherLibrary }));
+    mount(shell({ onCreateNewLibrary, onOpenOtherLibrary }));
 
     const settings = container?.querySelector<HTMLButtonElement>('button[aria-label="设置"]');
     await act(async () => settings?.click());
@@ -298,10 +281,17 @@ describe("AppShell 设置", () => {
     await act(async () => libraryTab?.click());
     expect(dialog?.textContent).toContain("E:\\视觉档案");
     expect(dialog?.textContent).toContain("格式版本 3");
-    const openOther = [...(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-      (button) => button.textContent === "打开其他库",
+    const createNew = [...(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+      (button) => button.textContent === "新建素材库",
     );
-    await act(async () => openOther?.click());
+    await act(async () => createNew?.click());
+    expect(onCreateNewLibrary).toHaveBeenCalledTimes(1);
+    await act(async () => settings?.click());
+    const reopenedDialog = document.body.querySelector<HTMLElement>('[role="dialog"]');
+    const reopenedLibraryTab = [...(reopenedDialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent === "素材库");
+    await act(async () => reopenedLibraryTab?.click());
+    const reopenedOpenOther = [...(reopenedDialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent === "打开其他库");
+    await act(async () => reopenedOpenOther?.click());
     expect(onOpenOtherLibrary).toHaveBeenCalledTimes(1);
   });
 });

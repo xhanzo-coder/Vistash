@@ -4,6 +4,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { ArrowsOutLineHorizontalIcon } from "@phosphor-icons/react/dist/csr/ArrowsOutLineHorizontal";
+import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
+import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
+import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
 
 import { asAppError, IpcError } from "../../../shared/errors";
 import { appTaskCenter } from "../../../app/runtime";
@@ -14,13 +20,10 @@ import {
   batchRemovePromptFolder,
   batchRemovePromptTag,
   batchSetPromptFavorite,
-  createPromptFolder,
   deletePrompt,
-  deletePromptFolder,
   linkImages,
   promptSnapshot,
   purgePromptTrash,
-  renamePromptFolder,
   restorePrompt,
   setPromptFavorite,
   setPromptFolders,
@@ -31,13 +34,13 @@ import type {
   BatchProgress,
   BatchReport,
   FolderFilter,
+  PromptAsset,
   PromptPurgeReport,
   PromptRow,
 } from "../../../shared/types";
 import { ErrorLine } from "../../../features/library/ErrorLine";
 import { useWindowTier } from "../../../features/workspace/breakpoints";
 import { BatchToolbar } from "../../../features/workspace/batchToolbar";
-import { AppliedFilterChips } from "../../../features/workspace/AppliedFilterChips";
 import { ConfirmDialog } from "../../../features/workspace/ConfirmDialog";
 import {
   useWorkspaceQueryController,
@@ -46,7 +49,6 @@ import {
 import { SelectionProvider, useSelection } from "../../../features/workspace/selectionContext";
 import type { GlobalLocateRequest } from "../../../features/workspace/locate";
 import {
-  WorkspacePaneExpandButtons,
   WorkspacePaneFrame,
   workspacePanePresentation,
 } from "../../../features/workspace/workspacePaneLayout";
@@ -56,21 +58,21 @@ import { promptDisplayTitle } from "../../../features/prompts/promptDisplay";
 import { PromptCardWaterfall } from "../../../features/prompts/PromptCardWaterfall";
 import { PromptDetailList } from "../../../features/prompts/PromptDetailList";
 import { PromptInspector } from "../../../features/prompts/PromptInspector";
+import { Button, IconButton } from "../../../ui/button/Button";
+import { SearchField } from "../../../ui/search-field/SearchField";
+import { Tooltip } from "../../../ui/overlays/Tooltip";
 import {
   DEFAULT_PROMPT_SORT,
   sortPrompts,
   type PromptSort,
   type PromptSortColumn,
 } from "../../../features/prompts/promptSort";
+import styles from "./PromptWorkspace.module.css";
+import { PromptCreateFocus } from "./PromptCreateFocus";
+import { PromptNavigator } from "./PromptNavigator";
+import { createPromptFolderActions, type PromptConfirmRequest } from "./promptFolderActions";
 
 /** 二次确认对话框的待办：确认时执行，取消即丢弃。 */
-type ConfirmRequest = {
-  title: string;
-  body: string;
-  confirmLabel: string;
-  onConfirm: () => Promise<void>;
-};
-
 /**
  * 提示词工作区外壳（任务 10.3 首版）。
  *
@@ -111,10 +113,9 @@ export function PromptWorkspace({
     query,
     activation,
     searchInputRef,
-    chips,
   } = useWorkspaceQueryController(libraryId, "prompts", locate);
-  const [newFolderName, setNewFolderName] = useState("");
-  const [renameValue, setRenameValue] = useState("");
+  const [creatingPrompt, setCreatingPrompt] = useState(false);
+  const [cardDensity, setCardDensity] = useState(1);
   // 聚焦阅读：由双击、Enter 或检查器的显式按钮进入；单击仅更新右检查器。
   // bodyFocusEdit 区分"聚焦阅读"与"编辑主字段"两种进入方式（任务 10.4）。
   const [bodyFocusId, setBodyFocusId] = useState<string | null>(null);
@@ -124,7 +125,7 @@ export function PromptWorkspace({
   const [mutating, setMutating] = useState(false);
   // 回收站（任务 10.6）：还原缺失文件夹的非阻断警告、清空回收站二次确认与逐项结果。
   const [notice, setNotice] = useState<AppError | null>(null);
-  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [confirm, setConfirm] = useState<PromptConfirmRequest | null>(null);
   const [purgeReport, setPurgeReport] = useState<PromptPurgeReport | null>(null);
   // 批量操作（任务 11.2）：进度按项转交呈现，报告按项列出失败（设计第六条）。
   const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
@@ -168,13 +169,14 @@ export function PromptWorkspace({
   function changeQuery(action: () => void) {
     const proceed = () => {
       setBodyFocusId(null);
+      setCreatingPrompt(false);
       action();
     };
     if (!blockIfPromptDraftDirty(proceed)) proceed();
   }
 
-  async function runMutation(operation: () => Promise<void>, refreshCurrentQuery: boolean) {
-    if (mutating) return;
+  async function runMutation(operation: () => Promise<void>, refreshCurrentQuery: boolean): Promise<boolean> {
+    if (mutating) return false;
     const execute = async () => {
       setMutating(true);
       setNotice(null);
@@ -182,8 +184,10 @@ export function PromptWorkspace({
         await operation();
         if (refreshCurrentQuery) await refresh();
         setError(null);
+        return true;
       } catch (raw) {
         setError(asAppError(raw));
+        return false;
       } finally {
         setMutating(false);
       }
@@ -192,8 +196,8 @@ export function PromptWorkspace({
     if (blockIfPromptDraftDirty(() => {
       setBodyFocusId(null);
       void execute();
-    })) return;
-    await execute();
+    })) return false;
+    return await execute();
   }
 
   function requestPromptDelete(prompt: PromptRow) {
@@ -330,46 +334,15 @@ export function PromptWorkspace({
 
   function selectFolder(next: FolderFilter) {
     changeQuery(() => {
+      setText("");
+      setSelectedTags([]);
+      setFavoriteOnly(false);
       setLocation("active");
       setFolder(next);
-      setRenameValue(next.kind === "path" ? next.path.split("/").at(-1) ?? "" : "");
     });
   }
 
-  async function submitFolder(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const parent = folder.kind === "path" ? folder.path : null;
-    const name = newFolderName;
-    await runMutation(async () => {
-      const created = await createPromptFolder(parent, name);
-      setNewFolderName("");
-      selectFolder({ kind: "path", path: created });
-    }, true);
-  }
-
-  function requestFolderRename() {
-    if (folder.kind !== "path") return;
-    const path = folder.path;
-    const name = renameValue;
-    void runMutation(async () => {
-      const renamed = await renamePromptFolder(path, name);
-      selectFolder({ kind: "path", path: renamed });
-    }, true);
-  }
-
-  function requestFolderDelete() {
-    if (folder.kind !== "path") return;
-    const path = folder.path;
-    setConfirm({
-      title: "删除提示词文件夹？",
-      body: `“${path}”及其子文件夹会被删除，但提示词素材不会删除；没有其他归属的提示词将回到根文件夹。`,
-      confirmLabel: "删除文件夹",
-      onConfirm: async () => {
-        await deletePromptFolder(path);
-        selectFolder({ kind: "all" });
-      },
-    });
-  }
+  const folderActions = createPromptFolderActions({ currentFolder: folder, run: runMutation, navigate: selectFolder, confirm: setConfirm });
 
   function toggleTag(tag: string) {
     changeQuery(() => {
@@ -377,6 +350,23 @@ export function PromptWorkspace({
         current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
       );
     });
+  }
+
+  function startPromptCreation() {
+    changeQuery(() => setCreatingPrompt(true));
+  }
+
+  async function revealCreatedPrompt(created: PromptAsset) {
+    const targetFolder = created.folders[0] ?? null;
+    setCreatingPrompt(false);
+    setBodyFocusEdit(false);
+    setBodyFocusId(created.id);
+    setText("");
+    setSelectedTags([]);
+    setFavoriteOnly(false);
+    setLocation("active");
+    setFolder(targetFolder === null ? { kind: "root" } : { kind: "path", path: targetFolder });
+    await refresh();
   }
 
   if (libraryId !== null && !ready) {
@@ -388,12 +378,32 @@ export function PromptWorkspace({
   }
 
   const panePresentation = workspacePanePresentation("prompt-workspace", drawerMode, layout);
+  const emptyCopy = location === "trash"
+    ? {
+        title: "提示词回收站为空",
+        description: "移入回收站的提示词会保留正文和关联，直到永久清空。",
+      }
+    : text.trim().length > 0 || selectedTags.length > 0 || favoriteOnly
+      ? {
+          title: "没有符合条件的提示词",
+          description: "调整搜索、标签或收藏条件后再试。",
+        }
+      : folder.kind === "root" || folder.kind === "path"
+        ? {
+            title: "这个位置还没有提示词",
+            description: "为提示词设置对应的文件夹归属后，它会显示在这里。",
+          }
+        : {
+            title: "提示词库还是空的",
+            description: "这里将用于保存和整理你的手写提示词。",
+          };
 
   return (
     <section
-      className={panePresentation.className}
+      className={`${panePresentation.className} ${styles.workspace}`}
       style={panePresentation.style}
       aria-label="提示词工作区"
+      data-ui="prompt-workbench"
       hidden={!active}
     >
       <WorkspacePaneFrame
@@ -403,116 +413,32 @@ export function PromptWorkspace({
         open={railOpen}
         onClose={() => setRailOpen(false)}
         panelId="prompt-rail-panel"
-        asideClassName="catalog-rail"
+        asideClassName={styles.navigationRail!}
         collapsed={layout.railCollapsed}
         width={layout.railWidth}
         minWidth={180}
         maxWidth={420}
         resizeLabel="调整提示词分类栏宽度"
         collapseLabel="折叠分类栏"
-        onCollapse={() => update({ railCollapsed: true })}
+        collapseControl={<div className={styles.panelHeader}>{layout.railCollapsed ? null : <strong>提示词库</strong>}<Tooltip content={layout.railCollapsed ? "展开提示词导航" : "收起提示词导航"}><IconButton size="compact" label={layout.railCollapsed ? "展开提示词导航" : "收起提示词导航"} icon={<SidebarSimpleIcon />} onClick={() => update({ railCollapsed: !layout.railCollapsed })} /></Tooltip></div>}
+        onCollapse={() => update({ railCollapsed: !layout.railCollapsed })}
         onResize={(railWidth) => update({ railWidth })}
       >
-          <div className="rail-heading">
-            <p className="eyebrow">PROMPTS</p>
-            <h2>提示词档案</h2>
-          </div>
-          <nav aria-label="提示词位置" className="catalog-nav">
-            <button
-              type="button"
-              aria-current={location === "active" && folder.kind === "all" ? "page" : undefined}
-              onClick={() => selectFolder({ kind: "all" })}
-            >
-              <span>全部提示词</span>
-              <span>
-                {location === "active" && folder.kind === "all" ? snapshot?.prompts.length : ""}
-              </span>
-            </button>
-            <button
-              type="button"
-              aria-current={location === "active" && folder.kind === "root" ? "page" : undefined}
-              onClick={() => selectFolder({ kind: "root" })}
-            >
-              根文件夹
-            </button>
-            <div className="folder-list" aria-label="提示词文件夹">
-              {snapshot?.folders.map((path) => (
-                <button
-                  type="button"
-                  key={path}
-                  data-folder={path}
-                  aria-current={
-                    location === "active" && folder.kind === "path" && folder.path === path
-                      ? "page"
-                      : undefined
-                  }
-                  style={{ paddingInlineStart: `${1 + path.split("/").length * 0.8}rem` }}
-                  onClick={() => selectFolder({ kind: "path", path })}
-                >
-                  {path.split("/").at(-1)}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              aria-label="回收站"
-              aria-current={location === "trash" ? "page" : undefined}
-              onClick={() => changeQuery(() => {
-                setLocation("trash");
-                setFolder({ kind: "all" });
-                setSelectedTags([]);
-              })}
-            >
-              <span>回收站</span>
-              <span>{snapshot?.trash_count ?? 0}</span>
-            </button>
-          </nav>
-
-          {location === "active" && (
-            <div className="folder-actions">
-              <form onSubmit={(event) => void submitFolder(event)}>
-                <label htmlFor="new-prompt-folder">
-                  {folder.kind === "path" ? "新建提示词子文件夹" : "新建提示词文件夹"}
-                </label>
-                <div className="compact-form">
-                  <input
-                    id="new-prompt-folder"
-                    name="new-prompt-folder"
-                    autoComplete="off"
-                    value={newFolderName}
-                    onChange={(event) => setNewFolderName(event.target.value)}
-                    required
-                  />
-                  <button type="submit" disabled={mutating}>新增</button>
-                </div>
-              </form>
-              {folder.kind === "path" && (
-                <div className="folder-edit">
-                  <label htmlFor="rename-prompt-folder">重命名当前提示词文件夹</label>
-                  <input
-                    id="rename-prompt-folder"
-                    name="rename-prompt-folder"
-                    autoComplete="off"
-                    value={renameValue}
-                    onChange={(event) => setRenameValue(event.target.value)}
-                  />
-                  <div className="button-row">
-                    <button type="button" onClick={requestFolderRename} disabled={mutating}>
-                      保存名称
-                    </button>
-                    <button
-                      type="button"
-                      className="danger-ghost"
-                      onClick={requestFolderDelete}
-                      disabled={mutating}
-                    >
-                      删除文件夹
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          <PromptNavigator
+            folders={snapshot?.folders ?? []}
+            tags={snapshot?.tags ?? []}
+            trashCount={snapshot?.trash_count ?? 0}
+            scope={{ folder, favoriteOnly, location, selectedTags }}
+            mutating={mutating}
+            onSelectFolder={selectFolder}
+            onSelectFavorites={() => changeQuery(() => { setText(""); setSelectedTags([]); setLocation("active"); setFolder({ kind: "all" }); setFavoriteOnly(true); })}
+            onSelectTrash={() => changeQuery(() => { setText(""); setLocation("trash"); setFolder({ kind: "all" }); setFavoriteOnly(false); setSelectedTags([]); })}
+            onToggleTag={toggleTag}
+            onCreateFolder={folderActions.create}
+            onRenameFolder={folderActions.rename}
+            onMoveFolder={folderActions.move}
+            onDeleteFolder={folderActions.delete}
+          />
       </WorkspacePaneFrame>
 
       {/* 统一选择模型：Provider 上移到中央区与右检查器之外，视图等价切换共享选择。 */}
@@ -520,112 +446,29 @@ export function PromptWorkspace({
       {/* 定位桥（任务 11.1）：点击入口在 Provider 内部，定位请求由外壳驱动，
           这里用普通单击语义把目标项落进统一选择模型。 */}
       <ExternalActivation request={activation} onHandled={onLocateHandled} />
-      <div className="catalog-main">
-        <header className="query-bar">
-          <div>
-            <p className="eyebrow">PROMPT LIBRARY</p>
-            <h2>
-              {location === "trash"
-                ? "回收站"
-                : folder.kind === "root"
-                  ? "根文件夹"
-                  : folder.kind === "path"
-                    ? folder.path
-                    : "全部提示词"}
-            </h2>
+      <div className={styles.content}>
+        <header className={styles.heading}>
+          <h1>{location === "trash" ? "回收站" : favoriteOnly ? "收藏" : folder.kind === "root" ? "提示词根位置" : folder.kind === "path" ? folder.path : "全部提示词"}</h1>
+          <div className={styles.headingActions}>
+            <span>{snapshot?.prompts.length ?? 0} 条提示词</span>
+            {creatingPrompt ? null : <Button size="compact" variant="primary" aria-label="新建提示词" startIcon={<PlusIcon />} disabled={mutating} onClick={startPromptCreation}>新建提示词</Button>}
           </div>
-          {drawerMode === "drawer" && (
-            <button
-              type="button"
-              className="rail-toggle"
-              aria-expanded={railOpen}
-              aria-controls="prompt-rail-panel"
-              onClick={() => setRailOpen(true)}
-            >
-              分类
-            </button>
-          )}
-          {drawerMode === "drawer" && (
-            <button
-              type="button"
-              className="rail-toggle"
-              aria-expanded={inspectorOpen}
-              aria-controls="prompt-inspector-panel"
-              onClick={() => setInspectorOpen(true)}
-            >
-              检查器
-            </button>
-          )}
-          <WorkspacePaneExpandButtons
-            mode={drawerMode}
-            layout={layout}
-            onExpandRail={() => update({ railCollapsed: false })}
-            onExpandInspector={() => update({ inspectorCollapsed: false })}
-          />
-          <div className="view-switch" role="group" aria-label="集合视图">
-            <button
-              type="button"
-              aria-pressed={view === "waterfall"}
-              onClick={() => setView("waterfall")}
-            >
-              卡片瀑布流
-            </button>
-            <button
-              type="button"
-              aria-pressed={view === "list"}
-              onClick={() => setView("list")}
-            >
-              详情列表
-            </button>
-          </div>
-          <label className="search-field">
-            <span>搜索</span>
-            <input
-              ref={searchInputRef}
-              type="search"
-              name="prompt-search"
-              autoComplete="off"
-              aria-label="按标题或正文搜索"
-              placeholder="搜索标题或正文…"
-              value={text}
-              onChange={(event) => {
-                const nextText = event.target.value;
-                changeQuery(() => setText(nextText));
-              }}
-            />
-          </label>
-          {/* 收藏筛选入口：中央视图只返回 favorite=true 的正常提示词。 */}
-          <button
-            type="button"
-            className={`favorite-filter${favoriteOnly ? " is-on" : ""}`}
-            aria-pressed={favoriteOnly}
-            onClick={() => changeQuery(() => setFavoriteOnly(!favoriteOnly))}
-          >
-            ★ 只看收藏
-          </button>
-          <span className="result-count">{snapshot?.prompts.length ?? 0} 条</span>
         </header>
-
-        {/* 已应用条件的可移除呈现（任务 11.1）：无条件时不渲染任何东西。 */}
-        <AppliedFilterChips chips={chips.map((chip) => ({
-          ...chip,
-          onRemove: () => changeQuery(chip.onRemove),
-        }))} />
-
-        {location === "active" && (snapshot?.tags.length ?? 0) > 0 && (
-          <div className="tag-filter" aria-label="标签筛选">
-            {snapshot?.tags.map((usage) => (
-              <button
-                type="button"
-                key={usage.tag}
-                aria-pressed={selectedTags.includes(usage.tag)}
-                onClick={() => toggleTag(usage.tag)}
-              >
-                {usage.tag} <span>{usage.count}</span>
-              </button>
-            ))}
+        <div className={styles.toolbar} role="toolbar" aria-label="提示词查询与视图">
+          {drawerMode === "drawer" ? <IconButton size="compact" label="提示词导航" title="提示词导航" icon={<SidebarSimpleIcon />} aria-expanded={railOpen} aria-controls="prompt-rail-panel" onClick={() => setRailOpen(true)} /> : null}
+          {drawerMode === "drawer" ? <IconButton size="compact" label="提示词检查器" title="提示词检查器" icon={<NotePencilIcon />} aria-expanded={inspectorOpen} aria-controls="prompt-inspector-panel" onClick={() => setInspectorOpen(true)} /> : null}
+          <div className={styles.localSearch}><SearchField inputRef={searchInputRef} label="按标题或正文搜索" aria-label="按标题或正文搜索" name="prompt-search" placeholder="搜索标题或正文…" value={text} onValueChange={(nextText) => changeQuery(() => setText(nextText))} /></div>
+          <select className={styles.sortSelect} aria-label="提示词排序" value={`${sort.column}:${sort.direction}`} onChange={(event) => {
+            const [column, direction] = event.currentTarget.value.split(":");
+            if ((column !== "updatedAt" && column !== "title" && column !== "model") || (direction !== "asc" && direction !== "desc")) throw new TypeError("提示词排序选项非法");
+            setSort({ column, direction });
+          }}><option value="updatedAt:desc">最近更新</option><option value="title:asc">标题</option><option value="model:asc">模型</option></select>
+          <label className={styles.density}><ArrowsOutLineHorizontalIcon aria-hidden="true" /><span className={styles.visuallyHidden}>卡片密度</span><input type="range" name="prompt-card-density" aria-label="卡片密度" min="0" max="2" step="1" value={cardDensity} onChange={(event) => setCardDensity(Number(event.currentTarget.value))} /></label>
+          <div className={styles.viewSwitch} role="group" aria-label="集合视图">
+            <Tooltip content="卡片瀑布流"><Button size="compact" variant="ghost" aria-label="卡片瀑布流" startIcon={<SquaresFourIcon />} aria-pressed={view === "waterfall"} onClick={() => setView("waterfall")}><span className={styles.visuallyHidden}>卡片瀑布流</span></Button></Tooltip>
+            <Tooltip content="详情列表"><Button size="compact" variant="ghost" aria-label="详情列表" startIcon={<ListBulletsIcon />} aria-pressed={view === "list"} onClick={() => setView("list")}><span className={styles.visuallyHidden}>详情列表</span></Button></Tooltip>
           </div>
-        )}
+        </div>
 
         {/* 回收站工具条（任务 10.6）：清空必须显式二次确认，取消不执行任何写入。 */}
         {location === "trash" && (
@@ -679,7 +522,13 @@ export function PromptWorkspace({
         )}
         {notice !== null && <ErrorLine error={notice} />}
         {error !== null && <ErrorLine error={error} />}
-        {loading && snapshot === null ? (
+        {creatingPrompt ? (
+          <PromptCreateFocus
+            initialFolder={location === "active" && folder.kind === "path" ? folder.path : null}
+            onCancel={() => setCreatingPrompt(false)}
+            onCreated={revealCreatedPrompt}
+          />
+        ) : loading && snapshot === null ? (
           <p role="status" className="workspace-loading">正在读取提示词编目…</p>
         ) : bodyFocus !== null ? (
           /*
@@ -700,10 +549,12 @@ export function PromptWorkspace({
             排序、选择与活动项全部保留。
           */
           sortedPrompts.length === 0 ? (
-            <div className="empty-state">
-              <p className="eyebrow">NO PROMPTS</p>
-              <h3>这里还没有匹配的提示词</h3>
-              <p>调整查询条件，或从检查器新建一条手写记录。</p>
+            <div className={styles.emptyState}>
+              <h3>{emptyCopy.title}</h3>
+              <p>{emptyCopy.description}</p>
+              {location === "active" && text.trim() === "" && selectedTags.length === 0 && !favoriteOnly
+                ? <Button variant="primary" startIcon={<PlusIcon />} onClick={startPromptCreation}>新建提示词</Button>
+                : null}
             </div>
           ) : view === "list" ? (
             <PromptDetailList
@@ -738,6 +589,7 @@ export function PromptWorkspace({
                 void runMutation(() => setPromptFavorite(id, favorite), true)
               }
               onOpenFocused={(id) => { setBodyFocusEdit(false); setBodyFocusId(id); }}
+              targetTileWidth={[220, 280, 340][cardDensity]!}
               workspaceActive={active}
             />
           )
@@ -755,14 +607,15 @@ export function PromptWorkspace({
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         panelId="prompt-inspector-panel"
-        asideClassName="inspector-rail"
+        asideClassName={styles.inspectorRail!}
         collapsed={layout.inspectorCollapsed}
         width={layout.inspectorWidth}
         minWidth={240}
         maxWidth={560}
         resizeLabel="调整提示词检查器宽度"
         collapseLabel="折叠检查器"
-        onCollapse={() => update({ inspectorCollapsed: true })}
+        collapseControl={<div className={styles.panelHeader}>{layout.inspectorCollapsed ? null : <strong>提示词检查器</strong>}<Tooltip content={layout.inspectorCollapsed ? "展开提示词检查器" : "收起提示词检查器"}><IconButton size="compact" label={layout.inspectorCollapsed ? "展开提示词检查器" : "收起提示词检查器"} icon={<SidebarSimpleIcon />} onClick={() => update({ inspectorCollapsed: !layout.inspectorCollapsed })} /></Tooltip></div>}
+        onCollapse={() => update({ inspectorCollapsed: !layout.inspectorCollapsed })}
         onResize={(inspectorWidth) => update({ inspectorWidth })}
       >
           {/* 关联变更的忙碌与错误已由分区自管：这里只负责权威刷新。 */}

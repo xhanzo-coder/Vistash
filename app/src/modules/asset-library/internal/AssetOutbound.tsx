@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
@@ -11,8 +11,8 @@ import type { AppError, AssetRow, ConflictPolicy, ExportOutcome, PlannedExport }
 import { Button, IconButton } from "../../../ui/button/Button";
 import { ConfirmDialog, Dialog } from "../../../ui/dialog/Dialog";
 import { Tooltip } from "../../../ui/overlays/Tooltip";
-import { createLibraryTransferKey, type TaskOutcome, type TaskRecord } from "../../../app/taskCenter";
-import { completeTransfer, registerTransferTask, type TransferHandle } from "./AssetTransfer";
+import { createLibraryTransferKey, type TaskOutcome } from "../../../app/taskCenter";
+import { appendTransferReport, completeTransfer, dismissTransferReport, registerTransferTask, TransferOutcomeReport, useLibraryTransferBusy, usePersistentTransferReports, type TransferHandle } from "./AssetTransfer";
 import styles from "./AssetTransfer.module.css";
 
 type ExportPlan = { hashes: readonly AssetId[]; targetDir: string; entries: readonly PlannedExport[] };
@@ -26,18 +26,11 @@ function toTaskOutcome(outcome: ExportOutcome): TaskOutcome {
   };
 }
 
-function useTransferRecords(): readonly TaskRecord[] {
-  const [records, setRecords] = useState<readonly TaskRecord[]>(() => appTaskCenter.snapshot());
-  useEffect(() => appTaskCenter.subscribe(() => setRecords(appTaskCenter.snapshot())), []);
-  return records;
-}
-
 export function AssetOutboundControls({ libraryId, assets, active, disabled }: { libraryId: LibraryId; assets: readonly AssetRow[]; active: boolean; disabled: boolean }): ReactNode {
-  const records = useTransferRecords();
   const [plan, setPlan] = useState<ExportPlan | null>(null);
   const [error, setError] = useState<AppError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const busy = records.some((record) => record.libraryId === libraryId && (record.state === "running" || record.state === "stopping"));
+  const busy = useLibraryTransferBusy(libraryId);
   const selectedHashes = assets.map((asset) => parseAssetId(asset.hash));
   let single: AssetRow | null = null;
   if (assets.length === 1) {
@@ -55,15 +48,20 @@ export function AssetOutboundControls({ libraryId, assets, active, disabled }: {
       return appPlatform.exportAssets([...request.hashes], request.targetDir, request.policy, progress);
     },
     onSuccess: (outcome, request) => {
-      completeTransfer(request.handle, toTaskOutcome(outcome));
+      const completed = toTaskOutcome(outcome);
+      completeTransfer(request.handle, completed);
+      if (completed.failures.length > 0 || completed.counts.unprocessed > 0 || request.handle.stopRequested) {
+        appendTransferReport("export", completed, request.handle);
+      }
       setError(null);
-      setNotice(`已导出 ${outcome.exported.length} 张图片`);
+      setNotice(completed.failures.length === 0 && completed.counts.unprocessed === 0 ? `已导出 ${outcome.exported.length} 张图片` : null);
     },
     onError: (raw, request) => {
       if (!(raw instanceof IpcError)) throw raw;
-      completeTransfer(request.handle, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError });
+      const failed: TaskOutcome = { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError };
+      completeTransfer(request.handle, failed);
+      appendTransferReport("export", failed, request.handle);
       setNotice(null);
-      setError(raw.appError);
     },
   });
   const runExport = async (targetDir: string, hashes: readonly AssetId[], policy: ConflictPolicy): Promise<void> => {
@@ -128,4 +126,11 @@ export function AssetOutboundControls({ libraryId, assets, active, disabled }: {
       </div>
     </Dialog>}
   </>;
+}
+
+/** 导出异常独立于当前选择，返回原素材库时继续显示，直到使用者逐份关闭。 */
+export function AssetOutboundFeedback({ libraryId }: { libraryId: LibraryId }): ReactNode {
+  const reports = usePersistentTransferReports(libraryId, "export");
+  return reports.map((report) => <TransferOutcomeReport key={report.id} report={report} label="导出结果" title="导出未完全完成"
+    onDismiss={() => dismissTransferReport(libraryId, report.id)} />);
 }

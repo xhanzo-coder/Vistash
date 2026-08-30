@@ -1,4 +1,4 @@
-import { useId, useRef, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 
@@ -15,6 +15,7 @@ export type SearchFieldProps = Omit<
   value: string;
   onValueChange: (value: string) => void;
   shortcut?: string;
+  inputRef?: RefObject<HTMLInputElement | null>;
 };
 
 /** 紧凑但完整标注的搜索输入；清除与 Escape 共用同一个显式值变更入口。 */
@@ -22,6 +23,7 @@ export function SearchField({
   disabled,
   label,
   name,
+  inputRef: forwardedInputRef,
   onValueChange,
   placeholder,
   shortcut,
@@ -29,7 +31,8 @@ export function SearchField({
   ...props
 }: SearchFieldProps): ReactNode {
   const id = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const internalInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = forwardedInputRef ?? internalInputRef;
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key !== "Escape" || value.length === 0) return;

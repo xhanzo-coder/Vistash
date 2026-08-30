@@ -43,10 +43,21 @@ impl ClipboardPort for WindowsClipboard {
         let mut availability = read_files_and_text()?;
         // 第二步：文件列表在场时连位图都不必读——裁决不需要它，也避免为同一次
         // 粘贴多开关一次全局剪贴板。位图注入点在剪贴板已关闭之后才运行。
-        if availability.files.is_none() {
+        if availability.files.is_none() && bitmap_format_available() {
             availability.bitmap = (self.read_bitmap)()?;
         }
         Ok(arbitrate(availability))
+    }
+}
+
+/// 不打开剪贴板即可判断标准 DIB 位图是否存在；只有存在时才调用较重的插件读取。
+fn bitmap_format_available() -> bool {
+    unsafe {
+        use windows::Win32::System::DataExchange::IsClipboardFormatAvailable;
+        use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5};
+
+        IsClipboardFormatAvailable(u32::from(CF_DIB.0)).is_ok()
+            || IsClipboardFormatAvailable(u32::from(CF_DIBV5.0)).is_ok()
     }
 }
 

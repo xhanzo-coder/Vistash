@@ -28,7 +28,7 @@ export type AssetLibraryEntry =
 /** 应用外壳发给图片工作区的一次性入站意图；路径选择仍由图片模块自己的 transfer seam 完成。 */
 export type AssetImportRequest = {
   requestId: RequestId;
-  kind: "images" | "folder" | "clipboard";
+  kind: "images" | "folder";
 };
 
 /**

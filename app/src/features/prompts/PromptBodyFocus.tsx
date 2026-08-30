@@ -4,9 +4,9 @@ import { asAppError } from "../../shared/errors";
 import { updatePrompt } from "../../shared/ipc";
 import type { AppError, PromptRow } from "../../shared/types";
 import { ErrorLine } from "../library/ErrorLine";
-import { useDialogFocusTrap } from "../workspace/dialogFocus";
 import { setPromptDraftGuard } from "./draftGuard";
 import { promptDisplayTitle } from "./promptDisplay";
+import { PromptDraftGuardDialog } from "./PromptDraftGuardDialog";
 
 type SaveStatus =
   | { kind: "idle" }
@@ -292,7 +292,7 @@ export function PromptBodyFocus({
       )}
 
       {confirmClose && (
-        <DraftGuardDialog
+        <PromptDraftGuardDialog
           saving={status.kind === "saving"}
           onStay={() => {
             pendingContinuationRef.current = null;
@@ -312,65 +312,5 @@ export function PromptBodyFocus({
         />
       )}
     </section>
-  );
-}
-
-/**
- * 脏草稿三选一对话框（任务 11.3 抽出为独立挂载单元）。
- *
- * 焦点陷阱/Esc/触发器归还由 useDialogFocusTrap 在本组件挂载期统一落实：
- * Esc 是安全侧的"留在当前页"，Tab 圈在三个动作之间，关闭后焦点回到外层触发点。
- */
-function DraftGuardDialog({
-  saving,
-  onStay,
-  onDiscard,
-  onSaveAndLeave,
-}: {
-  saving: boolean;
-  onStay: () => void;
-  onDiscard: () => void;
-  onSaveAndLeave: () => void;
-}) {
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLElement>(null);
-  useDialogFocusTrap(dialogRef, onStay);
-
-  useEffect(() => {
-    const button = cancelRef.current;
-    if (button === null) throw new Error("草稿对话框取消按钮不存在");
-    button.focus();
-  }, []);
-
-  return (
-    <div className="dialog-backdrop">
-      <section
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="prompt-draft-dialog-title"
-        className="confirm-dialog"
-      >
-        <p className="eyebrow">UNSAVED</p>
-        <h2 id="prompt-draft-dialog-title">有未保存的修改</h2>
-        <p>主字段存在未保存的修改。保存后离开、放弃修改，还是留在当前页面？</p>
-        <div className="dialog-actions">
-          <button ref={cancelRef} type="button" onClick={onStay}>
-            留在当前页
-          </button>
-          <button type="button" className="danger-ghost" onClick={onDiscard}>
-            放弃修改
-          </button>
-          <button
-            type="button"
-            className="primary-button"
-            disabled={saving}
-            onClick={onSaveAndLeave}
-          >
-            保存并离开
-          </button>
-        </div>
-      </section>
-    </div>
   );
 }
