@@ -37,6 +37,8 @@ import { canStopTransferTask, getTransferTaskStopError, stopAssetTransferTask } 
 import { TaskCenterPopover } from "../../app/shell/TaskCenterPopover";
 import type { AssetRow, CatalogSnapshot, ExportOutcome, ImportOutcome, PromptRow } from "../../shared/types";
 import { UiProvider } from "../../ui/UiProvider";
+import { createWorkspaceNavigation, type WorkspaceNavigation } from "../../app/navigation";
+import { createImagePromptRelations, createTauriImagePromptRelationAdapter, type ImagePromptRelations } from "../image-prompt-relations";
 import {
   AssetLibraryWorkspace,
   type AssetLibraryEntry,
@@ -187,6 +189,8 @@ let exportGate: Promise<ExportOutcome> | null = null;
 let outboundFailure: "copy" | "open" | null = null;
 let createObjectUrlMock: ReturnType<typeof vi.fn>;
 let revokeObjectUrlMock: ReturnType<typeof vi.fn>;
+let testRelations: ImagePromptRelations;
+let testNavigation: WorkspaceNavigation;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -272,6 +276,8 @@ beforeEach(() => {
   vi.stubGlobal("URL", { createObjectURL: createObjectUrlMock, revokeObjectURL: revokeObjectUrlMock });
 
   ipcCalls = [];
+  testNavigation = createWorkspaceNavigation();
+  testRelations = createImagePromptRelations({ adapter: createTauriImagePromptRelationAdapter(), navigation: testNavigation });
   currentLibrary = LIB_A;
   queryClient = createAppQueryClient();
   savedLayouts = {};
@@ -438,6 +444,11 @@ beforeEach(() => {
         if (typeof query.text !== "string") throw new TypeError("候选搜索无效");
         const text = query.text;
         return { prompts: prompts.filter((prompt) => prompt.deleted_at === null && `${prompt.title} ${prompt.body}`.includes(text)), folders: [], tags: [], trash_count: 1 };
+      }
+      case "prompt_detail": {
+        const prompt = prompts.find((item) => item.id === request.id);
+        if (prompt === undefined) throw { code: "prompt.not_found", detail: "目标已永久删除" };
+        return { ...prompt, format_version: 1 };
       }
       case "link_images":
       case "unlink_image": {
@@ -681,7 +692,7 @@ async function dismissVisibleTransferReports(): Promise<void> {
   for (const button of buttons) await act(async () => button.click());
 }
 
-async function mountWorkspace(props: AssetLibraryWorkspaceProps): Promise<void> {
+async function mountWorkspace(props: Omit<AssetLibraryWorkspaceProps, "relations">): Promise<void> {
   await teardown();
   currentLibrary = props.session.id;
   container = document.createElement("div");
@@ -691,7 +702,7 @@ async function mountWorkspace(props: AssetLibraryWorkspaceProps): Promise<void> 
     <QueryClientProvider client={queryClient}>
       <UiProvider>
         <TaskCenterPopover taskCenter={appTaskCenter} onStopTask={stopAssetTransferTask} canStopTask={canStopTransferTask} getStopError={getTransferTaskStopError} />
-        <AssetLibraryWorkspace {...props} />
+        <AssetLibraryWorkspace {...props} relations={testRelations} />
       </UiProvider>
     </QueryClientProvider>
   );
@@ -700,14 +711,14 @@ async function mountWorkspace(props: AssetLibraryWorkspaceProps): Promise<void> 
   });
 }
 
-async function rerenderWorkspace(props: AssetLibraryWorkspaceProps): Promise<void> {
+async function rerenderWorkspace(props: Omit<AssetLibraryWorkspaceProps, "relations">): Promise<void> {
   if (root === null || container === null) throw new Error("工作区尚未挂载");
   currentLibrary = props.session.id;
   const node: ReactNode = (
     <QueryClientProvider client={queryClient}>
       <UiProvider>
         <TaskCenterPopover taskCenter={appTaskCenter} onStopTask={stopAssetTransferTask} canStopTask={canStopTransferTask} getStopError={getTransferTaskStopError} />
-        <AssetLibraryWorkspace {...props} />
+        <AssetLibraryWorkspace {...props} relations={testRelations} />
       </UiProvider>
     </QueryClientProvider>
   );
@@ -2578,20 +2589,61 @@ test("普通提示词关联按需加载，失败保留选择，解除不删除�
   await act(async () => card(H_STREET).click());
   await vi.waitFor(() => expect(inspector().textContent).toContain("已删除记录"));
   expect(ipcCalls.filter((call) => call.command === "prompt_snapshot")).toHaveLength(0);
-  await act(async () => inspectorButton("建立关联").click());
-  await vi.waitFor(() => expect(inspector().querySelector('input[value="prompt-0"]')).not.toBeNull());
-  expect(inspector().querySelector('input[value="prompt-1"]')).toBeNull();
-  await act(async () => inspector().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
+  await act(async () => inspectorButton("添加关联").click());
+  await vi.waitFor(() => expect(document.querySelector('input[value="prompt-0"]')).not.toBeNull());
+  await act(async () => document.querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
   inspectorWriteFailure = true;
-  await act(async () => inspectorButton("确认关联").click());
-  await vi.waitFor(() => expect(inspector().textContent).toContain("关联写入失败"));
-  expect(inspector().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.checked).toBe(true);
+  let confirmLink = [...document.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.trim() === "确认关联 1 条");
+  if (confirmLink === undefined) throw new Error("缺少确认关联按钮");
+  const firstConfirmLink = confirmLink;
+  await act(async () => firstConfirmLink.click());
+  await vi.waitFor(() => expect(document.body.textContent).toContain("关联写入失败"));
+  expect(document.querySelector<HTMLInputElement>('input[value="prompt-0"]')!.checked).toBe(true);
   inspectorWriteFailure = false;
-  await act(async () => inspectorButton("确认关联").click());
-  await vi.waitFor(() => expect(inspectorButton("解除关联 光影参考").disabled).toBe(false));
-  await act(async () => inspectorButton("解除关联 光影参考").click());
+  confirmLink = [...document.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.trim() === "确认关联 1 条");
+  if (confirmLink === undefined) throw new Error("失败重试缺少确认关联按钮");
+  const retryConfirmLink = confirmLink;
+  await act(async () => retryConfirmLink.click());
+  await vi.waitFor(() => expect(inspector().textContent).toContain("光影参考"));
+  const more = inspector().querySelector<HTMLButtonElement>('button[aria-label="提示词关联操作 光影参考"]');
+  if (more === null) throw new Error("缺少提示词关联操作入口");
+  more.focus();
+  await act(async () => more.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+  const unlink = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.trim() === "解除关联");
+  if (unlink === undefined) throw new Error("缺少解除关联菜单项");
+  await act(async () => unlink.click());
   await vi.waitFor(() => expect(prompts[0]?.linked_image_hashes).toEqual([]));
   expect(prompts).toHaveLength(2);
+});
+
+test("提示词侧写入推进关系 revision 后图片详情立即刷新，关联项可打开对应提示词", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await vi.waitFor(() => expect(inspector().textContent).toContain("已删除记录"));
+
+  const openDeleted = inspector().querySelector<HTMLButtonElement>('button[aria-label="打开提示词 已删除记录"]');
+  if (openDeleted === null) throw new Error("关联提示词缺少跨页打开入口");
+  await act(async () => openDeleted.click());
+  await flush();
+  expect(testNavigation.entryFor("prompts")).toMatchObject({ kind: "locate_prompt", promptId: "prompt-1", location: "trash" });
+
+  await act(async () => {
+    await testRelations.execute({ kind: "link", libraryId: LIB_A, images: [H_STREET], prompts: ["prompt-0"] });
+  });
+  await vi.waitFor(() => expect(inspector().textContent).toContain("光影参考"));
+
+  prompts = prompts.map((prompt) => prompt.id === "prompt-0" ? { ...prompt, deleted_at: "2026-08-31T02:00:00Z" } : prompt);
+  await act(async () => {
+    await testRelations.synchronize(LIB_A, { imageIds: [], promptIds: ["prompt-0"] });
+  });
+  await vi.waitFor(() => expect(inspector().querySelector('button[aria-label="打开提示词 光影参考"]')?.closest("li")?.textContent).toContain("已删除"));
+
+  prompts = prompts.map((prompt) => prompt.id === "prompt-0" ? { ...prompt, deleted_at: null } : prompt);
+  await act(async () => {
+    await testRelations.synchronize(LIB_A, { imageIds: [], promptIds: ["prompt-0"] });
+  });
+  await vi.waitFor(() => expect(inspector().querySelector('button[aria-label="打开提示词 光影参考"]')?.closest("li")?.textContent).not.toContain("已删除"));
 });
 
 test("回收站检查器只读，详情错误可重试且不冒充空关联", async () => {
@@ -2667,18 +2719,21 @@ test("关联候选读取失败时保留搜索词和错误，显式重试后才�
   await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
   await act(async () => card(H_STREET).click());
-  await vi.waitFor(() => expect(inspectorButton("建立关联")).toBeDefined());
+  await vi.waitFor(() => expect(inspectorButton("添加关联")).toBeDefined());
   promptFailure = true;
-  await act(async () => inspectorButton("建立关联").click());
-  const search = inspector().querySelector<HTMLInputElement>('input[aria-label="搜索提示词"]');
+  await act(async () => inspectorButton("添加关联").click());
+  const search = document.querySelector<HTMLInputElement>('input[aria-label="搜索提示词"]');
   if (search === null) throw new Error("缺少关联搜索");
   await act(async () => setInput(search, "光影"));
-  await vi.waitFor(() => expect(inspector().textContent).toContain("候选读取失败"));
+  await vi.waitFor(() => expect(document.body.textContent).toContain("候选读取失败"));
   expect(search.value).toBe("光影");
-  expect(inspectorButton("确认关联").disabled).toBe(true);
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "确认关联 0 条");
+  expect(confirm?.disabled).toBe(true);
   promptFailure = false;
-  await act(async () => inspectorButton("重试读取提示词").click());
-  await vi.waitFor(() => expect(inspector().querySelector('input[value="prompt-0"]')).not.toBeNull());
+  const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "重试读取提示词");
+  if (retry === undefined) throw new Error("缺少提示词候选重试入口");
+  await act(async () => retry.click());
+  await vi.waitFor(() => expect(document.querySelector('input[value="prompt-0"]')).not.toBeNull());
 });
 
 test("折叠检查器分区不覆盖最新滚动位置与提示词布局", async () => {
@@ -2799,9 +2854,9 @@ test("批量提示词关联按需加载正常候选，保留部分失败并刷�
   expect(record(writes[0]?.payload).hashes).toEqual([H_STREET, H_NIGHT]);
   expect(record(writes[1]?.payload).hashes).toEqual([H_NIGHT]);
   await act(async () => card(H_STREET).click());
-  await vi.waitFor(() => expect(inspectorButton("解除关联 光影参考")).toBeDefined());
+  await vi.waitFor(() => expect(inspector().querySelector('button[aria-label="打开提示词 光影参考"]')).not.toBeNull());
   await act(async () => card(H_NIGHT).click());
-  await vi.waitFor(() => expect(inspectorButton("解除关联 光影参考")).toBeDefined());
+  await vi.waitFor(() => expect(inspector().querySelector('button[aria-label="打开提示词 光影参考"]')).not.toBeNull());
 });
 
 test("移除筛选标签导致多选变单选时，批量编辑会话与失败目标仍保留", async () => {
@@ -2975,6 +3030,7 @@ test("永久清空明确覆盖整个回收站，取消不写入，部分失败�
   await act(async () => purgeButton().click());
   await act(async () => purgeConfirmationButton("永久清空").click());
   await vi.waitFor(() => expect(container?.textContent).toContain("图片回收站为空"));
+  await vi.waitFor(() => expect(report?.textContent).toContain("已永久删除 1 张图片，失败 0 张"));
   expect(purgeButton().disabled).toBe(true);
   await vi.waitFor(() => expect(document.activeElement).toBe(searchInput()));
 });

@@ -102,7 +102,8 @@ export function useWorkspaceSnapshot<TQuery, TSnapshot>(
   loading: boolean;
   error: AppError | null;
   setError: (error: AppError | null) => void;
-  refresh: () => Promise<void>;
+  /** 返回可处理的读取错误；调用方可忽略，也可把它提升为协调失败。 */
+  refresh: () => Promise<AppError | null>;
 } {
   const [snapshot, setSnapshot] = useState<TSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,11 +120,14 @@ export function useWorkspaceSnapshot<TQuery, TSnapshot>(
     const startedFor = requestKey;
     try {
       const next = await load(query);
-      if (currentRequestKeyRef.current !== startedFor) return;
+      if (currentRequestKeyRef.current !== startedFor) return null;
       setSnapshot(next);
       setError(null);
+      return null;
     } catch (raw) {
-      if (currentRequestKeyRef.current === startedFor) setError(asAppError(raw));
+      const nextError = asAppError(raw);
+      if (currentRequestKeyRef.current === startedFor) setError(nextError);
+      return nextError;
     } finally {
       if (currentRequestKeyRef.current === startedFor) setLoading(false);
     }

@@ -19,6 +19,8 @@ import { PromptLibraryWorkspace, blockIfPromptDraftDirty, type PromptLibraryEntr
 import { parseLibraryId, type LibraryId } from "../../../app/common";
 import { DEFAULT_LAYOUT } from "../../../features/workspace/libraryLayout";
 import { UiProvider } from "../../../ui/UiProvider";
+import { createWorkspaceNavigation } from "../../../app/navigation";
+import { createImagePromptRelations, createTauriImagePromptRelationAdapter } from "../../image-prompt-relations";
 
 /** 合成一条最小 PromptRow；带图变体按序号决定关联数量，与瀑布流测试同构。 */
 function makePrompt(index: number): PromptRow {
@@ -586,6 +588,7 @@ async function setupWorkspace(
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  const relations = createImagePromptRelations({ adapter: createTauriImagePromptRelationAdapter(), navigation: createWorkspaceNavigation() });
   const render = (
     next: (GlobalLocateRequest & { nonce: number }) | null,
     id: string | null,
@@ -596,7 +599,7 @@ async function setupWorkspace(
       : { kind: "locate", requestId: `prompt-locate-${next.nonce}`, id: next.id, inTrash: next.inTrash };
     root.render(
       <UiProvider>
-        <PromptLibraryWorkspace session={{ id: sessionId, displayName: "测试提示词库" }} active entry={entry} />
+        <PromptLibraryWorkspace session={{ id: sessionId, displayName: "测试提示词库" }} relations={relations} active entry={entry} />
       </UiProvider>,
     );
   };
@@ -812,12 +815,12 @@ test("单击更新检查器、聚焦阅读替换中央区、收藏开关走独�
 
   // 无显式标题时以正文首行命名，完整正文逐字呈现。
   expect(info.querySelector("h3")?.textContent).toContain("正文首行 2");
-  const body = info.querySelector(".inspector-body-full");
+  const body = harness.container.querySelector('[data-prompt-inspector-section="body"] .inspector-body-full');
   if (body === null) throw new Error("缺少完整正文呈现");
   expect(body.textContent).toBe(makePrompt(2).body);
 
   // 收藏开关从检查器发起，走独立的二值收藏 IPC。
-  const favoriteToggle = harness.container.querySelector<HTMLButtonElement>(".favorite-toggle");
+  const favoriteToggle = harness.container.querySelector<HTMLButtonElement>('[aria-label="当前提示词操作"] button[aria-label="收藏提示词"]');
   if (favoriteToggle === null) throw new Error("缺少收藏开关");
   await act(async () => favoriteToggle.click());
   await flush();
@@ -835,6 +838,28 @@ test("单击更新检查器、聚焦阅读替换中央区、收藏开关走独�
   await flush();
   expect(harness.container.querySelector("[data-prompt-card]")).not.toBeNull();
 
+  await harness.unmount();
+});
+
+test("单选检查器使用五个连续可折叠分区，动作只集中在摘要", async () => {
+  const harness = await setupWorkspace();
+  const card = harness.container.querySelector<HTMLButtonElement>('[data-prompt-card][data-id="prompt-2"]');
+  if (card === null) throw new Error("缺少提示词卡片");
+  await act(async () => card.click());
+  const inspector = harness.container.querySelector<HTMLElement>('[aria-label="提示词检查器"]');
+  if (inspector === null) throw new Error("缺少提示词检查器");
+  const headings = [...inspector.querySelectorAll<HTMLButtonElement>('[data-prompt-inspector-section] > h2 > button')];
+  expect(headings.map((button) => button.textContent?.trim())).toEqual([
+    "摘要", "正文", "组织", "备注", "关联图片",
+  ]);
+  expect(headings.every((button) => button.getAttribute("aria-expanded") === "true")).toBe(true);
+  const summary = inspector.querySelector<HTMLElement>('[data-prompt-inspector-section="summary"]');
+  if (summary === null) throw new Error("缺少提示词摘要分区");
+  for (const label of ["复制提示词正文", "编辑提示词", "收藏提示词", "关联图片", "移入回收站"]) {
+    expect(summary.querySelector(`button[aria-label="${label}"]`)).not.toBeNull();
+  }
+  await act(async () => headings[1]?.click());
+  expect(headings[1]?.getAttribute("aria-expanded")).toBe("false");
   await harness.unmount();
 });
 
@@ -992,7 +1017,8 @@ test("清空提示词回收站经二次确认：呈现数量、取消默认聚�
   const report = harness.container.querySelector(".operation-status");
   if (report === null) throw new Error("缺少清理报告");
   expect(report.textContent).toContain("已永久删除 3 条");
-  expect(queries.length).toBe(queriesAtStart + 1);
+  // 一次无筛选 trash 快照确定 purge 全目标，一次关系协调刷新当前工作区。
+  expect(queries.length).toBe(queriesAtStart + 2);
 
   // 图片不变呈现：整个清空流程没有发出任何图片写命令。
   const imageWrites = ipcCalls.filter((call) =>
@@ -1022,11 +1048,13 @@ test("检查器在回收站位置让位给还原入口，缺失文件夹以稳�
     '[data-inspector-section="organization"]',
   );
   if (organization === null) throw new Error("缺少组织分区");
-  expect(organization.textContent).toContain("还原提示词");
+  expect(organization.textContent).toContain("回收站记录保留原组织");
   expect(organization.querySelector('input[type="checkbox"]')).toBeNull();
   expect(buttonWithTextExists(organization, "移入回收站")).toBe(false);
 
-  await act(async () => buttonWithText(harness.container, "还原提示词").click());
+  const restore = harness.container.querySelector<HTMLButtonElement>('button[aria-label="还原提示词"]');
+  if (restore === null) throw new Error("缺少还原提示词入口");
+  await act(async () => restore.click());
   await flush();
   expect(ipcCalls).toContainEqual({
     command: "restore_prompt",
@@ -1050,7 +1078,9 @@ test("正常区的检查器提供移入回收站入口，经确认对话框发�
   );
   if (card === null) throw new Error("缺少提示词卡片");
   await act(async () => card.click());
-  await act(async () => buttonWithText(harness.container, "移入回收站").click());
+  const remove = harness.container.querySelector<HTMLButtonElement>('button[aria-label="移入回收站"]');
+  if (remove === null) throw new Error("缺少移入回收站入口");
+  await act(async () => remove.click());
 
   const dialog = harness.container.querySelector<HTMLDivElement>('[role="dialog"]');
   if (dialog === null) throw new Error("缺少二次确认对话框");
@@ -1299,15 +1329,15 @@ test("多选呈现批量工具条与检查器批量分区，批量标签经后�
   expect(toolbar.textContent).toContain("已选 2 / 共 8 项");
   expect(harness.container.querySelector('[data-inspector-section="info"]')).toBeNull();
 
-  // 新标签经批量组织表单添加到全部选中项：写入走统一的后端批量命令。
-  const batchSection = harness.container.querySelector<HTMLElement>(
-    '[data-inspector-section="batch"]',
-  );
-  if (batchSection === null) throw new Error("缺少检查器批量分区");
-  const tagInput = batchSection.querySelector<HTMLInputElement>("#batch-new-tag");
+  const editTags = toolbar.querySelector<HTMLButtonElement>('button[aria-label="批量编辑标签"]');
+  if (editTags === null) throw new Error("缺少批量标签入口");
+  await act(async () => editTags.click());
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+  if (dialog === null) throw new Error("缺少批量标签对话框");
+  const tagInput = dialog.querySelector<HTMLInputElement>("#prompt-batch-tag");
   if (tagInput === null) throw new Error("缺少批量标签输入框");
-  const addTagButton = [...batchSection.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === "添加",
+  const addTagButton = [...dialog.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === "添加标签",
   );
   if (addTagButton === undefined) throw new Error("缺少批量添加标签按钮");
   await act(async () => {
@@ -1324,6 +1354,21 @@ test("多选呈现批量工具条与检查器批量分区，批量标签经后�
   if (status === null) throw new Error("缺少批量报告区");
   expect(status.textContent).toContain("批量完成：成功 2 项");
 
+  await harness.unmount();
+});
+
+test("多选检查器只读，文件夹标签收藏和更多动作全部位于底部栏", async () => {
+  const harness = await setupWorkspace();
+  const toolbar = await selectTwoCards(harness.container, "prompt-0", "prompt-2");
+  for (const label of ["批量编辑文件夹", "批量编辑标签", "批量收藏", "更多批量操作"]) {
+    expect(toolbar.querySelector(`button[aria-label="${label}"]`)).not.toBeNull();
+  }
+  const inspector = harness.container.querySelector<HTMLElement>('[aria-label="提示词检查器"]');
+  if (inspector === null) throw new Error("缺少提示词检查器");
+  expect(inspector.textContent).toContain("共同值");
+  expect(inspector.querySelector("form")).toBeNull();
+  expect(inspector.querySelector('[data-inspector-section="batch-links"]')).toBeNull();
+  expect(inspector.querySelector('[data-inspector-section="batch-danger"]')).toBeNull();
   await harness.unmount();
 });
 
@@ -1355,19 +1400,23 @@ test("批量建立图片关联逐条建立普通关联并聚合逐项失败", as
   catalogReply = { assets: [candidate], folders: [], tags: [], trash_count: 0 };
   const harness = await setupWorkspace();
 
-  await selectTwoCards(harness.container, "prompt-0", "prompt-2");
+  const toolbar = await selectTwoCards(harness.container, "prompt-0", "prompt-2");
 
-  // 批量关联选择器自取活动区图片候选。
-  const linksSection = harness.container.querySelector<HTMLElement>(
-    '[data-inspector-section="batch-links"]',
-  );
-  if (linksSection === null) throw new Error("缺少批量关联分区");
-  expect(linksSection.textContent).toContain("批量建立图片关联");
-  const select = linksSection.querySelector<HTMLSelectElement>("#batch-link-image");
+  const more = toolbar.querySelector<HTMLButtonElement>('button[aria-label="更多批量操作"]');
+  if (more === null) throw new Error("缺少更多批量操作入口");
+  more.focus();
+  await act(async () => more.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+  const linkItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.trim() === "关联图片");
+  if (linkItem === undefined) throw new Error("缺少批量关联图片菜单项");
+  await act(async () => linkItem.click());
+  await flush();
+  const linksDialog = document.querySelector<HTMLElement>('[role="dialog"]');
+  if (linksDialog === null) throw new Error("缺少批量关联对话框");
+  const select = linksDialog.querySelector<HTMLSelectElement>("#prompt-batch-image");
   if (select === null) throw new Error("缺少目标图片选择器");
   await act(async () => setSelect(select, candidate.hash));
 
-  const submit = [...linksSection.querySelectorAll("button")].find(
+  const submit = [...linksDialog.querySelectorAll("button")].find(
     (item) => item.textContent?.trim() === "建立关联",
   );
   if (submit === undefined) throw new Error("缺少建立关联按钮");
@@ -1396,13 +1445,14 @@ test("批量移入回收站经二次确认发起 batch_delete_prompts 并回显�
   batchReply = { succeeded: 2, failures: [] };
   const harness = await setupWorkspace();
 
-  await selectTwoCards(harness.container, "prompt-0", "prompt-2");
-
-  const dangerButton = harness.container.querySelector<HTMLButtonElement>(
-    '[data-inspector-section="batch-danger"] button',
-  );
-  if (dangerButton === null) throw new Error("缺少批量移入回收站按钮");
-  await act(async () => dangerButton.click());
+  const toolbar = await selectTwoCards(harness.container, "prompt-0", "prompt-2");
+  const more = toolbar.querySelector<HTMLButtonElement>('button[aria-label="更多批量操作"]');
+  if (more === null) throw new Error("缺少更多批量操作入口");
+  more.focus();
+  await act(async () => more.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })));
+  const dangerItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent?.trim() === "移入回收站");
+  if (dangerItem === undefined) throw new Error("缺少批量移入回收站菜单项");
+  await act(async () => dangerItem.click());
   const dialog = harness.container.querySelector<HTMLElement>('[role="dialog"]');
   if (dialog === null) throw new Error("缺少二次确认对话框");
   expect(dialog.textContent).toContain("选中的 2 条提示词");

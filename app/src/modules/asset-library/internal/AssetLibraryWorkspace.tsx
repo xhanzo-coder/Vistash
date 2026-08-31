@@ -64,8 +64,24 @@ function Problem({ error }: { error: Error }): ReactNode {
   return <p className={styles.error} role="alert">{error.message}</p>;
 }
 
-function LoadedWorkspace({ session, active, entry, importRequest, onImportRequestHandled, saved }: AssetLibraryWorkspaceProps & { saved: LibraryPreferences }): ReactNode {
+function LoadedWorkspace({ session, active, entry, importRequest, onImportRequestHandled, relations, saved }: AssetLibraryWorkspaceProps & { saved: LibraryPreferences }): ReactNode {
   const client = useQueryClient();
+  useEffect(() => {
+    return relations.registerRefresh(session.id, async (change) => {
+      const removed = new Set(change.removedImageIds ?? []);
+      for (const hash of removed) client.removeQueries({ queryKey: assetKeys.detail(session.id, hash), exact: true });
+      const details = change.promptIds.length > 0
+        ? [client.invalidateQueries({ queryKey: assetKeys.details(session.id) }, { throwOnError: true })]
+        : change.imageIds.filter((hash) => !removed.has(hash)).map((hash) =>
+            client.invalidateQueries({ queryKey: assetKeys.detail(session.id, hash), exact: true }, { throwOnError: true }),
+          );
+      await Promise.all([
+        client.invalidateQueries({ queryKey: assetKeys.collections(session.id) }, { throwOnError: true }),
+        client.invalidateQueries({ queryKey: assetKeys.promptCandidatesRoot(session.id) }, { throwOnError: true }),
+        ...details,
+      ]);
+    });
+  }, [client, relations, session.id]);
   useEffect(() => {
     if (!active) client.removeQueries({ queryKey: assetKeys.collections(session.id) });
   }, [active, client, session.id]);
@@ -154,8 +170,8 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
   const snapshot = collection.data?.snapshot;
   const changingBrowseScope = collection.isPlaceholderData && collection.data?.scopeKey !== scopeKey;
 
-  const actions = useAssetActions(session.id);
-  const trash = useTrashActions(session.id);
+  const actions = useAssetActions(session.id, relations);
+  const trash = useTrashActions(session.id, relations);
   // 排序是呈现语义：同一份缓存快照在两种视图与排序选项间共享，不触发新拉取。
   const orderedAssets = useMemo(
     () => sortAssets(snapshot?.assets ?? [], layout.sort),
@@ -464,7 +480,7 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
                 onCloseAutoFocus={(event) => {
                   if (inlineInspector) { event.preventDefault(); sectionRef.current?.querySelector<HTMLElement>('[data-inspector-heading], [data-inspector-section] h2 button')?.focus(); }
                 }}>
-                {selectedAssets.length > 1 ? <AssetMultiInspector assets={selectedAssets} /> : <AssetInspector libraryId={session.id} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={snapshot?.folders ?? []} onRestore={restoreSelected} restorable={!writesDisabled && layout.location === "trash"} actions={inspectorActions} />}
+                {selectedAssets.length > 1 ? <AssetMultiInspector assets={selectedAssets} /> : <AssetInspector libraryId={session.id} relations={relations} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={snapshot?.folders ?? []} onRestore={restoreSelected} restorable={!writesDisabled && layout.location === "trash"} actions={inspectorActions} />}
               </Dialog>
             </div>
             <select aria-label="排序方式" className={styles.sortSelect} value={layout.sort}
@@ -551,7 +567,7 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
             onCommit={(inspectorWidth) => changeLayout({ ...layout, inspectorWidth })} />}
           <aside className={styles.filenameInspector} aria-label="图片检查器" data-collapsed={layout.inspectorCollapsed ? "true" : undefined} style={{ flexBasis: layout.inspectorCollapsed ? "3.5rem" : `${layout.inspectorWidth}px` }}>
             <div className={styles.inspectorPanelHeader}><Tooltip content={layout.inspectorCollapsed ? "展开图片检查器" : "收起图片检查器"}><IconButton size="compact" label={layout.inspectorCollapsed ? "展开图片检查器" : "收起图片检查器"} icon={<SidebarSimpleIcon />} onClick={() => changeLayout({ ...layout, inspectorCollapsed: !layout.inspectorCollapsed })} /></Tooltip></div>
-            {layout.inspectorCollapsed ? null : <div className={styles.inspectorScroll}>{selectedAssets.length > 1 ? <AssetMultiInspector assets={selectedAssets} /> : <AssetInspector libraryId={session.id} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={snapshot?.folders ?? []} onRestore={restoreSelected} restorable={!writesDisabled && layout.location === "trash"} actions={inspectorActions} />}</div>}
+            {layout.inspectorCollapsed ? null : <div className={styles.inspectorScroll}>{selectedAssets.length > 1 ? <AssetMultiInspector assets={selectedAssets} /> : <AssetInspector libraryId={session.id} relations={relations} asset={singleAsset} count={selectedIds.size} active={active} editable={canRename} sections={layout.inspectorSections} onSectionsChange={(inspectorSections) => changeLayout({ ...layout, inspectorSections })} notes={notes} folders={snapshot?.folders ?? []} onRestore={restoreSelected} restorable={!writesDisabled && layout.location === "trash"} actions={inspectorActions} />}</div>}
           </aside>
         </> : null}
       </div>

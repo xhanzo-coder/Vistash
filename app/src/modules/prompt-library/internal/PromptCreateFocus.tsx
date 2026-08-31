@@ -108,16 +108,16 @@ export function PromptCreateFocus({ initialFolder, onCancel, onCreated }: {
       <div className={styles.createFields}>
         <label className={styles.createField}>
           <span>标题 <small>可选</small></span>
-          <input name="prompt-create-title" autoComplete="off" value={title} onChange={(event) => setTitle(event.currentTarget.value)} placeholder="给这条提示词一个便于查找的名字" />
+          <input name="prompt-create-title" autoComplete="off" value={title} onChange={(event) => setTitle(event.currentTarget.value)} placeholder="给这条提示词一个便于查找的名字…" />
         </label>
         <div className={styles.createPair}>
           <label className={styles.createField}>
             <span>模型 / 平台 <small>可选</small></span>
-            <input name="prompt-create-model" autoComplete="off" value={model} onChange={(event) => setModel(event.currentTarget.value)} placeholder="例如 Midjourney、SDXL" />
+            <input name="prompt-create-model" autoComplete="off" value={model} onChange={(event) => setModel(event.currentTarget.value)} placeholder="例如 Midjourney、SDXL…" />
           </label>
           <label className={styles.createField}>
             <span>参数 <small>可选</small></span>
-            <input name="prompt-create-parameters" autoComplete="off" value={parameters} onChange={(event) => setParameters(event.currentTarget.value)} placeholder="尺寸、采样器或其他说明" />
+            <input name="prompt-create-parameters" autoComplete="off" value={parameters} onChange={(event) => setParameters(event.currentTarget.value)} placeholder="尺寸、采样器或其他说明…" />
           </label>
         </div>
         <label className={`${styles.createField} ${styles.createBody}`}>

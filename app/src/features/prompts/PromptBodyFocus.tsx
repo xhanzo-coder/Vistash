@@ -7,6 +7,7 @@ import { ErrorLine } from "../library/ErrorLine";
 import { setPromptDraftGuard } from "./draftGuard";
 import { promptDisplayTitle } from "./promptDisplay";
 import { PromptDraftGuardDialog } from "./PromptDraftGuardDialog";
+import { formatPromptDate } from "./promptDisplay";
 
 type SaveStatus =
   | { kind: "idle" }
@@ -190,7 +191,7 @@ export function PromptBodyFocus({
 
       <h2>{promptDisplayTitle(prompt)}</h2>
       <p className="muted">
-        {prompt.model ?? "未记录模型"} · 更新于 {prompt.updated_at.slice(0, 10)}
+        {prompt.model ?? "未记录模型"} · 更新于 {formatPromptDate(prompt.updated_at)}
       </p>
 
       {!editing ? (

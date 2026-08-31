@@ -10,12 +10,14 @@
 import { createElement, useMemo, type ReactNode } from "react";
 import type { RequestId } from "../../app/common";
 import type { OpenLibrarySession } from "../library-lifecycle";
+import type { ImagePromptRelations } from "../image-prompt-relations";
 import { PromptWorkspace } from "./internal/PromptWorkspace";
 export { blockIfPromptDraftDirty } from "../../features/prompts/draftGuard";
 
 /** 提示词工作区的组合属性：由应用外壳持有会话与一级导航状态后下发。 */
 export type PromptLibraryWorkspaceProps = {
   session: OpenLibrarySession;
+  relations: ImagePromptRelations;
   /** 是否为当前激活的一级工作区；非激活时模块挂起交互但保留现场。 */
   active: boolean;
   /** 待处理的提示词定位条目；模块消费后按 requestId 去重。 */
@@ -50,6 +52,7 @@ export function PromptLibraryWorkspace({
   active,
   entry,
   onEntryHandled,
+  relations,
   session,
 }: PromptLibraryWorkspaceProps): ReactNode {
   const locate = useMemo<(PromptLocateBridge | null)>(() => {
@@ -67,6 +70,7 @@ export function PromptLibraryWorkspace({
   return createElement(PromptWorkspace, {
     key: session.id,
     libraryId: session.id,
+    relations,
     locate,
     onLocateHandled: handled,
     // 外层 AppShell 负责可见性；工作区自身按 active 暂停抓取并让集合子视图

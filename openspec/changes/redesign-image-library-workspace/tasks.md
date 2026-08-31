@@ -103,8 +103,8 @@
 - [x] 11.4 在 10,000 项 fixture 上测量首屏、DOM、滚动帧时间、内存和视图切换，并达到任务 1.5 冻结的基线
 - [ ] 11.5 使用 release Tauri 构建验收 Windows 文件/目录拖放、文件剪贴板、截图位图、文本粘贴、对话框、默认程序打开、自定义标题栏拖动/双击/窗口控件、Windows 贴靠和窄窗口
 - [x] 11.6 串行通过 `pnpm lint`、`pnpm typecheck`、`pnpm test`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo test --workspace`
-- [ ] 11.7 使用 `webapp-testing` 与 `web-design-guidelines` 完成键盘、焦点、语义、深浅主题和视觉状态审查，并修复全部阻断问题
-- [ ] 11.8 运行最终 `code-review` 与 `openspec validate redesign-image-library-workspace --strict --no-interactive`，同步任务、设计、规格和实现状态
+- [x] 11.7 使用 `webapp-testing` 与 `web-design-guidelines` 完成键盘、焦点、语义、深浅主题和视觉状态审查，并修复全部阻断问题
+- [x] 11.8 运行最终 `code-review` 与 `openspec validate redesign-image-library-workspace --strict --no-interactive`，同步任务、设计、规格和实现状态
 
 ## 12. 用户实机反馈后的前端纠偏
 

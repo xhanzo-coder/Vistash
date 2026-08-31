@@ -266,6 +266,8 @@ windows = { version = "...", features = [
 
 若针对 Photoshop、截图工具、浏览器的 Windows 互操作测试证明官方插件不能满足透明通道或色彩空间要求，再单独实现 `CF_DIBV5`/`CF_DIB` 解析；不得在没有失败证据时同时维护两套位图解析路径。
 
+**2026-08-31 实测结论：** 在 release Tauri 隔离库中，Windows `Print Screen` 使 `CF_DIB`/`CF_DIBV5` 可用，但插件 `read_image()` 返回 arboard `ConversionFailure`；同一剪贴板内容改由 Win32 直接复制 DIB 后成功导入。这满足上段的实施触发条件。生产读取因此切换为单一 DIB 路径：锁内固定头校验和有界复制，锁外解码；插件仅保留图片写出，不再作为读入 fallback。
+
 ### 6.3 导入/导出对话框
 
 - 继续使用官方 `tauri-plugin-dialog`；

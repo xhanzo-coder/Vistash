@@ -77,7 +77,7 @@ export function PromptNavigator({ folders, tags, trashCount, scope, mutating, on
           }} /></div>
       </section>
       {scope.location === "active" && tags.length > 0 ? <section className={styles.tagSection}><div className={styles.sectionHeading}><span>标签</span></div><div className={styles.tagPanel} aria-label="标签筛选">
-        {tags.map((usage) => <Button key={usage.tag} size="compact" variant="ghost" className={styles.tagChip} data-tag={usage.tag} aria-pressed={scope.selectedTags.includes(usage.tag)} onClick={() => onToggleTag(usage.tag)}><span>{usage.tag}</span><span className={styles.tagCount}>{usage.count}</span></Button>)}
+        {tags.map((usage) => <Button key={usage.tag} size="compact" variant="ghost" className={styles.tagChip} data-tag={usage.tag} aria-label={`${usage.tag}，${usage.count} 条提示词`} title={`${usage.count} 条提示词`} aria-pressed={scope.selectedTags.includes(usage.tag)} onClick={() => onToggleTag(usage.tag)}><span>{usage.tag}</span></Button>)}
       </div></section> : null}
       <div className={styles.trashEntry}><Button size="compact" variant="ghost" className={styles.navEntry} title="回收站" startIcon={<TrashIcon />} aria-label="回收站" aria-current={scope.location === "trash" ? "page" : undefined} onClick={onSelectTrash}>回收站</Button>{trashCount > 0 ? <span className={styles.countBadge}>{trashCount}</span> : null}</div>
     </nav>

@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { AssetId, LibraryId } from "../../../app/common";
+import { parseAssetId, type AssetId, type LibraryId } from "../../../app/common";
 import { appTaskCenter } from "../../../app/runtime";
 import type { TaskOutcome } from "../../../app/taskCenter";
 import { batchAddAssetTag, batchDeleteAssets, batchLinkToPrompt, batchMoveAssetsToFolder, batchRemoveAssetTag, batchSetAssetFavorite, setAssetFavorite } from "../../../shared/ipc";
@@ -9,6 +9,7 @@ import type { BatchProgress, BatchReport } from "../../../shared/types";
 import { Button } from "../../../ui/button/Button";
 import { assetKeys } from "./queryKeys";
 import styles from "./AssetLibraryWorkspace.module.css";
+import type { ImagePromptRelations } from "../../image-prompt-relations";
 
 type AssetAction =
   | { kind: "favorite-one"; hash: AssetId; value: boolean }
@@ -32,7 +33,7 @@ function titleOf(action: AssetAction): string {
 }
 
 /** 目标属于这次动作，而不是异步执行时的选择；结果不随选择栏卸载而丢失。 */
-export function useAssetActions(libraryId: LibraryId) {
+export function useAssetActions(libraryId: LibraryId, relations: ImagePromptRelations) {
   const client = useQueryClient();
   const nextResultId = useRef(0);
   const taskIds = useRef(new WeakMap<object, string>());
@@ -69,6 +70,18 @@ export function useAssetActions(libraryId: LibraryId) {
         setResults((current) => [...current, result]);
       }
       const ids = new Set(request.kind === "favorite-one" ? [request.hash] : request.hashes);
+      if (request.kind === "trash" || request.kind === "link") {
+        const failed = new Set(report.failures.map((failure) => failure.id));
+        const changed = request.hashes.filter((hash) => !failed.has(hash)).map(parseAssetId);
+        const refreshError = await relations.synchronize(libraryId, {
+          imageIds: changed,
+          promptIds: request.kind === "link" ? [request.promptId] : [],
+        });
+        if (refreshError !== null) {
+          const result: ActionResult = { id: ++nextResultId.current, title: titleOf(request), result: { kind: "failed", error: new IpcError(refreshError) } };
+          setResults((current) => [...current, result]);
+        }
+      }
       await Promise.all([
         client.invalidateQueries({ queryKey: request.kind === "link" ? assetKeys.promptCandidatesRoot(libraryId) : assetKeys.collections(libraryId) }),
         client.invalidateQueries({ queryKey: assetKeys.details(libraryId), predicate: (query) => typeof query.queryKey[3] === "string" && ids.has(query.queryKey[3]) }),

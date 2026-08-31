@@ -5,14 +5,15 @@ import { appTaskCenter } from "../../../app/runtime";
 import type { TaskOutcome } from "../../../app/taskCenter";
 import { catalogSnapshot, purgeTrash, restoreAsset } from "../../../shared/ipc";
 import { asAppError, formatError, IpcError } from "../../../shared/errors";
-import type { AppError } from "../../../shared/types";
+import type { AppError, PurgeReport } from "../../../shared/types";
 import { Button } from "../../../ui/button/Button";
 import { assetKeys } from "./queryKeys";
 import styles from "./AssetLibraryWorkspace.module.css";
+import type { ImagePromptRelations } from "../../image-prompt-relations";
 
 export type TrashTarget = { hash: AssetId; displayName: string };
-type RestoreReport = { restored: number; failures: Array<TrashTarget & { error: AppError }>; missing: Array<TrashTarget & { folders: string[] }>; unprocessed: readonly TrashTarget[] };
-type PurgeOutcome = { kind: "purged"; purged: number; failures: Array<TrashTarget & { error: AppError }> } | { kind: "not-started" };
+type RestoreReport = { restored: number; failures: Array<TrashTarget & { error: AppError }>; missing: Array<TrashTarget & { folders: string[] }>; unprocessed: readonly TrashTarget[]; refreshError: AppError | null };
+type PurgeOutcome = { kind: "purged"; purged: number; failures: Array<TrashTarget & { error: AppError }>; refreshError: AppError | null } | { kind: "not-started" };
 type TrashOutcome = { kind: "restored"; report: RestoreReport } | PurgeOutcome | { kind: "error"; operation: "还原" | "清空"; error: Error };
 type TrashResult = { id: number } & TrashOutcome;
 
@@ -77,7 +78,7 @@ class TrashHistory {
 const histories = new WeakMap<QueryClient, Map<LibraryId, TrashHistory>>();
 
 /** 还原逐项沿用 Rust 单素材事务；切库后不再向新的当前库发出后续写入。 */
-export function useTrashActions(libraryId: LibraryId) {
+export function useTrashActions(libraryId: LibraryId, relations: ImagePromptRelations) {
   const client = useQueryClient();
   const mounted = useRef(true);
   const [history] = useState(() => {
@@ -105,18 +106,21 @@ export function useTrashActions(libraryId: LibraryId) {
       const registration = appTaskCenter.register({ kind: "batch_organization", title: "还原图片", libraryId, stoppable: false, concurrencyKey: null });
       if (registration.kind !== "registered") throw new Error("还原任务意外触发并发拒绝");
       restoreTaskIds.current.set(targets, registration.record.id);
-      const report: RestoreReport = { restored: 0, failures: [], missing: [], unprocessed: [] };
+      const report: RestoreReport = { restored: 0, failures: [], missing: [], unprocessed: [], refreshError: null };
+      const restoredIds: AssetId[] = [];
       for (const [index, target] of targets.entries()) {
         if (!mounted.current) { report.unprocessed = targets.slice(index); break; }
         try {
           const outcome = await restoreAsset(target.hash);
           report.restored += 1;
+          restoredIds.push(target.hash);
           if (outcome.missing_folders.length > 0) report.missing.push({ ...target, folders: outcome.missing_folders });
         } catch (error) {
           if (!(error instanceof IpcError)) throw error;
           report.failures.push({ ...target, error: error.appError });
         }
       }
+      if (restoredIds.length > 0) report.refreshError = await relations.synchronize(libraryId, { imageIds: restoredIds, promptIds: [] });
       return report;
     },
     onSuccess: (report, targets) => {
@@ -148,18 +152,30 @@ export function useTrashActions(libraryId: LibraryId) {
       const snapshot = await catalogSnapshot({ text: "", tags: [], folder: { kind: "all" }, favorite: null, location: "trash" });
       if (!mounted.current) return { kind: "not-started" };
       const names = new Map(snapshot.assets.map((asset) => [asset.hash, asset.display_filename]));
-      const outcome = await purgeTrash();
-      return { kind: "purged", purged: outcome.purged, failures: outcome.failures.map((failure) => {
+      let outcome: PurgeReport;
+      try {
+        outcome = await purgeTrash();
+      } catch (raw) {
+        const targets = snapshot.assets.map((asset) => parseAssetId(asset.hash));
+        await relations.synchronize(libraryId, { imageIds: targets, promptIds: [], removedImageIds: targets });
+        throw raw;
+      }
+      const failures = outcome.failures.map((failure) => {
         const displayName = names.get(failure.hash);
         if (displayName === undefined) throw new Error(`清空结果包含快照之外的图片：${failure.hash}`);
         return { hash: parseAssetId(failure.hash), displayName, error: failure.error };
-      }) };
+      });
+      const failed = new Set(failures.map((failure) => failure.hash));
+      const purgedIds = snapshot.assets.map((asset) => parseAssetId(asset.hash)).filter((hash) => !failed.has(hash));
+      const refreshError = await relations.synchronize(libraryId, { imageIds: purgedIds, promptIds: [], removedImageIds: purgedIds });
+      return { kind: "purged", purged: outcome.purged, failures, refreshError };
     },
     onSuccess: (outcome) => {
       const taskId = requireTaskId(purgeTaskId.current, "清空回收站");
       purgeTaskId.current = null;
       appTaskCenter.complete(taskId, purgeTaskOutcome(outcome));
-      if (outcome.kind === "not-started" || outcome.failures.length > 0) history.append(outcome);
+      // 成功清空同样是需要确认的破坏性结果；不能让空列表成为唯一反馈。
+      history.append(outcome);
     },
     onError: (error) => {
       const taskId = requireTaskId(purgeTaskId.current, "清空回收站");
@@ -187,9 +203,11 @@ export function TrashResults({ actions }: { actions: ReturnType<typeof useTrashA
         <div className={styles.resultHeading}><strong>{operation}结果</strong><Button size="compact" variant="ghost" aria-label={`关闭${operation}报告`} onClick={() => actions.dismiss(result.id)}>关闭</Button></div>
         {result.kind === "error" ? <><p role="alert" className={styles.error}>{result.error.message}</p><p>操作未完成，请以刷新后的回收站内容为准。</p></> : result.kind === "not-started" ? <p role="status">切库后未执行清空。</p> : result.kind === "purged" ? <>
           <p role="status">已永久删除 {result.purged} 张图片，失败 {result.failures.length} 张</p>
+          {result.refreshError === null ? null : <p role="alert">关系已更新，但刷新关联视图失败：{formatError(result.refreshError)}</p>}
           {result.failures.map((item) => <p key={item.hash} role="alert" className={styles.error}>{item.displayName}：{formatError(item.error)}</p>)}
         </> : <>
           <p role="status">已还原 {result.report.restored} 张图片，失败 {result.report.failures.length} 张，未处理 {result.report.unprocessed.length} 张</p>
+          {result.report.refreshError === null ? null : <p role="alert">还原已完成，但刷新关联视图失败：{formatError(result.report.refreshError)}</p>}
           {result.report.missing.map((item) => <p key={item.hash} role="status">{item.displayName}：已还原到未分类；原文件夹「{item.folders.join("、")}」不存在。[trash.restore_target_folder_missing]</p>)}
           {result.report.failures.map((item) => <p key={item.hash} role="alert" className={styles.error}>{item.displayName}：{formatError(item.error)}</p>)}
           {result.report.unprocessed.length > 0 ? <p>切库后未继续处理：{result.report.unprocessed.map((item) => item.displayName).join("、")}</p> : null}

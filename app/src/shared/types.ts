@@ -332,6 +332,10 @@ export type LinkedImageState = {
   hash: string;
   /** 该图片当前是否在图片库回收站里；关联本身保留，还原后自动回到正常。 */
   deleted: boolean;
+  display_filename: string;
+  folder: string | null;
+  width: number;
+  height: number;
 };
 
 /** `vistash_core::catalog::BatchFailure`：单个目标的批量失败。 */

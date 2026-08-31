@@ -20,6 +20,7 @@ export const PROMPT_CARD_MAX_BODY_LINES = 4;
 const CARD_PADDING = 20;
 const SECTION_GAP = 8;
 const TITLE_LINE_HEIGHT = 20;
+const META_LINE_HEIGHT = 18;
 const BODY_LINE_HEIGHT = 20;
 /** 参与行数估算的正文长度上限：更长的正文反正只会被裁到同样的四行。 */
 const PREVIEW_CHAR_BUDGET = 240;
@@ -48,6 +49,8 @@ export function estimatedPromptCardHeight(
     coverHeight +
     SECTION_GAP +
     TITLE_LINE_HEIGHT +
+    SECTION_GAP +
+    META_LINE_HEIGHT +
     SECTION_GAP +
     bodyLines * BODY_LINE_HEIGHT
   );

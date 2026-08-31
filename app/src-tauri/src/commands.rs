@@ -896,7 +896,6 @@ const EMPTY_PASTE_OUTCOME: ImportOutcome = ImportOutcome {
 fn paste_import_blocking(
     current_folder: Option<String>,
     on_progress: Channel<TransferProgress>,
-    app: tauri::AppHandle,
     runs: &TransferRuns,
     opened: &Opened,
 ) -> Result<ImportOutcome> {
@@ -907,8 +906,7 @@ fn paste_import_blocking(
     // 剪贴板是全局单例且 trait 要求独占借用：在 blocking worker 内串行读取，
     // 并在关闭系统剪贴板之后才做 PNG 编码等耗时工作（adapter 内部保证）。
     let payload = {
-        let mut clipboard =
-            crate::windows_clipboard::WindowsClipboard::new(read_bitmap_via_plugin(app));
+        let mut clipboard = crate::windows_clipboard::WindowsClipboard::new();
         clipboard.snapshot()?
     };
     match payload {
@@ -925,39 +923,6 @@ fn paste_import_blocking(
             run_import(sources, current_folder, on_progress, runs, opened)
         }
         ClipboardPayload::Text(_) | ClipboardPayload::Empty => Ok(EMPTY_PASTE_OUTCOME),
-    }
-}
-
-/// 经官方插件的 Rust API 读取位图（设计第十一条）。
-///
-/// 只在 CF_HDROP 与 CF_UNICODETEXT 都不在场时才会被调用。插件把 arboard 的
-/// "内容不可用/不受支持"压扁成字符串错误且没有 `Ok(None)` 路径，因此这里把一切
-/// Err 都解释为"位图不在场"，交由裁决落到 Empty——粘贴一个第一阶段不支持的内容
-/// 不该报错。剪贴板被占用已由 adapter 自己的 Win32 打开探测以 `clipboard.busy`
-/// 报告；真实系统剪贴板的完整行为验收在任务 11.5。
-#[cfg(target_os = "windows")]
-fn read_bitmap_via_plugin(
-    app: tauri::AppHandle,
-) -> impl FnMut() -> Result<Option<vistash_core::clipboard::BitmapImage>> + Send {
-    use tauri_plugin_clipboard_manager::ClipboardExt;
-
-    move || {
-        use vistash_core::clipboard::BitmapImage;
-
-        // ClipboardExt 把官方插件的 Clipboard 实体挂到所有 Manager 类型上；
-        // read_image 内部经 arboard 打开系统剪贴板并复制出像素。
-        let image = app.clipboard().read_image().map_err(|error| {
-            AppError::detailed(
-                Code::ClipboardReadFailed,
-                format!("Windows 已报告位图格式，但读取像素失败：{error}"),
-            )
-        })?;
-        BitmapImage::new(
-            image.width() as usize,
-            image.height() as usize,
-            image.rgba().to_vec(),
-        )
-        .map(Some)
     }
 }
 
@@ -986,10 +951,11 @@ pub async fn paste_import(
 
     #[cfg(target_os = "windows")]
     {
+        drop(app);
         let opened = current_opened(&state)?;
         let runs = std::sync::Arc::clone(runs.inner());
         tauri::async_runtime::spawn_blocking(move || {
-            paste_import_blocking(current_folder, on_progress, app, &runs, &opened)
+            paste_import_blocking(current_folder, on_progress, &runs, &opened)
         })
         .await
         .map_err(|error| {

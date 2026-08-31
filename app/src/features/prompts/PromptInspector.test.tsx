@@ -6,12 +6,20 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-import type { PromptRow } from "../../shared/types";
+import type { LinkedImageState, PromptRow } from "../../shared/types";
+import { UiProvider } from "../../ui/UiProvider";
+import { parseLibraryId } from "../../app/common";
+import { createWorkspaceNavigation } from "../../app/navigation";
+import { createImagePromptRelations, createTauriImagePromptRelationAdapter } from "../../modules/image-prompt-relations";
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
 import { PromptInspector } from "./PromptInspector";
 
 /** linked_image_states 的应答；检查关联图片分区的测试按需设定。 */
-let statesReply: Array<{ hash: string; deleted: boolean }> = [];
+let statesReply: LinkedImageState[] = [];
+const LIBRARY_ID = parseLibraryId("018f3c9e-6c00-7000-8000-0000000000c3");
+function linkedState(hash: string, deleted: boolean): LinkedImageState {
+  return { hash, deleted, display_filename: `${hash.slice(0, 4)}.png`, folder: null, width: 800, height: 600 };
+}
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
@@ -76,15 +84,8 @@ type Handlers = {
   onToggleFavorite?: (id: string, favorite: boolean) => void;
   onOpenBodyFocus?: (id: string) => void;
   onEditBodyFocus?: (id: string) => void;
-  onImagesChanged?: () => void;
   onDeletePrompt?: (id: string) => void;
   onRestorePrompt?: (id: string) => void;
-  // 批量动作（任务 11.2）：只记录意图，写入与报告由工作区测试覆盖。
-  onBatchFolders?: (ids: string[], path: string, add: boolean) => void;
-  onBatchTags?: (ids: string[], tag: string, add: boolean) => void;
-  onBatchFavorite?: (ids: string[], favorite: boolean) => void;
-  onBatchLinkImages?: (hash: string, ids: string[]) => void;
-  onBatchDelete?: (ids: string[]) => void;
 };
 
 /**
@@ -122,14 +123,17 @@ async function setupInspector(
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  const relations = createImagePromptRelations({ adapter: createTauriImagePromptRelationAdapter(), navigation: createWorkspaceNavigation() });
 
   function Harness() {
     const [current, setCurrent] = useState(prompts);
     return (
-      <SelectionProvider ids={current.map((prompt) => prompt.id)}>
+      <UiProvider><SelectionProvider ids={current.map((prompt) => prompt.id)}>
         <ClickProxy prompts={current} />
         <PromptInspector
           prompts={current}
+          libraryId={LIBRARY_ID}
+          relations={relations}
           folders={["人像", "人像/室内"]}
           mutating={false}
           onSetFolders={(id, folders) => {
@@ -152,17 +156,11 @@ async function setupInspector(
           }}
           onOpenBodyFocus={handlers.onOpenBodyFocus ?? (() => {})}
           onEditBodyFocus={handlers.onEditBodyFocus ?? (() => {})}
-          onImagesChanged={handlers.onImagesChanged ?? (() => {})}
           trashLocation={options.trashLocation ?? false}
           onDeletePrompt={handlers.onDeletePrompt ?? (() => {})}
           onRestorePrompt={handlers.onRestorePrompt ?? (() => {})}
-          onBatchFolders={(ids, path, add) => handlers.onBatchFolders?.(ids, path, add)}
-          onBatchTags={(ids, tag, add) => handlers.onBatchTags?.(ids, tag, add)}
-          onBatchFavorite={(ids, favorite) => handlers.onBatchFavorite?.(ids, favorite)}
-          onBatchLinkImages={(hash, ids) => handlers.onBatchLinkImages?.(hash, ids)}
-          onBatchDelete={(ids) => handlers.onBatchDelete?.(ids)}
         />
-      </SelectionProvider>
+      </SelectionProvider></UiProvider>
     );
   }
 
@@ -200,13 +198,6 @@ function setInput(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-function setSelect(select: HTMLSelectElement, value: string): void {
-  const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
-  if (descriptor?.set === undefined) throw new Error("HTMLSelectElement.value setter 不存在");
-  descriptor.set.call(select, value);
-  select.dispatchEvent(new Event("change", { bubbles: true }));
-}
-
 test("无活动项时呈现操作引导而不是空白", async () => {
   const harness = await setupInspector([]);
   expect(harness.root.querySelector(".inspector-placeholder")?.textContent).toContain(
@@ -228,11 +219,11 @@ test("信息分区呈现元数据、完整当前正文与聚焦阅读入口", as
   expect(info.querySelector("h3")?.textContent).toBe("正文首行");
   expect(info.textContent).toContain("sd-xl");
   expect(info.textContent).toContain("steps=30");
-  expect(info.textContent).toContain("2026-08-21");
+  expect(info.textContent).toContain("2026/08/21");
   expect(info.textContent).toContain("0");
 
   // 完整正文逐字呈现，不做截断或改写。
-  const body = info.querySelector(".inspector-body-full");
+  const body = harness.section("body").querySelector(".inspector-body-full");
   if (body === null) throw new Error("缺少完整正文呈现");
   expect(body.textContent).toBe("正文首行\n第二行细节\n第三行细节");
 
@@ -337,8 +328,8 @@ test("无关联图片时给出建立关联的出路文案", async () => {
 test("带关联图片的活动项按权威顺序列出格位并标注总数", async () => {
   const hashes = ["a".repeat(64), "b".repeat(64)];
   statesReply = [
-    { hash: hashes[0] ?? "", deleted: false },
-    { hash: hashes[1] ?? "", deleted: false },
+    linkedState(hashes[0] ?? "", false),
+    linkedState(hashes[1] ?? "", false),
   ];
   const harness = await setupInspector([makePrompt({ linked_image_hashes: [...hashes] })]);
   await act(async () => harness.proxy(0).click());
@@ -355,7 +346,7 @@ test("带关联图片的活动项按权威顺序列出格位并标注总数", as
 });
 
 test("回收站里的关联图片显式标记已删除而不是消失", async () => {
-  statesReply = [{ hash: "a".repeat(64), deleted: true }];
+  statesReply = [linkedState("a".repeat(64), true)];
   const harness = await setupInspector([
     makePrompt({ linked_image_hashes: ["a".repeat(64)] }),
   ]);
@@ -374,7 +365,7 @@ test("收藏开关报告目标状态且初始与提示词一致", async () => {
   });
   await act(async () => harness.proxy(0).click());
 
-  const button = harness.root.querySelector<HTMLButtonElement>(".favorite-toggle");
+  const button = harness.root.querySelector<HTMLButtonElement>('button[aria-label="取消收藏提示词"]');
   if (button === null) throw new Error("缺少收藏开关");
   expect(button.getAttribute("aria-pressed")).toBe("true");
 
@@ -411,7 +402,9 @@ test("回收站位置的组织分区让位给还原入口并上报还原请求",
   expect(organization.querySelector('input[type="checkbox"]')).toBeNull();
   expect([...organization.querySelectorAll("button")].some((b) => b.textContent?.trim() === "移入回收站")).toBe(false);
 
-  await act(async () => harness.buttonByText("还原提示词").click());
+  const restore = harness.root.querySelector<HTMLButtonElement>('button[aria-label="还原提示词"]');
+  if (restore === null) throw new Error("缺少还原提示词入口");
+  await act(async () => restore.click());
   expect(restored).toEqual(["prompt-0"]);
 });
 
@@ -422,134 +415,10 @@ test("正常位置的组织分区提供移入回收站入口并上报删除请�
   });
   await act(async () => harness.proxy(0).click());
 
-  await act(async () => harness.buttonByText("移入回收站").click());
+  const remove = harness.root.querySelector<HTMLButtonElement>('button[aria-label="移入回收站"]');
+  if (remove === null) throw new Error("缺少移入回收站入口");
+  await act(async () => remove.click());
   expect(deleted).toEqual(["prompt-0"]);
-});
-
-test("多选批量组织分区按共同值呈现并携带完整选中集合上报", async () => {
-  const first = makePrompt({ tags: ["人像"] });
-  const second = makePrompt({ id: "prompt-1", body: "另一条正文", tags: ["人像"] });
-  const batch: Array<{
-    kind: string;
-    ids?: string[];
-    target?: string;
-    add?: boolean;
-  }> = [];
-  const harness = await setupInspector([first, second], {
-    onBatchFolders: (ids, path, add) =>
-      batch.push({ kind: "folders", ids, target: path, add }),
-    onBatchTags: (ids, tag, add) => batch.push({ kind: "tags", ids, target: tag, add }),
-    onBatchFavorite: (ids, favorite) => batch.push({ kind: "favorite", ids, add: favorite }),
-  });
-
-  await act(async () => harness.proxy(0).click());
-  await act(async () => {
-    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
-  });
-
-  // 文件夹三态：两项都没有"人像/室内"，勾选即批量加入。
-  const joinFolder = harness.root.querySelector<HTMLInputElement>(
-    '[aria-label="批量加入文件夹 人像/室内"]',
-  );
-  if (joinFolder === null) throw new Error("缺少批量加入文件夹复选框");
-  await act(async () => joinFolder.click());
-  expect(batch.at(-1)).toEqual({
-    kind: "folders",
-    ids: [first.id, second.id],
-    target: "人像/室内",
-    add: true,
-  });
-
-  // 共同标签以按下状态呈现，点击即批量移除。
-  const removeTag = harness.root.querySelector<HTMLButtonElement>(
-    '[aria-label="批量移除标签 人像"]',
-  );
-  if (removeTag === null) throw new Error("缺少批量移除标签按钮");
-  await act(async () => removeTag.click());
-  expect(batch.at(-1)).toEqual({
-    kind: "tags",
-    ids: [first.id, second.id],
-    target: "人像",
-    add: false,
-  });
-
-  // 收藏是二值字段：两项都未收藏 → 提供全部收藏出路。
-  const favoriteButton = [...harness.root.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === "全部收藏",
-  );
-  if (favoriteButton === undefined) throw new Error("缺少全部收藏按钮");
-  await act(async () => favoriteButton.click());
-  expect(batch.at(-1)).toEqual({
-    kind: "favorite",
-    ids: [first.id, second.id],
-    add: true,
-  });
-});
-
-test("批量关联分区自取图片候选并在提交时上报选中集合", async () => {
-  mockIPC((command) => {
-    if (command === "plugin:event|listen" || command === "plugin:event|unlisten") {
-      return undefined;
-    }
-    if (command === "asset_thumbnail") return new ArrayBuffer(8);
-    if (command === "catalog_snapshot") {
-      return {
-        assets: [
-          {
-            hash: "a".repeat(64),
-            hash_algo: "sha256",
-            media_type: "png",
-            ext: "png",
-            byte_size: 2048,
-            width: 1920,
-            height: 1080,
-            imported_at: "2026-08-21T08:30:00Z",
-            original_filename: "窗台.png",
-            source_path: null,
-            deleted_at: null,
-            color_card_status: "ok",
-            color_card_algo_version: 1,
-            color_card_failure_reason: null,
-            color_card_sampled_pixel_count: 100,
-            note: "",
-            favorite: false,
-            tags: [],
-            folders: [],
-            colors: [],
-          },
-        ],
-        folders: [],
-        tags: [],
-        trash_count: 0,
-      };
-    }
-    throw new Error(`未预期的 IPC：${command}`);
-  });
-  const links: Array<{ hash: string; ids: string[] }> = [];
-  const first = makePrompt();
-  const second = makePrompt({ id: "prompt-1", body: "另一条正文" });
-  const harness = await setupInspector(
-    [first, second],
-    { onBatchLinkImages: (hash, ids) => links.push({ hash, ids }) },
-  );
-
-  await act(async () => harness.proxy(0).click());
-  await act(async () => {
-    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
-  });
-
-  const linksSection = harness.section("batch-links");
-  expect(linksSection.textContent).toContain("批量建立图片关联");
-  const select = linksSection.querySelector<HTMLSelectElement>("#batch-link-image");
-  if (select === null) throw new Error("缺少目标图片选择器");
-  await act(async () => setSelect(select, "a".repeat(64)));
-
-  const submit = [...linksSection.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === "建立关联",
-  );
-  if (submit === undefined) throw new Error("缺少建立关联按钮");
-  await act(async () => submit.click());
-  expect(links).toEqual([{ hash: "a".repeat(64), ids: [first.id, second.id] }]);
 });
 
 test("回收站中的多选只提供数量摘要而不提供批量操作", async () => {
@@ -567,29 +436,7 @@ test("回收站中的多选只提供数量摘要而不提供批量操作", async
   });
 
   expect(harness.root.textContent).toContain("已选 2 条");
-  expect(harness.root.textContent).toContain("回收站中的批量操作只提供还原");
+  expect(harness.root.textContent).toContain("共同值与差异仅供确认");
   expect(() => harness.section("batch")).toThrow();
   expect(() => harness.section("batch-links")).toThrow();
-});
-
-test("批量移入回收站按钮把完整选中集合交给工作区确认", async () => {
-  const requests: string[][] = [];
-  const first = makePrompt();
-  const second = makePrompt({ id: "prompt-1", body: "另一条正文" });
-  const harness = await setupInspector(
-    [first, second],
-    { onBatchDelete: (ids) => requests.push(ids) },
-  );
-
-  await act(async () => harness.proxy(0).click());
-  await act(async () => {
-    harness.proxy(1).dispatchEvent(new MouseEvent("click", { ctrlKey: true, bubbles: true }));
-  });
-
-  const dangerButton = harness
-    .section("batch-danger")
-    .querySelector<HTMLButtonElement>("button.danger-button");
-  if (dangerButton === null) throw new Error("缺少批量移入回收站按钮");
-  await act(async () => dangerButton.click());
-  expect(requests).toEqual([[first.id, second.id]]);
 });

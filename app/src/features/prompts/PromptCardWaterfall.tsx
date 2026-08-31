@@ -18,6 +18,10 @@ import { useScrollRestore } from "../workspace/scrollRestore";
 import { useSelection } from "../workspace/selectionContext";
 import { useWaterfallBoxSelection } from "../workspace/waterfallBoxSelection";
 import type { PromptRow } from "../../shared/types";
+import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
+import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
+import { IconButton } from "../../ui/button/Button";
+import { Tooltip } from "../../ui/overlays/Tooltip";
 
 /** 列间与行间距（CSS px），与图片瀑布流共用同一节奏。 */
 const GAP = 12;
@@ -169,6 +173,7 @@ export function PromptCardWaterfall({
          Home/End 与 Shift 范围由统一 SelectionModel 接管；卡内的复制/收藏是
          Tab 可达的附属控件，不参与方向键巡游。 */
       role="listbox"
+      aria-label="提示词集合"
       aria-multiselectable="true"
       aria-orientation="vertical"
       tabIndex={-1}
@@ -251,27 +256,23 @@ export function PromptCardWaterfall({
                   </span>
                 )}
                 <span className="prompt-card-title">{title}</span>
+                <span className="prompt-card-meta">{prompt.model ?? "未填写模型"}{prompt.tags.length === 0 ? "" : ` · ${prompt.tags.slice(0, 2).join("、")}`}{linkedCount === 0 ? "" : ` · ${linkedCount} 张关联图片`}</span>
                 <span className={`prompt-card-body${cover === null ? " is-text-only" : ""}`}>
                   {prompt.body}
                 </span>
               </button>
               <span className="prompt-card-actions">
-                <button
-                  type="button"
-                  aria-label={`复制正文 ${title}`}
-                  onClick={() => void copyBody(prompt.id, prompt.body)}
-                >
-                  复制
-                </button>
-                <button
-                  type="button"
-                  className="prompt-favorite-toggle"
-                  aria-pressed={prompt.favorite}
-                  aria-label={`${prompt.favorite ? "取消收藏" : "收藏"} ${title}`}
-                  onClick={() => onToggleFavorite(prompt.id, !prompt.favorite)}
-                >
-                  {prompt.favorite ? "★" : "☆"}
-                </button>
+                <Tooltip content="复制正文"><IconButton size="compact" label={`复制正文 ${title}`} icon={<CopyIcon />} onClick={() => void copyBody(prompt.id, prompt.body)} /></Tooltip>
+                <Tooltip content={prompt.favorite ? "取消收藏" : "收藏"}>
+                  <IconButton
+                    size="compact"
+                    className="prompt-favorite-toggle"
+                    aria-pressed={prompt.favorite}
+                    label={`${prompt.favorite ? "取消收藏" : "收藏"} ${title}`}
+                    icon={<StarIcon weight={prompt.favorite ? "fill" : "regular"} />}
+                    onClick={() => onToggleFavorite(prompt.id, !prompt.favorite)}
+                  />
+                </Tooltip>
               </span>
               {copiedId === prompt.id && (
                 <span role="status" className="prompt-copy-status">

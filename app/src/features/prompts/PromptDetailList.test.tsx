@@ -9,6 +9,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
 import type { PromptRow } from "../../shared/types";
 import { PromptCardWaterfall } from "./PromptCardWaterfall";
+import { UiProvider } from "../../ui/UiProvider";
 import { PromptDetailList } from "./PromptDetailList";
 import type { PromptSort, PromptSortColumn } from "./promptSort";
 
@@ -115,7 +116,7 @@ async function setupList(
   }
   await act(async () => {
     root.render(
-      <SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
+      <UiProvider><SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
         <Probe />
         <PromptDetailList
           onOpenFocused={() => {}}
@@ -126,7 +127,7 @@ async function setupList(
           sort={options.sort ?? { column: "updatedAt", direction: "desc" }}
           onSortChange={options.onSortChange ?? (() => {})}
         />
-      </SelectionProvider>,
+      </SelectionProvider></UiProvider>,
     );
   });
   return {
@@ -190,7 +191,7 @@ test("行呈现规格列：标题/摘要、文件夹、标签、图片数、模�
   expect(row.textContent).toContain("3");
   expect(row.textContent).toContain("sd-xl");
   expect(row.textContent).toContain("★ 已收藏");
-  expect(row.textContent).toContain("2026-08-21");
+  expect(row.textContent).toContain("2026/08/21");
 
   await harness.unmount();
 });
@@ -259,7 +260,7 @@ test("卡片瀑布流与详情列表在同一 Provider 下选择等价互通", a
 
   await act(async () => {
     root.render(
-      <SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
+      <UiProvider><SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
         <Probe />
         <PromptCardWaterfall
           onOpenFocused={() => {}}
@@ -278,7 +279,7 @@ test("卡片瀑布流与详情列表在同一 Provider 下选择等价互通", a
           sort={{ column: "updatedAt", direction: "desc" }}
           onSortChange={() => {}}
         />
-      </SelectionProvider>,
+      </SelectionProvider></UiProvider>,
     );
   });
 

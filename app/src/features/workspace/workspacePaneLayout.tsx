@@ -14,14 +14,14 @@ type WorkspaceGridStyle = CSSProperties & {
 /** 双工作台共享的 grid class 与栏宽 CSS 变量。 */
 export function workspacePanePresentation(
   baseClass: string,
-  mode: WorkspacePaneMode,
+  modes: { rail: WorkspacePaneMode; inspector: WorkspacePaneMode },
   layout: WorkspaceLayout,
 ): { className: string; style: WorkspaceGridStyle } {
   return {
-    className: `${baseClass}${mode === "drawer" ? " rail-drawer" : ""}${
-      mode === "inline" ? " with-inspector" : ""
-    }${mode === "inline" && layout.railCollapsed ? " rail-collapsed" : ""}${
-      mode === "inline" && layout.inspectorCollapsed ? " inspector-collapsed" : ""
+    className: `${baseClass}${modes.rail === "drawer" ? " rail-drawer" : ""}${
+      modes.inspector === "inline" ? " with-inspector" : ""
+    }${modes.rail === "inline" && layout.railCollapsed ? " rail-collapsed" : ""}${
+      modes.inspector === "inline" && layout.inspectorCollapsed ? " inspector-collapsed" : ""
     }`,
     style: {
       "--workspace-rail-width": `${layout.railWidth}px`,

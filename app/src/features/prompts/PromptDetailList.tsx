@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, type KeyboardEvent, type UIEvent } from
 
 import { noteSummary } from "./noteSummary";
 import { promptDisplayTitle } from "./promptDisplay";
+import { formatPromptDate } from "./promptDisplay";
 import { useRovingFocus } from "../workspace/rovingFocus";
 import { useScrollRestore } from "../workspace/scrollRestore";
 import { useSelection } from "../workspace/selectionContext";
@@ -184,7 +185,7 @@ export function PromptDetailList({
               <span className="detail-value detail-mono">{prompt.linked_image_hashes.length}</span>
               <span className="detail-value detail-mono">{prompt.model ?? "—"}</span>
               <span className="detail-value">{prompt.favorite ? "★ 已收藏" : "☆ 未收藏"}</span>
-              <span className="detail-value detail-mono">{prompt.updated_at.slice(0, 10)}</span>
+              <span className="detail-value detail-mono">{formatPromptDate(prompt.updated_at)}</span>
             </button>
           );
         })}

@@ -231,6 +231,15 @@ button:disabled {
   grid-template-columns: 3.5rem minmax(0, 1fr) 3.5rem;
 }
 
+/* 提示词页两侧栏独立降级：中档只收左栏，窄档才同时把右检查器变成覆盖层。 */
+.prompt-workspace.rail-drawer {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.prompt-workspace.rail-drawer.with-inspector {
+  grid-template-columns: minmax(0, 1fr) var(--workspace-inspector-width, 300px);
+}
+
 .catalog-rail {
   position: relative;
   display: flex;
@@ -644,6 +653,17 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.prompt-card-meta {
+  display: block;
+  min-height: 18px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .prompt-card-body {
   display: -webkit-box;
   overflow: hidden;
@@ -663,6 +683,16 @@ button:disabled {
   z-index: 1;
   display: flex;
   gap: 4px;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
+}
+
+.prompt-card-shell:hover .prompt-card-actions,
+.prompt-card-shell:focus-within .prompt-card-actions,
+.prompt-card-shell:has(.is-selected) .prompt-card-actions {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .prompt-card-actions button {
@@ -1469,8 +1499,7 @@ button:disabled {
  * 栅格让出整行；rail-drawer 类由组件按窗口层级挂上。
  */
 @media (max-width: 1080px) {
-  .asset-workspace.rail-drawer,
-  .prompt-workspace.rail-drawer {
+  .asset-workspace.rail-drawer {
     grid-template-columns: minmax(0, 1fr);
   }
 }

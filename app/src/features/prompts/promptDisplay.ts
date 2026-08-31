@@ -20,3 +20,9 @@ export function promptDisplayTitle(prompt: { readonly title: string | null; read
   const title = prompt.title?.trim() ?? "";
   return title !== "" ? title : firstBodyLine(prompt.body);
 }
+
+const PROMPT_DATE_FORMAT = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+
+export function formatPromptDate(value: string): string {
+  return PROMPT_DATE_FORMAT.format(new Date(value));
+}

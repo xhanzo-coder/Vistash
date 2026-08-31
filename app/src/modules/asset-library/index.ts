@@ -12,6 +12,7 @@
 import type { AssetId, RequestId } from "../../app/common";
 import type { AssetLocationScope } from "../../app/navigation";
 import type { OpenLibrarySession } from "../library-lifecycle";
+import type { ImagePromptRelations } from "../image-prompt-relations";
 
 export { AssetLibraryWorkspace } from "./internal/AssetLibraryWorkspace";
 export {
@@ -38,6 +39,7 @@ export type AssetImportRequest = {
  */
 export type AssetLibraryWorkspaceProps = {
   session: OpenLibrarySession;
+  relations: ImagePromptRelations;
   /** 是否为当前激活的一级工作区；非激活时模块挂起交互但保留现场。 */
   active: boolean;
   /** 待处理的定位条目；模块消费后按 `requestId` 去重。 */

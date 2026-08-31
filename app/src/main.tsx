@@ -26,6 +26,7 @@ const showUiKit = import.meta.env.DEV && search.get("dev") === "ui-kit";
 const showAppShell = import.meta.env.DEV && search.get("dev") === "app-shell";
 const showLibraryLifecycle = import.meta.env.DEV && search.get("dev") === "library-lifecycle";
 const showAssetLibrary = import.meta.env.DEV && search.get("dev") === "asset-library";
+const showPromptLibrary = import.meta.env.DEV && search.get("dev") === "prompt-library";
 const root = createRoot(container);
 
 if (showImageLibraryPrototype) {
@@ -66,6 +67,10 @@ if (showImageLibraryPrototype) {
   } else if (showAssetLibrary) {
     void import("./dev/asset-library/AssetLibraryShowcase").then(
       ({ AssetLibraryShowcase }) => render(<AssetLibraryShowcase />),
+    );
+  } else if (showPromptLibrary) {
+    void import("./dev/prompt-library/PromptLibraryShowcase").then(
+      ({ PromptLibraryShowcase }) => render(<PromptLibraryShowcase />),
     );
   } else {
     render(<App />);

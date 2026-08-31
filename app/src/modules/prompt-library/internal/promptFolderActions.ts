@@ -5,6 +5,7 @@ export type PromptConfirmRequest = {
   title: string;
   body: string;
   confirmLabel: string;
+  refreshCurrentQuery: boolean;
   onConfirm: () => Promise<void>;
 };
 
@@ -40,6 +41,7 @@ export function createPromptFolderActions({ currentFolder, run, navigate, confir
       title: "删除提示词文件夹？",
       body: `“${path}”及其子文件夹会被删除，但提示词素材不会删除；没有其他归属的提示词将回到提示词根位置。`,
       confirmLabel: "删除文件夹",
+      refreshCurrentQuery: true,
       onConfirm: async () => {
         await deletePromptFolder(path);
         if (currentFolder.kind === "path" && (currentFolder.path === path || currentFolder.path.startsWith(`${path}/`))) navigate({ kind: "all" });

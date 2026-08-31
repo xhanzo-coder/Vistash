@@ -28,6 +28,7 @@ import {
   PromptLibraryWorkspace,
   type PromptLibraryEntry,
 } from "./modules/prompt-library";
+import { createImagePromptRelations, createTauriImagePromptRelationAdapter } from "./modules/image-prompt-relations";
 
 /** 生产应用只装配一次生命周期 port；它本身不持有 React 状态。 */
 const lifecyclePort = createTauriLibraryLifecyclePort();
@@ -178,6 +179,7 @@ function WorkspaceApp({
 }): ReactNode {
   const navigationSnapshot = useNavigationSnapshot(navigation);
   const guardedNavigation = useGuardedNavigation(navigation);
+  const relations = useMemo(() => createImagePromptRelations({ adapter: createTauriImagePromptRelationAdapter(), navigation: guardedNavigation }), [guardedNavigation]);
   const active = navigationSnapshot.active;
   const [importRequest, setImportRequest] = useState<AssetImportRequest | undefined>();
 
@@ -235,6 +237,7 @@ function WorkspaceApp({
       assets={
         <AssetLibraryWorkspace
           session={context.session}
+          relations={relations}
           active={active === "assets"}
           entry={assetEntry}
           {...(importRequest === undefined ? {} : { importRequest })}
@@ -244,6 +247,7 @@ function WorkspaceApp({
       prompts={
         <PromptLibraryWorkspace
           session={context.session}
+          relations={relations}
           active={active === "prompts"}
           entry={promptEntry}
         />

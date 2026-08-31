@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
+import { UiProvider } from "../../ui/UiProvider";
 import type { PromptRow } from "../../shared/types";
 import { PromptCardWaterfall } from "./PromptCardWaterfall";
 
@@ -129,7 +130,7 @@ async function setupWaterfall(
   }
   const render = (nextPrompts: readonly PromptRow[]): void => {
     root.render(
-      <SelectionProvider ids={nextPrompts.map((prompt) => prompt.id)}>
+      <UiProvider><SelectionProvider ids={nextPrompts.map((prompt) => prompt.id)}>
         <Probe />
         <PromptCardWaterfall
           onOpenFocused={() => {}}
@@ -139,7 +140,7 @@ async function setupWaterfall(
           onScrollOffset={handlers.onScrollOffset ?? (() => {})}
           onToggleFavorite={handlers.onToggleFavorite ?? (() => {})}
         />
-      </SelectionProvider>,
+      </SelectionProvider></UiProvider>,
     );
   };
   await act(async () => render(prompts));

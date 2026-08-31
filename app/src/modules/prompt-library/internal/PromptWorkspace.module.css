@@ -70,6 +70,11 @@
 .navigationRail[data-collapsed="true"] .navEntry > span:not([aria-hidden]) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .inspectorRail[data-collapsed="true"] { overflow: hidden; }
 .inspectorRail[data-collapsed="true"] > :not(:global(.workspace-pane-heading)) { display: none; }
+.batchChoices { display: grid; gap: var(--space-2); }
+.batchChoices label { display: flex; min-height: 32px; align-items: center; gap: var(--space-2); }
+.batchDialogForm { display: grid; gap: var(--space-3); margin-block-start: var(--space-4); }
+.batchDialogForm input, .batchDialogForm select { min-height: 36px; width: 100%; padding-inline: var(--space-3); color: var(--text-primary); background: var(--surface-input); border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
+.batchDialogForm p { margin: 0; color: var(--text-secondary); }
 @media (max-width: 780px) {
   .heading { padding: var(--space-4); }
   .toolbar { padding-inline: var(--space-4); }

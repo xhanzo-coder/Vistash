@@ -14,6 +14,7 @@ import type { AssetNotes } from "./assetNotes";
 import { AssetOrganization } from "./AssetOrganization";
 import { AssetPromptLinks } from "./AssetPromptLinks";
 import { AssetThumbnail } from "./AssetCollection";
+import type { ImagePromptRelations } from "../../image-prompt-relations";
 
 const TITLES: Record<InspectorSection, string> = { summary: "摘要", colors: "色卡", organization: "组织", note: "备注", links: "关联提示词", files: "文件信息" };
 
@@ -92,6 +93,7 @@ function Colors({ libraryId, asset, editable }: { libraryId: LibraryId; asset: A
 
 export type AssetInspectorProps = {
   libraryId: LibraryId; asset: AssetRow | null; count: number; active: boolean;
+  relations: ImagePromptRelations;
   editable: boolean; sections: InspectorSections | undefined;
   onSectionsChange: (sections: InspectorSections) => void;
   notes: AssetNotes;
@@ -101,7 +103,7 @@ export type AssetInspectorProps = {
   actions?: ReactNode;
 };
 
-export function AssetInspector({ libraryId, asset, count, active, editable, sections, onSectionsChange, notes, folders, onRestore, restorable, actions }: AssetInspectorProps): ReactNode {
+export function AssetInspector({ libraryId, relations, asset, count, active, editable, sections, onSectionsChange, notes, folders, onRestore, restorable, actions }: AssetInspectorProps): ReactNode {
   const detail = useQuery({
     queryKey: asset === null ? [...assetKeys.details(libraryId), null] : assetKeys.detail(libraryId, parseAssetId(asset.hash)),
     queryFn: async ({ signal }) => {
@@ -121,7 +123,7 @@ export function AssetInspector({ libraryId, asset, count, active, editable, sect
     colors: <Colors libraryId={libraryId} asset={asset} editable={editable} />,
     organization: <><AssetOrganization key={asset.hash} libraryId={libraryId} asset={asset} folders={folders} disabled={!editable} />{asset.deleted_at === null ? null : <Button size="compact" disabled={!restorable} onClick={onRestore}>还原图片</Button>}</>,
     note: <NoteEditor asset={asset} notes={notes} disabled={!editable} />,
-    links: detail.isError ? <div><p role="alert" className={styles.error}>{detail.error.message}</p><Button size="compact" onClick={() => void detail.refetch()}>重试读取详情</Button></div> : detail.isPending ? <p role="status">正在读取关联…</p> : <AssetPromptLinks key={asset.hash} libraryId={libraryId} hash={asset.hash} linked={detail.data.linked_prompts} disabled={!editable} active={active} />,
+    links: detail.isError ? <div><p role="alert" className={styles.error}>{detail.error.message}</p><Button size="compact" onClick={() => void detail.refetch()}>重试读取详情</Button></div> : detail.isPending ? <p role="status">正在读取关联…</p> : <AssetPromptLinks key={asset.hash} libraryId={libraryId} relations={relations} hash={asset.hash} linked={detail.data.linked_prompts} disabled={!editable} active={active} />,
     files: <FileInformation asset={asset} />,
   };
   return <div className={styles.inspector}>

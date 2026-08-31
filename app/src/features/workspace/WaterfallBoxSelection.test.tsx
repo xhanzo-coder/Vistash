@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { PromptCardWaterfall } from "../prompts/PromptCardWaterfall";
 import type { PromptRow } from "../../shared/types";
 import { SelectionProvider, useSelection } from "./selectionContext";
+import { UiProvider } from "../../ui/UiProvider";
 
 const roots: ReturnType<typeof createRoot>[] = [];
 
@@ -54,11 +55,11 @@ async function mount(_kind: "提示词", count = 100) {
   const render = (nextCount: number, tileWidth: number) => {
     const ids = Array.from({ length: nextCount }, (_, index) => `item-${index}`);
     root.render(
-    <SelectionProvider ids={ids}>
+    <UiProvider><SelectionProvider ids={ids}>
       <SelectionSummary />
       <PromptCardWaterfall prompts={ids.map((_, index) => prompt(index))} scrollKey="box-prompts" savedOffset={0}
         onScrollOffset={() => {}} onToggleFavorite={() => {}} onOpenFocused={() => {}} targetTileWidth={tileWidth} />
-    </SelectionProvider>,
+    </SelectionProvider></UiProvider>,
     );
   };
   await act(async () => render(count, 200));

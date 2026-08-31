@@ -8,6 +8,7 @@ import { ArrowsOutLineHorizontalIcon } from "@phosphor-icons/react/dist/csr/Arro
 import { ListBulletsIcon } from "@phosphor-icons/react/dist/csr/ListBullets";
 import { NotePencilIcon } from "@phosphor-icons/react/dist/csr/NotePencil";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { parseAssetId, type LibraryId } from "../../../app/common";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple";
 import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
 
@@ -21,7 +22,6 @@ import {
   batchRemovePromptTag,
   batchSetPromptFavorite,
   deletePrompt,
-  linkImages,
   promptSnapshot,
   purgePromptTrash,
   restorePrompt,
@@ -39,8 +39,6 @@ import type {
   PromptRow,
 } from "../../../shared/types";
 import { ErrorLine } from "../../../features/library/ErrorLine";
-import { useWindowTier } from "../../../features/workspace/breakpoints";
-import { BatchToolbar } from "../../../features/workspace/batchToolbar";
 import { ConfirmDialog } from "../../../features/workspace/ConfirmDialog";
 import {
   useWorkspaceQueryController,
@@ -69,8 +67,11 @@ import {
 } from "../../../features/prompts/promptSort";
 import styles from "./PromptWorkspace.module.css";
 import { PromptCreateFocus } from "./PromptCreateFocus";
+import { PromptBatchBar } from "./PromptBatchBar";
 import { PromptNavigator } from "./PromptNavigator";
 import { createPromptFolderActions, type PromptConfirmRequest } from "./promptFolderActions";
+import type { ImagePromptRelations } from "../../image-prompt-relations";
+import { usePromptPaneModes } from "./promptPaneModes";
 
 /** 二次确认对话框的待办：确认时执行，取消即丢弃。 */
 /**
@@ -85,11 +86,13 @@ import { createPromptFolderActions, type PromptConfirmRequest } from "./promptFo
 export function PromptWorkspace({
   active = true,
   libraryId,
+  relations,
   locate = null,
   onLocateHandled,
   }: {
   active?: boolean;
-  libraryId: string | null;
+  libraryId: LibraryId;
+  relations: ImagePromptRelations;
   /** 全局搜索发来的定位请求（任务 11.1）；由 App 保证只发给本库。 */
   locate?: (GlobalLocateRequest & { nonce: number }) | null;
   onLocateHandled?: (nonce: number) => void;
@@ -134,8 +137,7 @@ export function PromptWorkspace({
   const [sort, setSort] = useState<PromptSort>({ ...DEFAULT_PROMPT_SORT });
 
   // 中等/窄窗口左栏收起为抽屉：宽屏原位展开，其余层级默认收起、经边缘入口打开。
-  const tier = useWindowTier();
-  const drawerMode = tier === "wide" ? "inline" : "drawer";
+  const paneModes = usePromptPaneModes();
   const [railOpen, setRailOpen] = useState(false);
 
   const { snapshot, loading, error, setError, refresh } = useWorkspaceSnapshot(
@@ -143,6 +145,12 @@ export function PromptWorkspace({
     promptSnapshot,
     active,
   );
+  useEffect(() => {
+    return relations.registerRefresh(libraryId, async () => {
+      const refreshError = await refresh();
+      if (refreshError !== null) throw new IpcError(refreshError);
+    });
+  }, [libraryId, refresh, relations]);
 
   // 两种视图共用同一顺序（规格：切换视图不清空查询、排序、选择与活动项）。
   const sortedPrompts = useMemo(
@@ -205,8 +213,11 @@ export function PromptWorkspace({
       title: "移入提示词回收站？",
       body: `“${promptDisplayTitle(prompt)}”将从正常提示词中移除，可从回收站还原；关联的图片不受影响。`,
       confirmLabel: "移入回收站",
+      refreshCurrentQuery: false,
       onConfirm: async () => {
         await deletePrompt(prompt.id);
+        const refreshError = await relations.synchronize(libraryId, { imageIds: [], promptIds: [prompt.id] });
+        if (refreshError !== null) setNotice(refreshError);
       },
     });
   }
@@ -217,9 +228,21 @@ export function PromptWorkspace({
       title: "永久清空提示词回收站？",
       body: `将永久删除 ${count} 条提示词。此操作无法还原；它们的普通图片关联会被移除，图片素材本身不受影响。`,
       confirmLabel: "永久删除",
+      refreshCurrentQuery: false,
       onConfirm: async () => {
-        const report = await purgePromptTrash();
-        setPurgeReport(report);
+        const before = await promptSnapshot({ text: "", tags: [], folder: { kind: "all" }, favorite: null, location: "trash" });
+        try {
+          const report = await purgePromptTrash();
+          const failed = new Set(report.failures.map((failure) => failure.id));
+          const purged = before.prompts.filter((prompt) => !failed.has(prompt.id)).map((prompt) => prompt.id);
+          const refreshError = await relations.synchronize(libraryId, { imageIds: [], promptIds: purged, removedPromptIds: purged });
+          if (refreshError !== null) setNotice(refreshError);
+          setPurgeReport(report);
+        } catch (raw) {
+          const targets = before.prompts.map((prompt) => prompt.id);
+          await relations.synchronize(libraryId, { imageIds: [], promptIds: targets, removedPromptIds: targets });
+          throw raw;
+        }
       },
     });
   }
@@ -230,19 +253,19 @@ export function PromptWorkspace({
     operation: (onProgress: (progress: BatchProgress) => void) => Promise<BatchReport>,
     refreshCurrentQuery: boolean,
   ) {
-    const registration = libraryId === null ? null : appTaskCenter.register({ kind: "batch_organization", title: "提示词批量操作", libraryId, stoppable: false, concurrencyKey: null });
-    if (registration !== null && registration.kind !== "registered") throw new Error("提示词批量任务意外触发并发拒绝");
+    const registration = appTaskCenter.register({ kind: "batch_organization", title: "提示词批量操作", libraryId, stoppable: false, concurrencyKey: null });
+    if (registration.kind !== "registered") throw new Error("提示词批量任务意外触发并发拒绝");
     void runMutation(async () => {
       try {
         const report = await operation((progress) => {
-          if (registration !== null && registration.kind === "registered") appTaskCenter.reportProgress(registration.record.id, { kind: "items", done: progress.done, total: progress.total });
+          appTaskCenter.reportProgress(registration.record.id, { kind: "items", done: progress.done, total: progress.total });
           setBatchProgress(progress);
         });
-        if (registration !== null && registration.kind === "registered") appTaskCenter.complete(registration.record.id, { counts: { succeeded: report.succeeded, skipped: 0, failed: report.failures.length, unprocessed: 0 }, failures: report.failures.map((failure) => ({ displayName: failure.display_name, error: failure.error })), error: null });
+        appTaskCenter.complete(registration.record.id, { counts: { succeeded: report.succeeded, skipped: 0, failed: report.failures.length, unprocessed: 0 }, failures: report.failures.map((failure) => ({ displayName: failure.display_name, error: failure.error })), error: null });
         setBatchReport(report);
       } catch (raw) {
         if (!(raw instanceof IpcError)) throw raw;
-        if (registration !== null && registration.kind === "registered") appTaskCenter.complete(registration.record.id, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError });
+        appTaskCenter.complete(registration.record.id, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError });
         throw raw;
       }
     }, refreshCurrentQuery);
@@ -253,19 +276,24 @@ export function PromptWorkspace({
       title: "批量移入回收站？",
       body: `选中的 ${ids.length} 条提示词将移入提示词回收站，可随时逐项还原；它们与图片的普通关联保留。`,
       confirmLabel: "移入回收站",
+      refreshCurrentQuery: false,
       onConfirm: async () => {
-        const registration = libraryId === null ? null : appTaskCenter.register({ kind: "batch_organization", title: "移入提示词回收站", libraryId, stoppable: false, concurrencyKey: null });
-        if (registration !== null && registration.kind !== "registered") throw new Error("提示词批量任务意外触发并发拒绝");
+        const registration = appTaskCenter.register({ kind: "batch_organization", title: "移入提示词回收站", libraryId, stoppable: false, concurrencyKey: null });
+        if (registration.kind !== "registered") throw new Error("提示词批量任务意外触发并发拒绝");
         try {
           const report = await batchDeletePrompts(ids, (progress) => {
-            if (registration !== null && registration.kind === "registered") appTaskCenter.reportProgress(registration.record.id, { kind: "items", done: progress.done, total: progress.total });
+            appTaskCenter.reportProgress(registration.record.id, { kind: "items", done: progress.done, total: progress.total });
             setBatchProgress(progress);
           });
-          if (registration !== null && registration.kind === "registered") appTaskCenter.complete(registration.record.id, { counts: { succeeded: report.succeeded, skipped: 0, failed: report.failures.length, unprocessed: 0 }, failures: report.failures.map((failure) => ({ displayName: failure.display_name, error: failure.error })), error: null });
+          const failed = new Set(report.failures.map((failure) => failure.id));
+          const deleted = ids.filter((id) => !failed.has(id));
+          const refreshError = await relations.synchronize(libraryId, { imageIds: [], promptIds: deleted });
+          if (refreshError !== null) setNotice(refreshError);
+          appTaskCenter.complete(registration.record.id, { counts: { succeeded: report.succeeded, skipped: 0, failed: report.failures.length, unprocessed: 0 }, failures: report.failures.map((failure) => ({ displayName: failure.display_name, error: failure.error })), error: null });
           setBatchReport(report);
         } catch (raw) {
           if (!(raw instanceof IpcError)) throw raw;
-          if (registration !== null && registration.kind === "registered") appTaskCenter.complete(registration.record.id, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError });
+          appTaskCenter.complete(registration.record.id, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: raw.appError });
           throw raw;
         }
       },
@@ -279,48 +307,35 @@ export function PromptWorkspace({
    */
   function batchLinkImagesTo(hash: string, ids: string[]) {
     runBatch(async (onProgress) => {
-      let done = 0;
-      // 内层把每条的拒绝都转成 AppError 兑现值，Promise.all 因此不会整体中断；
-      // finally 保证成功与失败都推进进度。结果与 id 成对携带，免去按下标回查。
-      const outcomes = await Promise.all(
-        ids.map(
-          async (id): Promise<{ id: string; failure: AppError | null }> => {
-            try {
-              await linkImages(id, [hash]);
-              return { id, failure: null };
-            } catch (raw) {
-              return { id, failure: asAppError(raw) };
-            } finally {
-              done += 1;
-              onProgress({ done, total: ids.length });
-            }
-          },
-        ),
-      );
+      const commit = await relations.execute({ kind: "link", libraryId, images: [parseAssetId(hash)], prompts: ids });
+      if (commit.refreshError !== null) setNotice(commit.refreshError);
+      onProgress({ done: ids.length, total: ids.length });
       const failures: BatchReport["failures"] = [];
-      for (const outcome of outcomes) {
-        if (outcome.failure === null) continue;
-        const row = sortedPrompts.find((item) => item.id === outcome.id);
+      for (const failure of commit.failures) {
+        const row = sortedPrompts.find((item) => item.id === failure.promptId);
         failures.push({
-          id: outcome.id,
-          display_name: row !== undefined ? promptDisplayTitle(row) : outcome.id,
-          error: outcome.failure,
+          id: failure.promptId,
+          display_name: row !== undefined ? promptDisplayTitle(row) : failure.promptId,
+          error: failure.error,
         });
       }
-      return { succeeded: outcomes.length - failures.length, failures };
+      return { succeeded: commit.succeeded, failures };
     }, true);
   }
 
   async function confirmOperation() {
     if (confirm === null) return;
     const operation = confirm.onConfirm;
+    const refreshCurrentQuery = confirm.refreshCurrentQuery;
     setConfirm(null);
-    await runMutation(operation, true);
+    await runMutation(operation, refreshCurrentQuery);
   }
 
   function restoreFromTrash(id: string) {
     void runMutation(async () => {
       const outcome = await restorePrompt(id);
+      const refreshError = await relations.synchronize(libraryId, { imageIds: [], promptIds: [id] });
+      if (refreshError !== null) setNotice(refreshError);
       // 还原不被缺失文件夹阻断：恢复仍存在的路径，其余落回提示词根位置，
       // 缺失路径必须显式列出（规格）。
       if (outcome.missing_folders.length > 0) {
@@ -369,7 +384,7 @@ export function PromptWorkspace({
     await refresh();
   }
 
-  if (libraryId !== null && !ready) {
+  if (!ready) {
     return (
       <section className="workspace-layout-loading" aria-label="提示词工作区" hidden={!active}>
         <p role="status">正在恢复工作台布局…</p>
@@ -377,7 +392,7 @@ export function PromptWorkspace({
     );
   }
 
-  const panePresentation = workspacePanePresentation("prompt-workspace", drawerMode, layout);
+  const panePresentation = workspacePanePresentation("prompt-workspace", paneModes, layout);
   const emptyCopy = location === "trash"
     ? {
         title: "提示词回收站为空",
@@ -407,7 +422,7 @@ export function PromptWorkspace({
       hidden={!active}
     >
       <WorkspacePaneFrame
-        mode={drawerMode}
+        mode={paneModes.rail}
         side="start"
         label="提示词分类"
         open={railOpen}
@@ -455,10 +470,10 @@ export function PromptWorkspace({
           </div>
         </header>
         <div className={styles.toolbar} role="toolbar" aria-label="提示词查询与视图">
-          {drawerMode === "drawer" ? <IconButton size="compact" label="提示词导航" title="提示词导航" icon={<SidebarSimpleIcon />} aria-expanded={railOpen} aria-controls="prompt-rail-panel" onClick={() => setRailOpen(true)} /> : null}
-          {drawerMode === "drawer" ? <IconButton size="compact" label="提示词检查器" title="提示词检查器" icon={<NotePencilIcon />} aria-expanded={inspectorOpen} aria-controls="prompt-inspector-panel" onClick={() => setInspectorOpen(true)} /> : null}
+          {paneModes.rail === "drawer" ? <IconButton size="compact" label="提示词导航" title="提示词导航" icon={<SidebarSimpleIcon />} aria-expanded={railOpen} aria-controls="prompt-rail-panel" onClick={() => setRailOpen(true)} /> : null}
+          {paneModes.inspector === "drawer" ? <IconButton size="compact" label="提示词检查器" title="提示词检查器" icon={<NotePencilIcon />} aria-expanded={inspectorOpen} aria-controls="prompt-inspector-panel" onClick={() => setInspectorOpen(true)} /> : null}
           <div className={styles.localSearch}><SearchField inputRef={searchInputRef} label="按标题或正文搜索" aria-label="按标题或正文搜索" name="prompt-search" placeholder="搜索标题或正文…" value={text} onValueChange={(nextText) => changeQuery(() => setText(nextText))} /></div>
-          <select className={styles.sortSelect} aria-label="提示词排序" value={`${sort.column}:${sort.direction}`} onChange={(event) => {
+          <select className={styles.sortSelect} name="prompt-sort" aria-label="提示词排序" value={`${sort.column}:${sort.direction}`} onChange={(event) => {
             const [column, direction] = event.currentTarget.value.split(":");
             if ((column !== "updatedAt" && column !== "title" && column !== "model") || (direction !== "asc" && direction !== "desc")) throw new TypeError("提示词排序选项非法");
             setSort({ column, direction });
@@ -540,7 +555,7 @@ export function PromptWorkspace({
             prompt={bodyFocus}
             initialEditing={bodyFocusEdit}
             onClose={() => setBodyFocusId(null)}
-            onSaved={refresh}
+            onSaved={async () => { await refresh(); }}
           />
         ) : (
           /*
@@ -560,7 +575,7 @@ export function PromptWorkspace({
             <PromptDetailList
               /* 集合视图按库重挂载（任务 11.2）：换库即全新 DOM，滚动恢复等该库
                  自己的读取返回后进行，上一库的滚动位置不会残留。 */
-              key={`${libraryId ?? "no-library"}:${active ? "active" : "inactive"}`}
+              key={`${libraryId}:${active ? "active" : "inactive"}`}
               prompts={sortedPrompts}
               scrollKey="prompts-list"
               savedOffset={layout.scrollOffsets["prompts-list"] ?? 0}
@@ -576,7 +591,7 @@ export function PromptWorkspace({
             />
           ) : (
             <PromptCardWaterfall
-              key={`${libraryId ?? "no-library"}:${active ? "active" : "inactive"}`}
+              key={`${libraryId}:${active ? "active" : "inactive"}`}
               prompts={sortedPrompts}
               scrollKey="prompts-waterfall"
               savedOffset={layout.scrollOffsets["prompts-waterfall"] ?? 0}
@@ -595,13 +610,15 @@ export function PromptWorkspace({
           )
         )}
 
-        {/* 批量工具条（任务 11.2）：计数/全选/清除是所有视图共有的动作；视图
-            专属的批量组织操作按规格放在右检查器的多选分区。 */}
-        <BatchBar total={sortedPrompts.length} />
+        <PromptBatchBar prompts={sortedPrompts} folders={snapshot?.folders ?? []} mutating={mutating}
+          onBatchFolders={(ids, path, add) => runBatch((progress) => add ? batchAddPromptFolder(ids, path, progress) : batchRemovePromptFolder(ids, path, progress), true)}
+          onBatchTags={(ids, tag, add) => runBatch((progress) => add ? batchAddPromptTag(ids, tag, progress) : batchRemovePromptTag(ids, tag, progress), true)}
+          onBatchFavorite={(ids, favorite) => runBatch((progress) => batchSetPromptFavorite(ids, favorite, progress), true)}
+          onBatchLinkImages={(hash, ids) => batchLinkImagesTo(hash, ids)} onBatchDelete={requestBatchDelete} />
       </div>
 
       <WorkspacePaneFrame
-        mode={drawerMode}
+        mode={paneModes.inspector}
         side="end"
         label="提示词检查器"
         open={inspectorOpen}
@@ -641,35 +658,13 @@ export function PromptWorkspace({
               setBodyFocusEdit(true);
               setBodyFocusId(id);
             }}
-            onImagesChanged={() => void refresh()}
+            relations={relations}
+            libraryId={libraryId}
             onDeletePrompt={(id) => {
               const prompt = sortedPrompts.find((item) => item.id === id);
               if (prompt !== undefined) requestPromptDelete(prompt);
             }}
             onRestorePrompt={(id) => restoreFromTrash(id)}
-            onBatchFolders={(ids, path, add) =>
-              runBatch(
-                (progress) =>
-                  add
-                    ? batchAddPromptFolder(ids, path, progress)
-                    : batchRemovePromptFolder(ids, path, progress),
-                true,
-              )
-            }
-            onBatchTags={(ids, tag, add) =>
-              runBatch(
-                (progress) =>
-                  add
-                    ? batchAddPromptTag(ids, tag, progress)
-                    : batchRemovePromptTag(ids, tag, progress),
-                true,
-              )
-            }
-            onBatchFavorite={(ids, favorite) =>
-              runBatch((progress) => batchSetPromptFavorite(ids, favorite, progress), true)
-            }
-            onBatchLinkImages={(hash, ids) => batchLinkImagesTo(hash, ids)}
-            onBatchDelete={(ids) => requestBatchDelete(ids)}
           />
       </WorkspacePaneFrame>
       </SelectionProvider>
@@ -714,17 +709,4 @@ function ExternalActivation({
     onHandled?.(request.nonce);
   }, [request, state, onHandled, onItemClick]);
   return null;
-}
-
-/** 批量工具条桥（任务 11.2）：计数与全选/清除动作都来自统一 SelectionModel。 */
-function BatchBar({ total }: { total: number }) {
-  const { state, selectAll, clearSelection } = useSelection();
-  return (
-    <BatchToolbar
-      count={state.selectedIds.size}
-      totalCount={total}
-      onSelectAll={selectAll}
-      onClear={clearSelection}
-    />
-  );
 }

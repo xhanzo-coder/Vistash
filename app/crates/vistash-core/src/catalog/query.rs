@@ -126,6 +126,10 @@ pub struct LinkedImageState {
     pub hash: String,
     /// 该图片当前是否在图片库回收站里。还原后自动回到 `false`，无需重新关联。
     pub deleted: bool,
+    pub display_filename: String,
+    pub folder: Option<String>,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Catalog {
@@ -251,9 +255,14 @@ impl Catalog {
         row.linked_image_hashes
             .iter()
             .map(|hash| {
+                let asset = index.asset_row(hash)?;
                 Ok(LinkedImageState {
                     hash: hash.clone(),
-                    deleted: index.asset_is_deleted(hash)?,
+                    deleted: asset.deleted_at.is_some(),
+                    display_filename: asset.display_filename,
+                    folder: asset.folder,
+                    width: asset.width,
+                    height: asset.height,
                 })
             })
             .collect()

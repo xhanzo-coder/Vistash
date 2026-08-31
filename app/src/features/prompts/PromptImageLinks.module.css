@@ -1,0 +1,6 @@
+.open { display: grid; min-width: 0; padding: 0; overflow: hidden; color: var(--text-primary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-media); text-align: start; }
+.open:hover { border-color: var(--selection-edge); }
+.open:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.meta { display: grid; min-width: 0; gap: 2px; padding: var(--space-2); }
+.meta strong, .meta small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta small { color: var(--text-tertiary); font-size: var(--text-size-xs); font-weight: 400; }

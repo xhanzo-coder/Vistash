@@ -215,7 +215,7 @@ struct AssetMetadata {
 
 第一阶段只支持具有真实文件系统路径的 `CF_HDROP`，明确排除依赖 `CFSTR_FILEDESCRIPTOR`/`CFSTR_FILECONTENTS` 的 Shell 虚拟文件。即使剪贴板来自“剪切”，Vistash 也只复制进库，绝不执行源文件移动或删除。
 
-截图或应用复制的位图由 Rust blocking worker 调用官方 `tauri-plugin-clipboard-manager` 的 Rust `ClipboardExt::read_image()`，检查尺寸与 `width * height * 4` 上限后在 Rust 侧编码 PNG，并直接进入现有哈希与导入管线。前端只提交“从剪贴板导入”意图，不接收 RGBA、`ImageData` 或其他像素缓冲。文件列表优先于位图，纯文本和网址不处理。WebView 不获得通用 `clipboard-manager:allow-read-image` 权限，只获得 Vistash 领域 command。
+截图或应用复制的位图由 Rust blocking worker 直接读取 Windows `CF_DIBV5`/`CF_DIB`。`OpenClipboard` 期间只读取固定头、在尺寸与像素上限内复制确切 DIB 字节，RAII guard 关闭剪贴板后才逐像素解码、编码 PNG 并进入现有哈希与导入管线；畸形 `GlobalSize` 不得在头校验前触发整块复制。支持 24-bit `BI_RGB` 与 32-bit `BI_RGB`/`BI_BITFIELDS`，其他压缩格式返回稳定的 `clipboard.image_invalid`。前端只提交“从剪贴板导入”意图，不接收 RGBA、`ImageData` 或其他像素缓冲。文件列表优先于位图，纯文本和网址不处理。WebView 不获得通用剪贴板读取权限，只获得 Vistash 领域 command；官方插件继续只用于 Rust 侧写出图片。
 
 窗口级 `Ctrl+V` 只在图片模块 `active` 且事件目标不属于可编辑控件时认领。文本框、搜索框和备注编辑器保持原生粘贴。文件/目录选择继续使用官方 `tauri-plugin-dialog`，但由窄 Rust command 直接接收结果并开始导入，避免把任意选择路径扩大成 WebView 文件读取 scope。
 
@@ -417,7 +417,7 @@ Rust 测试覆盖新侧车序列化、旧库迁移、恢复日志、单归属事
 
 `favorite=false` 是“只看未收藏”，不是“清除收藏筛选”；全部图片、未分类、具体文件夹与回收站必须写入 `favorite=null`，只有收藏范围写入 `true`。旧偏好里的 `false` 在恢复时规范化为 `null`，任何左栏范围切换都只使用 null/true 两态。
 
-剪贴板生产 adapter 先用 Win32 标准格式判断是否真的存在 DIB/DIBV5，再调用官方插件读取像素：没有位图就不做第二次昂贵读取；确认有位图后插件失败必须上抛，不再压成 Empty。位图 PNG 编码直接读取已校验 RGBA 缓冲，删除中间 `RgbaImage` 与第二次整图复制，并使用快速无滤镜压缩。色卡样本长边从 256 调整到 160、算法版本提升为 2；最大样本由 65,536 降到 25,600，保持八色与确定性测试，同时显著降低 debug App 的聚类成本。
+剪贴板生产 adapter 以 Win32 标准格式判断并读取 DIB/DIBV5：没有位图不执行像素路径；存在但头、位深、压缩、掩码或缓冲非法时必须上抛，不再压成 Empty。2026-08-31 的真实 `Print Screen` 已证明插件 `read_image()` 在 Windows 报告 DIB 时仍可能 `ConversionFailure`，满足调研中“有失败证据才改为直读 DIB”的触发条件，因此删除读入插件路径，不维护两套读取 fallback。位图 PNG 编码直接读取已校验 RGBA 缓冲并使用快速压缩。色卡样本长边从 256 调整到 160、算法版本提升为 2；最大样本由 65,536 降到 25,600，保持八色与确定性测试，同时显著降低 debug App 的聚类成本。
 
 历史失败不能靠提升算法版本自动改写权威侧车。新增 `regenerate_color_card(hash)` 深命令：读取正常区权威侧车与原图、用当前算法重算、原子写回侧车并更新派生索引。检查器失败态和旧版本态提供同一重算入口。成功呈现改为比例色带加紧凑图例；前端仍不接触像素。
 

@@ -1001,6 +1001,9 @@ mod tests {
         assert_eq!(states.len(), 2);
         assert_eq!(states[0].hash, image_a.hash.as_str());
         assert!(!states[0].deleted);
+        assert_eq!(states[0].display_filename, "一.png");
+        assert_eq!((states[0].width, states[0].height), (16, 16));
+        assert_eq!(states[0].folder, None);
         assert_eq!(states[1].hash, image_b.hash.as_str());
         assert!(!states[1].deleted);
 

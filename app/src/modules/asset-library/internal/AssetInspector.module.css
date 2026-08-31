@@ -46,6 +46,20 @@
 .links li { display: flex; justify-content: space-between; align-items: start; gap: var(--space-2); }
 .links li > span { min-width: 0; overflow-wrap: anywhere; }
 .links small { display: block; color: var(--text-secondary); font-size: var(--text-size-xs); }
+.relationList { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.relationList li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--space-1); border-bottom: 1px solid var(--border-subtle); }
+.relationMain { width: 100%; min-width: 0; justify-content: flex-start; padding: var(--space-2); text-align: start; }
+.relationText { display: grid; min-width: 0; gap: 2px; }
+.relationText strong, .relationText small, .relationText em { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relationText small { color: var(--text-secondary); font-weight: 400; }
+.relationText em { color: var(--text-tertiary); font-size: var(--text-size-xs); font-style: normal; font-weight: 400; }
+.relationPicker { display: grid; gap: var(--space-3); }
+.relationPicker ul { display: grid; max-height: 20rem; gap: var(--space-1); margin: 0; padding: 0; overflow: auto; list-style: none; }
+.relationPicker label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-control); }
+.relationPicker label:hover { background: var(--surface-raised); }
+.relationPicker label > span { display: grid; min-width: 0; gap: 2px; }
+.relationPicker label strong, .relationPicker label small, .relationPicker label em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relationPicker label small, .relationPicker label em { color: var(--text-secondary); font-size: var(--text-size-xs); font-style: normal; }
 .candidates { min-width: 0; padding: var(--space-2); max-height: 14rem; overflow: auto; border: 1px solid var(--border-subtle); }
 .candidates label { display: flex; align-items: start; gap: var(--space-2); padding: var(--space-2) 0; overflow-wrap: anywhere; }
 .candidates label, .links li { content-visibility: auto; contain-intrinsic-size: auto 48px; }

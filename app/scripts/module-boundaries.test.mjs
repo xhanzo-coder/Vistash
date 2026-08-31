@@ -1,7 +1,7 @@
 // 模块边界结构检查的测试（任务 6.4，设计第二条与第三条）。
 //
 // 前半部分用合成文件钉死分析器的解析与裁决规则；后半部分扫描真实 src 树，
-// 保证当前代码零违规，并确认三个模块的唯一公共出口已经建立。
+// 保证当前代码零违规，并确认四个模块的唯一公共出口已经建立。
 
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
@@ -161,8 +161,8 @@ test("裸包说明符不参与边界裁决", () => {
   assert.deepEqual(violations, []);
 });
 
-test("三个模块的唯一公共出口已建立且自述边界契约", () => {
-  for (const name of ["library-lifecycle", "asset-library", "prompt-library"]) {
+test("四个模块的唯一公共出口已建立且自述边界契约", () => {
+  for (const name of ["library-lifecycle", "asset-library", "prompt-library", "image-prompt-relations"]) {
     const indexPath = join(SRC_ROOT, "modules", name, "index.ts");
     assert.ok(existsSync(indexPath), `${name}/index.ts 必须存在`);
     const text = readFileSync(indexPath, "utf8");

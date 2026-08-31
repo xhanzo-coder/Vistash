@@ -115,7 +115,7 @@ Rust 门禁在前端之后串行运行：`cargo clippy --workspace --all-targets
 
 用户再次指出“全部图片”仍会在收藏后丢图。根因是上一轮把清除收藏写成 `favorite=false`，而后端合同中 false 明确表示“只看未收藏”；最终改为普通范围统一写入 `null`、收藏范围写入 `true`，并把历史偏好 false 规范化为 null。侧栏文件夹标题只保留新建入口，重命名、移动和删除仅在具体节点右键菜单出现。
 
-剪贴板不再作为菜单项或空库按钮。图片工作区同时认领系统 `paste` 事件和非编辑态 `Ctrl+V`，空内容、重复、成功、读取失败和处理中均有明确反馈。Windows adapter 先检查 DIB/DIBV5，避免无位图时调用插件；确认位图存在后的插件失败返回 `clipboard.read_failed`。PNG 编码直接消费已校验 RGBA 缓冲并使用 Fast/Sub，删除第二次整图复制。新增 1254×1254 完整 debug 管线门禁，实测 2.04 秒，低于 5 秒门禁。
+剪贴板不再作为菜单项或空库按钮。图片工作区同时认领系统 `paste` 事件和非编辑态 `Ctrl+V`，空内容、重复、成功、读取失败和处理中均有明确反馈。Windows adapter 优先读取 `CF_HDROP`，否则在同一次锁内对 DIB/DIBV5 固定头做尺寸与长度校验、只复制有上限的确切字节，关闭剪贴板后解码。PNG 编码直接消费已校验 RGBA 缓冲并使用 Fast/Sub，删除第二次整图复制。新增 1254×1254 完整 debug 管线门禁，实测 2.04 秒，低于 5 秒门禁。
 
 真实库五张旧 release 渐变图的原图不透明，但历史侧车被夹具固定为 `color_card.insufficient_opaque_pixels`。新增 `regenerate_color_card` 从权威原图重算并原子更新侧车/索引；色卡样本长边 256→160，算法版本 1→2，最大样本 65,536→25,600。真实 Tauri 中“夜市.png”历史失败色卡在首轮 773ms 观察内转为成功。界面改为连续比例色带、两列紧凑图例和重新分析入口，失败原因先显示中文说明，稳定码折叠在技术详情。
 
@@ -193,7 +193,7 @@ AppShell 顶栏删除了任务中心入口及上游组合 props，但内部任�
 
 用户同时报告某截图软件复制的位图粘贴失败，稳定错误为 `clipboard.read_failed`，内部英文为 arboard `ConversionFailure`。只读诊断确认：当前项目使用 `tauri-plugin-clipboard-manager 2.3.2` 与 `arboard 3.6.1`；Vistash 的 Win32 前置检查只确认 CF_DIB/CF_DIBV5 存在，随后插件调用 arboard。arboard Windows 读取会优先注册格式 `PNG`，否则读取 CF_DIBV5；PNG 或 DIBV5 交给 `image` crate 解码，任一步无法转换即产生截图中的固定英文。该错误因此发生在像素进入 Vistash 的 `BitmapImage`、PNG 编码和入库流程之前，不是文件夹目标、色卡或导入性能导致。
 
-诊断时系统剪贴板已被后续操作替换为 UnicodeText/System.String/Text，无法反推失败当刻到底是非标准 PNG 还是 DIBV5 变体；没有证据批准格式 fallback。官方 arboard 3.6.1 release 明确改用 `image` crate 解析 Windows bitmap 并邀请报告回归，Tauri 插件仓库仍有开放的 `readImagePNG` PR，进一步证明截图工具之间的格式兼容仍在演进。下一次复现必须在不复制其他内容的情况下立即枚举格式并记录截图软件名称，才能建立真实格式 fixture 后决定直读 PNG、补 CF_DIB 解码或修正 DIBV5。
+首次诊断时系统剪贴板已被后续操作替换，因而当时不批准猜测式 fallback。2026-08-31 使用 release Tauri + Windows `Print Screen` 在不插入其他复制操作的情况下立即复现：系统存在 DIB/DIBV5，插件报 arboard `ConversionFailure`，直读 DIB 后成功生成带时间 PNG。读入路径因此单一切换为 DIB，不保留插件读入 fallback；插件仍用于已批准的图片写出。
 
 最终门禁：`pnpm lint`、`pnpm typecheck`、46 个 Vitest 文件中的 408 个用例、17 个 Node 用例、两页 136 个文件夹工作区回归、真实 Tauri 只读拖动检查、`cargo clippy --workspace --all-targets -- -D warnings`、304 个核心测试及全部 Rust 集成/文档测试通过。
 

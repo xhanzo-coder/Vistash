@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { createRequestId, parseAssetId, parseLibraryId } from "../../app/common";
+import { createWorkspaceNavigation } from "../../app/navigation";
+import { createImagePromptRelations, createTauriImagePromptRelationAdapter } from "../../modules/image-prompt-relations";
 import { appTaskCenter } from "../../app/runtime";
 import { canStopTransferTask, stopAssetTransferTask } from "../../modules/asset-library";
 import { TaskCenterPopover } from "../../app/shell/TaskCenterPopover";
@@ -16,6 +18,7 @@ const LIBRARIES = [
   { id: parseLibraryId("018f3c9e-6c00-7000-8000-0000000000aa"), displayName: "图片会话 · 甲库" },
   { id: parseLibraryId("018f3c9e-6c00-7000-8000-0000000000bb"), displayName: "图片会话 · 乙库" },
 ] as const;
+const showcaseRelations = createImagePromptRelations({ adapter: createTauriImagePromptRelationAdapter(), navigation: createWorkspaceNavigation() });
 let currentLibrary = LIBRARIES[0].id;
 let rejectWrite = false;
 let failBatch = false;
@@ -330,6 +333,6 @@ export function AssetLibraryShowcase(): ReactNode {
       <ImportMenu onImportImages={() => setImportRequest({ requestId: createRequestId(), kind: "images" })} onImportFolder={() => setImportRequest({ requestId: createRequestId(), kind: "folder" })} />
       <TaskCenterPopover taskCenter={appTaskCenter} onStopTask={stopAssetTransferTask} canStopTask={canStopTransferTask} />
     </div>
-    <div className={styles.workspace}><AssetLibraryWorkspace session={LIBRARIES[libraryIndex]} active entry={entry} {...(importRequest === undefined ? {} : { importRequest })} onImportRequestHandled={(requestId) => setImportRequest((current) => current?.requestId === requestId ? undefined : current)} /></div>
+    <div className={styles.workspace}><AssetLibraryWorkspace session={LIBRARIES[libraryIndex]} relations={showcaseRelations} active entry={entry} {...(importRequest === undefined ? {} : { importRequest })} onImportRequestHandled={(requestId) => setImportRequest((current) => current?.requestId === requestId ? undefined : current)} /></div>
   </main>;
 }
