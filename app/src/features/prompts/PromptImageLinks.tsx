@@ -37,20 +37,21 @@ import {
  * 与检查器其他缩略图同一套懒加载生命周期；格位固定方形，超出部分裁剪。加载失败
  * 必须显式呈现原因，不留一个与"空关联"无法区分的空白。
  */
-function LinkedThumb({ hash }: { hash: string }) {
+function LinkedThumb({ hash, width, height, alt = "", presentation = "grid" }: { hash: string; width: number; height: number; alt?: string; presentation?: "grid" | "preview" }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { started, url, error } = useLazyThumbnailUrl(containerRef, hash);
 
   return (
     <div
       ref={containerRef}
-      className="linked-thumb"
+      className={`${styles.linkedMedia} ${presentation === "preview" ? styles.previewThumb : styles.gridThumb}`}
+      data-linked-thumb=""
       aria-busy={started && url === null && error === null}
     >
       {error !== null ? (
         <ErrorLine error={error} />
       ) : url !== null ? (
-        <img src={url} alt="" width={1} height={1} loading="lazy" />
+        <img src={url} alt={alt} width={width} height={height} loading="lazy" />
       ) : started ? (
         <p>正在载入…</p>
       ) : (
@@ -105,6 +106,7 @@ export function PromptImageLinks({
   const deferredSearch = useDeferredValue(searchDraft);
   const [candidates, setCandidates] = useState<AssetRow[] | null>(null);
   const [checkedHashes, setCheckedHashes] = useState<string[]>([]);
+  const [selectedHash, setSelectedHash] = useState<string | null>(null);
 
   const [hovering, setHovering] = useState(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
@@ -334,14 +336,19 @@ export function PromptImageLinks({
     explicitState !== undefined && !explicitState.deleted
       ? explicitState.hash
       : states?.find((state) => !state.deleted)?.hash ?? null;
+  const current = states?.find((state) => state.hash === selectedHash)
+    ?? states?.find((state) => state.hash === effectiveCover)
+    ?? states?.[0]
+    ?? null;
+  const currentIndex = current === null || states === null ? -1 : states.findIndex((state) => state.hash === current.hash);
 
   return (
-    <div className="prompt-image-links">
+    <div className={styles.root}>
       {loadError !== null && <ErrorLine error={loadError} />}
       {refreshCommitted && <p role="alert">关系已写入、刷新失败。重试只重新读取，不会重复或撤销关联。</p>}
       {actionError !== null && <ErrorLine error={actionError} />}
 
-      <div className="links-actions">
+      <div className={styles.actions}>
         <button type="button" aria-expanded={pickerOpen} onClick={pickerOpen ? closePicker : openPicker}>
           从图片库选择
         </button>
@@ -353,7 +360,8 @@ export function PromptImageLinks({
       {/* 拖入目标：悬停高亮由窗口级拖动事件驱动，落点命中才接管这次拖放。 */}
       <div
         ref={dropZoneRef}
-        className={`link-drop-zone${hovering ? " is-hover" : ""}`}
+        className={styles.dropZone}
+        data-hover={hovering ? "true" : undefined}
         data-drop-zone="prompt-images"
         aria-label={dropError === null ? "拖入本地图片以导入并关联" : "图片拖放不可用"}
       >
@@ -365,7 +373,7 @@ export function PromptImageLinks({
       </div>
 
       <Dialog title="添加关联图片" description="从图片库搜索并选择要与当前提示词建立普通关联的图片。" open={pickerOpen} onOpenChange={(open) => { if (!busy) { if (open) openPicker(); else closePicker(); } }} footer={<><Button onClick={closePicker}>取消</Button><Button variant="primary" disabled={busy || checkedHashes.length === 0} onClick={() => void confirmLink()}>确认关联 {checkedHashes.length} 张</Button></>}>
-        <div className="link-picker">
+        <div className={styles.picker}>
           <label htmlFor="link-image-search">搜索图片</label>
           <input
             id="link-image-search"
@@ -380,22 +388,22 @@ export function PromptImageLinks({
           ) : candidates.length === 0 ? (
             <p className="muted">没有匹配的图片</p>
           ) : (
-            <ul className="link-candidates">
+            <ul className={styles.candidateList} data-link-candidates="">
               {candidates.map((asset) => {
                   const alreadyLinked = states?.some((state) => state.hash === asset.hash) === true;
                   return (
                   <li key={asset.hash}>
-                    <label className="check-row">
+                    <label className={styles.candidateRow}>
                       <input
                         type="checkbox"
                         value={asset.hash}
                         checked={alreadyLinked || checkedHashes.includes(asset.hash)}
                         disabled={alreadyLinked || busy}
                         onChange={() => {
-                          setCheckedHashes((current) =>
-                            current.includes(asset.hash)
-                              ? current.filter((item) => item !== asset.hash)
-                              : [...current, asset.hash],
+                          setCheckedHashes((existing) =>
+                            existing.includes(asset.hash)
+                              ? existing.filter((item) => item !== asset.hash)
+                              : [...existing, asset.hash],
                           );
                         }}
                       />
@@ -410,7 +418,7 @@ export function PromptImageLinks({
       </Dialog>
 
       {report !== null && report.items.length > 0 && (
-        <ul className="import-report" aria-label="导入并关联结果">
+        <ul className={styles.importReport} data-import-report="" aria-label="导入并关联结果">
           {report.items.map((item) => {
             const label = outcomeLabel(item.outcome);
             return (
@@ -433,34 +441,48 @@ export function PromptImageLinks({
         loadError === null && <p role="status">正在读取关联…</p>
       ) : states.length === 0 ? (
         <p className="muted">还没有关联图片。可从图片库选择，或使用“从本地导入”。</p>
+      ) : current === null ? (
+        <p className="muted">关联图片状态异常：存在数量但没有可预览对象。</p>
       ) : (
-        <ul className="linked-thumbs" aria-label={`关联 ${states.length} 张图片`}>
-          {states.map((state) => {
-            const isExplicitCover = state.hash === explicitCover;
-            const isEffectiveCover = state.hash === effectiveCover;
-            return (
-              <li
-                key={state.hash}
-                data-linked-hash={state.hash}
-                className={state.deleted ? "is-deleted" : undefined}
-              >
-                {(isEffectiveCover || state.deleted) && (
-                  <div className="thumb-badges">
-                    {isEffectiveCover && <span className="cover-badge">封面</span>}
-                    {state.deleted && <span className="deleted-badge">已删除</span>}
-                  </div>
-                )}
-                <button type="button" className={styles.open} aria-label={`打开关联图片 ${state.display_filename}`} onClick={() => void relations.open({ kind: "image", libraryId, id: parseAssetId(state.hash), location: state.deleted ? "trash" : "active" }).catch((raw) => setActionError(asAppError(raw)))}><LinkedThumb hash={state.hash} /><span className={styles.meta}><strong>{state.display_filename}</strong><small>{state.folder ?? "未分类"} · {state.width} × {state.height}</small></span></button>
-                <Menu trigger={<IconButton size="compact" label={`关联图片操作 ${state.display_filename}`} icon={<DotsThreeIcon />} disabled={busy} />}>
+        <div className={styles.gallery} data-preview-hash={current.hash}>
+          <div className={styles.previewFrame}>
+            {(current.hash === effectiveCover || current.deleted) ? <div className={styles.previewBadges}>
+              {current.hash === effectiveCover ? <span className={styles.coverBadge} data-relation-badge="cover">封面</span> : null}
+              {current.deleted ? <span className={styles.deletedBadge} data-relation-badge="deleted">已删除</span> : null}
+            </div> : null}
+            <LinkedThumb hash={current.hash} width={current.width} height={current.height} alt={current.display_filename} presentation="preview" />
+          </div>
+          <div className={styles.currentMeta}>
+            <strong>{current.display_filename}</strong>
+            <span>{current.display_filename} · {current.width} × {current.height} · 第 {currentIndex + 1} / {states.length} 张{current.deleted ? " · 已删除" : ""}</span>
+          </div>
+          <div className={styles.currentActions}>
+            <span className="muted">{current.folder ?? "未分类"}</span>
+            <Button size="compact" disabled={busy} onClick={() => void relations.open({ kind: "image", libraryId, id: parseAssetId(current.hash), location: current.deleted ? "trash" : "active" }).catch((raw) => setActionError(asAppError(raw)))}>打开当前图片</Button>
+          </div>
+          <ul className={styles.thumbnailGrid} aria-label={`关联 ${states.length} 张图片`}>
+            {states.map((state) => {
+              const isExplicitCover = state.hash === explicitCover;
+              const isEffectiveCover = state.hash === effectiveCover;
+              return <li key={state.hash} data-linked-hash={state.hash} className={styles.thumbnailItem}>
+                <button type="button" className={styles.thumbButton} aria-label={`预览关联图片 ${state.display_filename}`} aria-pressed={state.hash === current.hash} data-deleted={state.deleted ? "true" : undefined} onClick={() => setSelectedHash(state.hash)}>
+                  {(isEffectiveCover || state.deleted) ? <span className={styles.thumbBadges}>
+                    {isEffectiveCover ? <span className={styles.coverBadge} data-relation-badge="cover">封面</span> : null}
+                    {state.deleted ? <span className={styles.deletedBadge} data-relation-badge="deleted">已删除</span> : null}
+                  </span> : null}
+                  <LinkedThumb hash={state.hash} width={state.width} height={state.height} />
+                  <span className={styles.thumbName}><strong>{state.display_filename}</strong><small>{state.width} × {state.height}</small></span>
+                </button>
+                <span className={styles.thumbMenu}><Menu trigger={<IconButton size="compact" label={`关联图片操作 ${state.display_filename}`} icon={<DotsThreeIcon />} disabled={busy} />}>
                   {!state.deleted && !isEffectiveCover ? <MenuItem onSelect={() => void changeCover(state.hash)}>设为封面</MenuItem> : null}
                   {isExplicitCover ? <MenuItem onSelect={() => void changeCover(null)}>取消封面</MenuItem> : null}
                   {(!state.deleted && !isEffectiveCover) || isExplicitCover ? <MenuSeparator /> : null}
                   <MenuItem destructive onSelect={() => void removeLinked(state.hash)}>解除关联</MenuItem>
-                </Menu>
-              </li>
-            );
-          })}
-        </ul>
+                </Menu></span>
+              </li>;
+            })}
+          </ul>
+        </div>
       )}
     </div>
   );

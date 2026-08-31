@@ -123,7 +123,7 @@ export function AssetInspector({ libraryId, relations, asset, count, active, edi
     colors: <Colors libraryId={libraryId} asset={asset} editable={editable} />,
     organization: <><AssetOrganization key={asset.hash} libraryId={libraryId} asset={asset} folders={folders} disabled={!editable} />{asset.deleted_at === null ? null : <Button size="compact" disabled={!restorable} onClick={onRestore}>还原图片</Button>}</>,
     note: <NoteEditor asset={asset} notes={notes} disabled={!editable} />,
-    links: detail.isError ? <div><p role="alert" className={styles.error}>{detail.error.message}</p><Button size="compact" onClick={() => void detail.refetch()}>重试读取详情</Button></div> : detail.isPending ? <p role="status">正在读取关联…</p> : <AssetPromptLinks key={asset.hash} libraryId={libraryId} relations={relations} hash={asset.hash} linked={detail.data.linked_prompts} disabled={!editable} active={active} />,
+    links: detail.isError ? <div><p role="alert" className={styles.error}>{detail.error.message}</p><Button size="compact" onClick={() => void detail.refetch()}>重试读取详情</Button></div> : detail.isPending ? <p role="status">正在读取关联…</p> : <AssetPromptLinks key={asset.hash} libraryId={libraryId} relations={relations} asset={asset} linked={detail.data.linked_prompts} disabled={!editable} active={active} />,
     files: <FileInformation asset={asset} />,
   };
   return <div className={styles.inspector}>

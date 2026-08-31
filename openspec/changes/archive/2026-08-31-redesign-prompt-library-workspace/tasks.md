@@ -48,7 +48,7 @@
 - [x] 7.2 在 10,000 项 fixture 上验证卡片/列表初始 DOM、滚动帧、峰值 DOM、内存和视图切换达到既定门禁
 - [x] 7.3 串行通过 `pnpm lint`、`pnpm typecheck`、`pnpm test`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `cargo test --workspace`
 - [x] 7.4 使用 `webapp-testing`、`web-design-guidelines` 和最终 `code-review` 修复全部阻断项，并运行 OpenSpec strict validate
-- [ ] 7.5 在真实 Tauri 中由用户确认图片与提示词属于同一设计系统，记录最终截图、剩余非阻断差异和验收结论
+- [x] 7.5 在真实 Tauri 中由用户确认图片与提示词属于同一设计系统，记录最终截图、剩余非阻断差异和验收结论
 
 ## 8. Code review 修复
 

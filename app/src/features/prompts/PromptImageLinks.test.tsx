@@ -121,9 +121,14 @@ beforeEach(() => {
     if (command === "catalog_snapshot") return { assets: candidates };
     if (
       command === "link_images" ||
-      command === "unlink_image" ||
       command === "set_prompt_cover"
     ) {
+      return undefined;
+    }
+    if (command === "unlink_image") {
+      if (!(states instanceof Error) && typeof payload === "object" && payload !== null && "hash" in payload && typeof payload.hash === "string") {
+        states = states.filter((state) => state.hash !== payload.hash);
+      }
       return undefined;
     }
     if (command === "import_and_link") {
@@ -189,11 +194,17 @@ async function setupLinks(
   };
 }
 
-test("关联图片主体可打开对应图片，删除态定位到图片回收站", async () => {
+test("缩略图单击只切换主预览，显式打开当前图片才定位删除态图片", async () => {
   const harness = await setupLinks();
-  const deleted = harness.container.querySelector<HTMLButtonElement>('button[aria-label="打开关联图片 bbbb.png"]');
-  if (deleted === null) throw new Error("缺少关联图片打开入口");
+  expect(harness.container.querySelector<HTMLElement>('[data-preview-hash]')?.dataset.previewHash).toBe(HASH_A);
+  const deleted = harness.container.querySelector<HTMLButtonElement>('button[aria-label="预览关联图片 bbbb.png"]');
+  if (deleted === null) throw new Error("缺少关联图片预览入口");
   await act(async () => deleted.click());
+  expect(harness.container.querySelector<HTMLElement>('[data-preview-hash]')?.dataset.previewHash).toBe(HASH_B);
+  expect(harness.container.textContent).toContain("bbbb.png · 800 × 600 · 第 2 / 2 张 · 已删除");
+  expect(harness.navigation.active).toBe("prompts");
+  expect(harness.navigation.entryFor("assets")).toEqual({ kind: "resume" });
+  await act(async () => harness.buttonByText("打开当前图片").click());
   await flush();
   expect(harness.navigation.entryFor("assets")).toMatchObject({ kind: "locate_asset", hash: HASH_B, location: "trash" });
   await harness.unmount();
@@ -235,14 +246,15 @@ test("挂载读取关联状态：回收站项显式标记已删除，缺省封�
 
   // 第一张正常：缺省封面徽标，且不再提供"设为封面"。
   expect(items[0]?.dataset.linkedHash).toBe(HASH_A);
-  expect(items[0]?.querySelector(".cover-badge")?.textContent).toBe("封面");
-  expect(items[0]?.querySelector(".deleted-badge")).toBeNull();
+  expect(items[0]?.querySelector('[data-relation-badge="cover"]')?.textContent).toBe("封面");
+  expect(items[0]?.querySelector('[data-relation-badge="deleted"]')).toBeNull();
+  expect(items[0]?.textContent).toContain("800 × 600");
   expect(items[0]?.querySelector('button[aria-label="把第 1 张图片设为封面"]')).toBeNull();
 
   // 第二张在回收站：关联保留并显式标记，绝不冒充正常项。
   expect(items[1]?.dataset.linkedHash).toBe(HASH_B);
-  expect(items[1]?.querySelector(".deleted-badge")?.textContent).toBe("已删除");
-  expect(items[1]?.querySelector(".cover-badge")).toBeNull();
+  expect(items[1]?.querySelector('[data-relation-badge="deleted"]')?.textContent).toBe("已删除");
+  expect(items[1]?.querySelector('[data-relation-badge="cover"]')).toBeNull();
   // 已删除的图不能被设为封面（封面必须来自正常关联图片）。
   expect(
     harness.container.querySelector('button[aria-label="把第 2 张图片设为封面"]'),
@@ -291,10 +303,12 @@ test("关联图片缩略图卸载时释放全部媒体租约", async () => {
   );
 
   const harness = await setupLinks();
-  await vi.waitFor(() => expect(createUrl).toHaveBeenCalledTimes(2));
+  // 两张缩略图各持有一份租约，当前主预览再持有一份；三者卸载时必须全部释放。
+  await vi.waitFor(() => expect(createUrl).toHaveBeenCalledTimes(3));
   await harness.unmount();
   expect(revokeUrl).toHaveBeenCalledWith("blob:linked-1");
   expect(revokeUrl).toHaveBeenCalledWith("blob:linked-2");
+  expect(revokeUrl).toHaveBeenCalledWith("blob:linked-3");
 });
 
 test("显式封面优先于缺省解析：取消封面回到缺省", async () => {
@@ -302,9 +316,9 @@ test("显式封面优先于缺省解析：取消封面回到缺省", async () =>
 
   // 已删除图片可以保留关联与显式偏好供还原，但不能继续充当当前有效封面。
   const items = harness.container.querySelectorAll<HTMLElement>("[data-linked-hash]");
-  expect(items[0]?.querySelector(".cover-badge")?.textContent).toBe("封面");
-  expect(items[1]?.querySelector(".cover-badge")).toBeNull();
-  expect(items[1]?.querySelector(".deleted-badge")).not.toBeNull();
+  expect(items[0]?.querySelector('[data-relation-badge="cover"]')?.textContent).toBe("封面");
+  expect(items[1]?.querySelector('[data-relation-badge="cover"]')).toBeNull();
+  expect(items[1]?.querySelector('[data-relation-badge="deleted"]')).not.toBeNull();
 
   await chooseLinkedImageAction(harness.container, "bbbb.png", "取消封面");
   await flush();
@@ -330,7 +344,7 @@ test("从图片库多选建立关联：已关联项显式禁用，确认走批�
   await flush();
 
   // 已关联项保留身份与状态，避免使用者误以为搜索遗漏。
-  const labels = [...document.querySelectorAll(".link-candidates label span")].map(
+  const labels = [...document.querySelectorAll('[data-link-candidates] label span')].map(
     (el) => el.textContent,
   );
   expect(labels).toEqual([
@@ -338,13 +352,13 @@ test("从图片库多选建立关联：已关联项显式禁用，确认走批�
     "候选三.png · 未分类 · 800 × 600",
     "候选四.png · 未分类 · 800 × 600",
   ]);
-  expect(document.querySelector<HTMLInputElement>(`.link-candidates input[value="${HASH_A}"]`)?.disabled).toBe(true);
+  expect(document.querySelector<HTMLInputElement>(`[data-link-candidates] input[value="${HASH_A}"]`)?.disabled).toBe(true);
 
   const third = document.querySelector<HTMLInputElement>(
-    `.link-candidates input[value="${thirdHash}"]`,
+    `[data-link-candidates] input[value="${thirdHash}"]`,
   );
   const fourth = document.querySelector<HTMLInputElement>(
-    `.link-candidates input[value="${fourthHash}"]`,
+    `[data-link-candidates] input[value="${fourthHash}"]`,
   );
   if (third === null || fourth === null) throw new Error("缺少候选复选框");
   await act(async () => {
@@ -361,7 +375,7 @@ test("从图片库多选建立关联：已关联项显式禁用，确认走批�
     payload: { promptId: "prompt-0", hashes: [thirdHash, fourthHash] },
   });
   // 建立后选择器收起并重读关联格位；工作区刷新由关系 revision 统一驱动。
-  expect(document.querySelector(".link-candidates")).toBeNull();
+  expect(document.querySelector("[data-link-candidates]")).toBeNull();
   expect(ipcCalls.filter((call) => call.command === "linked_image_states")).toHaveLength(2);
 
   await harness.unmount();
@@ -381,6 +395,17 @@ test("解除关联走 unlink_image 并刷新权威", async () => {
   await harness.unmount();
 });
 
+test("解除当前预览关系后回落到剩余有效封面", async () => {
+  states = [linkedState(HASH_A, false), linkedState(HASH_B, false)];
+  const harness = await setupLinks(makePrompt({ cover_image_hash: HASH_B, resolved_cover_hash: HASH_B }));
+  expect(harness.container.querySelector<HTMLElement>('[data-preview-hash]')?.dataset.previewHash).toBe(HASH_B);
+  await chooseLinkedImageAction(harness.container, "bbbb.png", "解除关联");
+  await flush();
+  expect(harness.container.querySelector<HTMLElement>('[data-preview-hash]')?.dataset.previewHash).toBe(HASH_A);
+  expect(harness.container.textContent).toContain("aaaa.png · 800 × 600 · 第 1 / 1 张");
+  await harness.unmount();
+});
+
 test("从本地导入：对话框路径进 import_and_link，逐项结果显式呈现", async () => {
   vi.mocked(openDialog).mockResolvedValue(["E:\\素材\\逆光.png"]);
   const harness = await setupLinks();
@@ -392,7 +417,7 @@ test("从本地导入：对话框路径进 import_and_link，逐项结果显式�
     command: "import_and_link",
     payload: { promptId: "prompt-0", sources: ["E:\\素材\\逆光.png"] },
   });
-  const reportItem = harness.container.querySelector(".import-report li");
+  const reportItem = harness.container.querySelector("[data-import-report] li");
   if (reportItem === null) throw new Error("缺少导入结果条目");
   expect(reportItem.textContent).toContain("逆光.png");
   expect(reportItem.textContent).toContain("已导入并关联");
@@ -433,7 +458,7 @@ test("导入成功但关联失败：图片保留的说明带稳定错误码，�
   await act(async () => harness.buttonByText("从本地导入").click());
   await flush();
 
-  const reportItem = harness.container.querySelector(".import-report li");
+  const reportItem = harness.container.querySelector("[data-import-report] li");
   if (reportItem === null) throw new Error("缺少导入结果条目");
   expect(reportItem.textContent).toContain("已入库但未关联");
   expect(
@@ -463,7 +488,7 @@ test("拖入命中关联区才接管落点；悬停高亮随位置切换", async
   await act(async () => {
     handleFileDragEvent({ type: "enter", paths: ["E:\\a.png"], x: 50, y: 30 });
   });
-  expect(zone.className).toContain("is-hover");
+  expect(zone.dataset.hover).toBe("true");
   expect(promptDropClaimsLatestPoint()).toBe(true);
 
   // 落下：路径交给 import_and_link，而不是整库导入。
@@ -482,7 +507,7 @@ test("拖入命中关联区才接管落点；悬停高亮随位置切换", async
     handleFileDragEvent({ type: "move", paths: ["E:\\a.png"], x: 900, y: 700 });
     handleFileDragEvent({ type: "drop", paths: ["E:\\a.png"], x: 900, y: 700 });
   });
-  expect(zone.className).not.toContain("is-hover");
+  expect(zone.dataset.hover).toBeUndefined();
   expect(promptDropClaimsLatestPoint()).toBe(false);
   expect(ipcCalls.filter((call) => call.command === "import_and_link")).toHaveLength(
     callsBefore,

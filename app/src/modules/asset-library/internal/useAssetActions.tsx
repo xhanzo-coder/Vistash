@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { parseAssetId, type AssetId, type LibraryId } from "../../../app/common";
 import { appTaskCenter } from "../../../app/runtime";
 import type { TaskOutcome } from "../../../app/taskCenter";
-import { batchAddAssetTag, batchDeleteAssets, batchLinkToPrompt, batchMoveAssetsToFolder, batchRemoveAssetTag, batchSetAssetFavorite, setAssetFavorite } from "../../../shared/ipc";
+import { batchAddAssetTag, batchDeleteAssets, batchMoveAssetsToFolder, batchRemoveAssetTag, batchSetAssetFavorite, setAssetFavorite } from "../../../shared/ipc";
 import { formatError, IpcError } from "../../../shared/errors";
 import type { BatchProgress, BatchReport } from "../../../shared/types";
 import { Button } from "../../../ui/button/Button";
@@ -16,7 +16,6 @@ type AssetAction =
   | { kind: "favorite"; hashes: string[]; value: boolean }
   | { kind: "trash"; hashes: string[] }
   | { kind: "tag"; hashes: string[]; tag: string; add: boolean }
-  | { kind: "link"; hashes: string[]; promptId: string; promptTitle: string }
   | { kind: "move"; hashes: string[]; folder: string | null };
 
 type ActionResult = {
@@ -28,7 +27,6 @@ type ActionResult = {
 function titleOf(action: AssetAction): string {
   if (action.kind === "move") return action.folder === null ? "移到未分类" : `移动到 ${action.folder}`;
   if (action.kind === "tag") return `${action.add ? "添加" : "移除"}标签「${action.tag}」`;
-  if (action.kind === "link") return `关联提示词「${action.promptTitle}」`;
   return action.kind === "trash" ? "移入回收站" : action.value ? "收藏图片" : "取消收藏";
 }
 
@@ -55,7 +53,6 @@ export function useAssetActions(libraryId: LibraryId, relations: ImagePromptRela
         case "trash": return batchDeleteAssets(request.hashes, reportProgress);
         case "move": return batchMoveAssetsToFolder(request.hashes, request.folder, reportProgress);
         case "tag": return request.add ? batchAddAssetTag(request.hashes, request.tag, reportProgress) : batchRemoveAssetTag(request.hashes, request.tag, reportProgress);
-        case "link": return batchLinkToPrompt(request.promptId, request.hashes, reportProgress);
       }
       const unexpected: never = request;
       throw new Error(`未知素材操作：${JSON.stringify(unexpected)}`);
@@ -70,12 +67,12 @@ export function useAssetActions(libraryId: LibraryId, relations: ImagePromptRela
         setResults((current) => [...current, result]);
       }
       const ids = new Set(request.kind === "favorite-one" ? [request.hash] : request.hashes);
-      if (request.kind === "trash" || request.kind === "link") {
+      if (request.kind === "trash") {
         const failed = new Set(report.failures.map((failure) => failure.id));
         const changed = request.hashes.filter((hash) => !failed.has(hash)).map(parseAssetId);
         const refreshError = await relations.synchronize(libraryId, {
           imageIds: changed,
-          promptIds: request.kind === "link" ? [request.promptId] : [],
+          promptIds: [],
         });
         if (refreshError !== null) {
           const result: ActionResult = { id: ++nextResultId.current, title: titleOf(request), result: { kind: "failed", error: new IpcError(refreshError) } };
@@ -83,7 +80,7 @@ export function useAssetActions(libraryId: LibraryId, relations: ImagePromptRela
         }
       }
       await Promise.all([
-        client.invalidateQueries({ queryKey: request.kind === "link" ? assetKeys.promptCandidatesRoot(libraryId) : assetKeys.collections(libraryId) }),
+        client.invalidateQueries({ queryKey: assetKeys.collections(libraryId) }),
         client.invalidateQueries({ queryKey: assetKeys.details(libraryId), predicate: (query) => typeof query.queryKey[3] === "string" && ids.has(query.queryKey[3]) }),
       ]);
     },

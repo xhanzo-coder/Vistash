@@ -13,7 +13,10 @@
     "preview": "vite preview",
     "lint": "oxlint --type-aware",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && node --test scripts/e2e-app-config.test.mjs scripts/icon-assets.test.mjs scripts/module-boundaries.test.mjs scripts/native-window-shell.test.mjs",
+    "test": "vitest run && node --test scripts/e2e-app-config.test.mjs scripts/icon-assets.test.mjs scripts/module-boundaries.test.mjs scripts/native-window-shell.test.mjs scripts/release.test.mjs scripts/release-workflows.test.mjs",
+    "release:verify": "node scripts/release.mjs verify",
+    "release:build": "pnpm release:verify && tauri build --bundles nsis,msi",
+    "release:checksums": "node scripts/release.mjs checksums --bundle-dir target/release/bundle --output target/release/bundle/SHA256SUMS.txt",
     "tauri": "tauri"
   },
   "devDependencies": {

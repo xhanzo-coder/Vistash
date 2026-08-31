@@ -329,7 +329,7 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
   const openBatchEdit = (kind: BatchEdit["kind"], origin?: HTMLElement | null): void => {
     if (writesDisabled || layout.location !== "active" || selectedHashList.length === 0) return;
     batchOrigin.current = origin ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
-    setBatchEdit({ kind, hashes: [...selectedHashList] });
+    setBatchEdit(kind === "link" ? { kind, assets: selectedAssets.map((asset) => ({ ...asset, tags: [...asset.tags], colors: [...asset.colors] })) } : { kind, hashes: [...selectedHashList] });
   };
   const restoreBatchFocus = (): void => {
     const origin = batchOrigin.current;
@@ -559,7 +559,7 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
           <ActionResults results={actions.results} dismiss={actions.dismiss} />
           <TrashResults actions={trash} />
           {lightbox === null || !active ? null : <AssetLightbox session={lightbox} onClose={closeLightbox} />}
-          <BatchEditDialog edit={batchEdit} libraryId={session.id} active={active} busy={organizationBusy} run={actions.run} onClose={() => setBatchEdit(null)} restoreFocus={restoreBatchFocus} />
+          <BatchEditDialog edit={batchEdit} libraryId={session.id} relations={relations} active={active} busy={organizationBusy} run={actions.run} onClose={() => setBatchEdit(null)} restoreFocus={restoreBatchFocus} />
         </div>
         {inlineInspector && !informationOpen ? <>
           {layout.inspectorCollapsed ? null : <PanelResizeHandle panel="inspector" label="调整图片检查器宽度" value={layout.inspectorWidth} min={INSPECTOR_WIDTH.min} max={INSPECTOR_WIDTH.max} defaultValue={INSPECTOR_WIDTH.default} pointerDirection={-1}

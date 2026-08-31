@@ -17,6 +17,7 @@ export type DialogProps = {
   onOpenChange?: (open: boolean) => void;
   onOpenAutoFocus?: (event: Event) => void;
   onCloseAutoFocus?: (event: Event) => void;
+  size?: "default" | "wide";
 };
 
 /**
@@ -32,6 +33,7 @@ export function Dialog({
   onOpenAutoFocus,
   onCloseAutoFocus,
   open,
+  size = "default",
   title,
   trigger,
 }: DialogProps): ReactNode {
@@ -44,7 +46,7 @@ export function Dialog({
       {trigger === undefined ? null : <DialogPrimitive.Trigger asChild>{trigger}</DialogPrimitive.Trigger>}
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className={styles.overlay} />
-        <DialogPrimitive.Content className={styles.content}
+        <DialogPrimitive.Content className={styles.content} data-size={size}
           {...(onOpenAutoFocus === undefined ? {} : { onOpenAutoFocus })}
           {...(onCloseAutoFocus === undefined ? {} : { onCloseAutoFocus })}>
           <header className={styles.header}>

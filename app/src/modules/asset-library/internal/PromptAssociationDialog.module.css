@@ -1,0 +1,252 @@
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.72fr) minmax(20rem, 1.28fr);
+  min-height: 26rem;
+  margin: calc(-1 * var(--space-5));
+}
+
+.targets,
+.prompts {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: var(--space-4);
+  padding: var(--space-5);
+}
+
+.targets {
+  background: var(--surface-sunken);
+  border-inline-end: 1px solid var(--border-subtle);
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.heading h3,
+.heading p {
+  margin: 0;
+}
+
+.modeTabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-block-end: var(--space-3);
+  border-block-end: 1px solid var(--border-subtle);
+}
+
+.heading p,
+.hint,
+.resultCount,
+.candidateMeta {
+  color: var(--text-secondary);
+  font-size: var(--text-size-xs);
+}
+
+.targetGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.targetGrid li {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-media);
+}
+
+.targetMedia {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-input);
+}
+
+.targetMedia img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.targetName {
+  min-width: 0;
+  padding: var(--space-2);
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moreTargets {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.candidateList,
+.failures {
+  display: grid;
+  max-height: 20rem;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  background: var(--border-subtle);
+  list-style: none;
+}
+
+.candidateList li,
+.failures li {
+  min-width: 0;
+  background: var(--surface-panel);
+}
+
+.candidateList label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3);
+}
+
+.candidateList label:hover {
+  background: var(--surface-raised);
+}
+
+.candidateList input {
+  margin-block-start: 3px;
+}
+
+.candidateText {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.candidateText strong,
+.candidateText span,
+.candidateText em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidateText em {
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  font-style: normal;
+}
+
+.candidateList label:has(input:checked) {
+  background: var(--selection-soft);
+  box-shadow: inset 3px 0 0 var(--selection-edge);
+}
+
+.candidateList label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.failures li {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  color: var(--text-danger);
+}
+
+.footerSummary {
+  margin-inline-end: auto;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  color: var(--text-danger);
+}
+
+.createForm {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.createField {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+}
+
+.createField small {
+  color: var(--text-tertiary);
+}
+
+.createField input,
+.createField textarea {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-3);
+  color: var(--text-primary);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  font: inherit;
+}
+
+.createField textarea {
+  min-height: 10rem;
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.createPair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.createdNotice {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--warning-bg);
+  border-inline-start: 3px solid var(--warning-edge);
+}
+
+.createdNotice p,
+.createdNotice code {
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .targets {
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--border-subtle);
+  }
+
+  .targetGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .createPair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -335,7 +335,7 @@ test("带关联图片的活动项按权威顺序列出格位并标注总数", as
   await act(async () => harness.proxy(0).click());
   await flush();
 
-  const list = harness.section("images").querySelector("ul.linked-thumbs");
+  const list = harness.section("images").querySelector('ul[aria-label="关联 2 张图片"]');
   if (list === null) throw new Error("缺少关联图片列表");
   expect(list.getAttribute("aria-label")).toBe("关联 2 张图片");
   expect(
@@ -355,7 +355,7 @@ test("回收站里的关联图片显式标记已删除而不是消失", async ()
 
   const item = harness.section("images").querySelector<HTMLElement>("[data-linked-hash]");
   if (item === null) throw new Error("缺少关联格位");
-  expect(item.querySelector(".deleted-badge")?.textContent).toBe("已删除");
+  expect(item.querySelector('[data-relation-badge="deleted"]')?.textContent).toBe("已删除");
 });
 
 test("收藏开关报告目标状态且初始与提示词一致", async () => {

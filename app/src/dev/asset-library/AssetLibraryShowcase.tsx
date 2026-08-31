@@ -142,6 +142,22 @@ mockIPC((command, payload) => {
       const text = query.text.toLowerCase();
       return { prompts: prompts.filter((prompt) => prompt.deleted_at === null && `${prompt.title} ${prompt.body}`.toLowerCase().includes(text)), folders: [], tags: [], trash_count: 1 };
     }
+    case "create_prompt": {
+      const draft = record(request.prompt);
+      if (typeof draft.body !== "string" || draft.body.trim().length === 0) throw new TypeError("展台创建提示词缺少正文");
+      const prompts = promptsByLibrary.get(currentLibrary);
+      if (prompts === undefined) throw new Error("展台提示词库不存在");
+      const created: PromptRow = {
+        id: crypto.randomUUID(), body: draft.body,
+        title: typeof draft.title === "string" ? draft.title : null,
+        model: typeof draft.model === "string" ? draft.model : null,
+        parameters: typeof draft.parameters === "string" ? draft.parameters : null,
+        note: "", favorite: false, folders: [], tags: [], linked_image_hashes: [], cover_image_hash: null, resolved_cover_hash: null,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(), deleted_at: null,
+      };
+      prompts.push(created);
+      return { ...created, format_version: 1, deleted_from_folders: null };
+    }
     case "link_images":
     case "unlink_image": {
       if (rejectWrite) throw { code: "library.io_failed", detail: "展台模拟关联写入失败" };

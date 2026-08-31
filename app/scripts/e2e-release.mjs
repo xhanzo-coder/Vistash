@@ -347,6 +347,11 @@ async function main() {
       results.push({ step: "S1-S2", status: "测试库已经是 v3，本轮复用既有迁移验收并从工作区继续" });
     }
 
+    // 布局偏好可能恢复到提示词工作区；原生验收从这里显式进入图片工作区，
+    // 禁止用隐藏 DOM 中的图片卡片冒充当前可见现场。
+    await page.getByRole("button", { name: "图片", exact: true }).click();
+    await page.locator('[data-workspace="assets"]:not([hidden])').waitFor({ timeout: 15_000 });
+
     /* S3 瀑布流呈现迁移后的素材 */
     await page.locator("[data-waterfall-item]").first().waitFor({ timeout: 20_000 });
     assert((await page.locator("[data-waterfall-item]").count()) >= 4, "瀑布流应有可见卡片");
@@ -439,7 +444,7 @@ async function main() {
     /* S7 Ctrl+F 分库搜索与条件芯片 */
     // S6 最后一次交互是检查器下拉框；先把焦点还给工作区，再验证工作区快捷键，
     // 避免把原生 select 的焦点语义误判成应用快捷键失效。
-    await page.locator('section[aria-label="图片工作区"]:not([hidden]) h1').click();
+    await page.locator('[data-workspace="assets"]:not([hidden]) h1').click();
     await page.evaluate(() => {
       const active = document.activeElement;
       if (active instanceof HTMLElement) active.blur();
@@ -513,12 +518,12 @@ async function main() {
     const linksSection = page.locator('[data-inspector-section="images"]');
     await linksSection.waitFor({ timeout: 10_000 });
     await linksSection.getByRole("button", { name: "从图片库选择" }).click();
-    const candidateBoxes = page.locator('.link-candidates input[type="checkbox"]');
+    const candidateBoxes = page.locator('[data-link-candidates] input[type="checkbox"]');
     await candidateBoxes.first().waitFor({ timeout: 15_000 });
     // 与 S6 同理：受控勾选经 React 状态回填，click() + 按钮可用性等待代替 check()。
-    const targetCandidate = page.locator(".link-candidates label", { hasText: targetDisplayName }).getByRole("checkbox");
+    const targetCandidate = page.locator("[data-link-candidates] label", { hasText: targetDisplayName }).getByRole("checkbox");
     await targetCandidate.click();
-    await page.locator('.link-candidates input[type="checkbox"]:not(:checked):not(:disabled)').first().click();
+    await page.locator('[data-link-candidates] input[type="checkbox"]:not(:checked):not(:disabled)').first().click();
     await page.getByRole("button", { name: "确认关联 2 张", exact: true }).click();
     await poll(
       async () => (await readJson(promptDoc.path)).linked_image_hashes.length === 2,
@@ -540,7 +545,8 @@ async function main() {
     await poll(async () => (await readJson(promptDoc.path)).cover_image_hash !== null, 10_000, "显式封面落盘");
 
     // 双向打开使用关系 Module 的 resolve + guarded navigation，不通过顶栏手工切页冒充。
-    await linksSection.getByRole("button", { name: `打开关联图片 ${targetDisplayName}`, exact: true }).click();
+    await linksSection.getByRole("button", { name: `预览关联图片 ${targetDisplayName}`, exact: true }).click();
+    await linksSection.getByRole("button", { name: "打开当前图片", exact: true }).click();
     await page.getByRole("button", { name: `打开提示词 ${promptTitle}`, exact: true }).waitFor({ timeout: 15_000 });
     await page.getByRole("button", { name: `打开提示词 ${promptTitle}`, exact: true }).click();
     await page.locator(`[data-prompt-card][aria-label^="${promptTitle}"][aria-selected="true"]`).waitFor({ timeout: 15_000 });
@@ -578,7 +584,8 @@ async function main() {
     // 关联对象进入回收站后仍保留；从提示词侧打开必须直接定位图片回收站。
     await page.getByRole("button", { name: "提示词", exact: true }).click();
     await page.locator(`[data-prompt-card][aria-label^="${promptTitle}"]`).click();
-    await page.getByRole("button", { name: `打开关联图片 ${targetDisplayName}`, exact: true }).click();
+    await page.getByRole("button", { name: `预览关联图片 ${targetDisplayName}`, exact: true }).click();
+    await page.getByRole("button", { name: "打开当前图片", exact: true }).click();
     await page.getByRole("heading", { name: "回收站", exact: true }).waitFor({ timeout: 15_000 });
     await page.getByRole("button", { name: "回收站", exact: true }).click();
     const trashCards = page.locator("[data-waterfall-item]");

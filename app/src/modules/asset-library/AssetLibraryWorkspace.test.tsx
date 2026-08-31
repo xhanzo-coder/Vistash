@@ -39,6 +39,7 @@ import type { AssetRow, CatalogSnapshot, ExportOutcome, ImportOutcome, PromptRow
 import { UiProvider } from "../../ui/UiProvider";
 import { createWorkspaceNavigation, type WorkspaceNavigation } from "../../app/navigation";
 import { createImagePromptRelations, createTauriImagePromptRelationAdapter, type ImagePromptRelations } from "../image-prompt-relations";
+import { blockIfPromptDraftDirty } from "../prompt-library";
 import {
   AssetLibraryWorkspace,
   type AssetLibraryEntry,
@@ -164,10 +165,13 @@ let renameFailure: string | null = null;
 let applyFilenameFilter = false;
 let filenameQueryFailure = false;
 let inspectorWriteFailure = false;
+let relationFailurePromptId: string | null = null;
 let noteGate: Promise<void> | null = null;
 let prompts: PromptRow[];
 let detailFailure = false;
 let promptFailure = false;
+let promptCreateFailure = false;
+let promptSerial = 0;
 let applyTagFilter = false;
 let applyFolderFilter = false;
 let deletedFolders: Map<string, string | null>;
@@ -198,6 +202,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function record(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) throw new TypeError("测试合同要求对象载荷");
+  return value;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((item): item is string => typeof item === "string")) throw new TypeError("测试合同要求字符串数组");
   return value;
 }
 
@@ -290,9 +299,12 @@ beforeEach(() => {
   applyFilenameFilter = false;
   filenameQueryFailure = false;
   inspectorWriteFailure = false;
+  relationFailurePromptId = null;
   noteGate = null;
   detailFailure = false;
   promptFailure = false;
+  promptCreateFailure = false;
+  promptSerial = 0;
   applyTagFilter = false;
   applyFolderFilter = false;
   deletedFolders = new Map([[H_TRASHED, "参考"]]);
@@ -445,6 +457,30 @@ beforeEach(() => {
         const text = query.text;
         return { prompts: prompts.filter((prompt) => prompt.deleted_at === null && `${prompt.title} ${prompt.body}`.includes(text)), folders: [], tags: [], trash_count: 1 };
       }
+      case "create_prompt": {
+        if (promptCreateFailure) throw { code: "library.prompt_write_failed", detail: "提示词目录只读" };
+        const draft = record(request.prompt);
+        if (typeof draft.body !== "string" || draft.body.trim().length === 0) throw new TypeError("创建提示词缺少正文");
+        const row: PromptRow = {
+          id: `created-prompt-${++promptSerial}`,
+          body: draft.body,
+          title: typeof draft.title === "string" ? draft.title : null,
+          model: typeof draft.model === "string" ? draft.model : null,
+          parameters: typeof draft.parameters === "string" ? draft.parameters : null,
+          note: "",
+          favorite: false,
+          folders: [],
+          tags: [],
+          linked_image_hashes: [],
+          cover_image_hash: null,
+          resolved_cover_hash: null,
+          created_at: "2026-08-31T08:00:00Z",
+          updated_at: "2026-08-31T08:00:00Z",
+          deleted_at: null,
+        };
+        prompts = [...prompts, row];
+        return { ...row, format_version: 1, deleted_from_folders: null };
+      }
       case "prompt_detail": {
         const prompt = prompts.find((item) => item.id === request.id);
         if (prompt === undefined) throw { code: "prompt.not_found", detail: "目标已永久删除" };
@@ -452,7 +488,7 @@ beforeEach(() => {
       }
       case "link_images":
       case "unlink_image": {
-        if (inspectorWriteFailure) throw { code: "library.io_failed", detail: "关联写入失败" };
+        if (inspectorWriteFailure || command === "link_images" && request.promptId === relationFailurePromptId) throw { code: "library.io_failed", detail: "关联写入失败" };
         if (command === "link_images") {
           const hashes = request.hashes;
           if (!Array.isArray(hashes) || !hashes.every((hash): hash is string => typeof hash === "string")) throw new TypeError("关联目标非法");
@@ -736,6 +772,13 @@ function searchInput(): HTMLInputElement {
 function setInput(input: HTMLInputElement, value: string): void {
   const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
   if (descriptor?.set === undefined) throw new Error("HTMLInputElement.value setter 不存在");
+  descriptor.set.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setTextarea(input: HTMLTextAreaElement, value: string): void {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  if (descriptor?.set === undefined) throw new Error("HTMLTextAreaElement.value setter 不存在");
   descriptor.set.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
@@ -2589,18 +2632,18 @@ test("普通提示词关联按需加载，失败保留选择，解除不删除�
   await act(async () => card(H_STREET).click());
   await vi.waitFor(() => expect(inspector().textContent).toContain("已删除记录"));
   expect(ipcCalls.filter((call) => call.command === "prompt_snapshot")).toHaveLength(0);
-  await act(async () => inspectorButton("添加关联").click());
+  await act(async () => inspectorButton("添加已有提示词").click());
   await vi.waitFor(() => expect(document.querySelector('input[value="prompt-0"]')).not.toBeNull());
   await act(async () => document.querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
   inspectorWriteFailure = true;
-  let confirmLink = [...document.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.trim() === "确认关联 1 条");
+  let confirmLink = [...document.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.trim() === "建立 1 条普通关联");
   if (confirmLink === undefined) throw new Error("缺少确认关联按钮");
   const firstConfirmLink = confirmLink;
   await act(async () => firstConfirmLink.click());
   await vi.waitFor(() => expect(document.body.textContent).toContain("关联写入失败"));
   expect(document.querySelector<HTMLInputElement>('input[value="prompt-0"]')!.checked).toBe(true);
   inspectorWriteFailure = false;
-  confirmLink = [...document.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.trim() === "确认关联 1 条");
+  confirmLink = [...document.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent?.trim() === "建立 1 条普通关联");
   if (confirmLink === undefined) throw new Error("失败重试缺少确认关联按钮");
   const retryConfirmLink = confirmLink;
   await act(async () => retryConfirmLink.click());
@@ -2719,15 +2762,15 @@ test("关联候选读取失败时保留搜索词和错误，显式重试后才�
   await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
   await act(async () => card(H_STREET).click());
-  await vi.waitFor(() => expect(inspectorButton("添加关联")).toBeDefined());
+  await vi.waitFor(() => expect(inspectorButton("添加已有提示词")).toBeDefined());
   promptFailure = true;
-  await act(async () => inspectorButton("添加关联").click());
-  const search = document.querySelector<HTMLInputElement>('input[aria-label="搜索提示词"]');
+  await act(async () => inspectorButton("添加已有提示词").click());
+  const search = document.querySelector<HTMLInputElement>('input[name="association-prompt-search"]');
   if (search === null) throw new Error("缺少关联搜索");
   await act(async () => setInput(search, "光影"));
   await vi.waitFor(() => expect(document.body.textContent).toContain("候选读取失败"));
   expect(search.value).toBe("光影");
-  const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "确认关联 0 条");
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "建立 0 条普通关联");
   expect(confirm?.disabled).toBe(true);
   promptFailure = false;
   const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "重试读取提示词");
@@ -2800,6 +2843,18 @@ function batchDialogButton(label: string): HTMLButtonElement {
   return button;
 }
 
+function associationDialog(): HTMLElement {
+  const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find((element) => element.querySelector("h2")?.textContent === "图片 × 提示词关联");
+  if (dialog === undefined) throw new Error("缺少图片 × 提示词关联台");
+  return dialog;
+}
+
+function associationDialogButton(label: string): HTMLButtonElement {
+  const button = [...associationDialog().querySelectorAll<HTMLButtonElement>("button")].find((element) => (element.getAttribute("aria-label") ?? element.textContent)?.trim() === label);
+  if (button === undefined) throw new Error(`图片关联台缺少按钮：${label}`);
+  return button;
+}
+
 test("批量标签部分失败保留意图且只重试失败项，成功后可批量移除", async () => {
   await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
@@ -2833,30 +2888,228 @@ test("批量标签部分失败保留意图且只重试失败项，成功后可�
   expect(document.querySelector('[aria-label="操作结果"]')?.textContent).toContain("雨夜霓虹.jpg");
 });
 
-test("批量提示词关联按需加载正常候选，保留部分失败并刷新每张图片的关联", async () => {
+test("批量提示词关联按需加载正常候选，失败保留选择并用同一冻结目标重试", async () => {
   await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
   await act(async () => card(H_STREET).click());
   await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
   expect(ipcCalls.filter((call) => call.command === "prompt_snapshot")).toHaveLength(0);
   await chooseBatchMore("关联提示词");
-  await vi.waitFor(() => expect(batchDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
-  expect(batchDialog().querySelector('input[value="prompt-1"]')).toBeNull();
-  await act(async () => batchDialog().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
-  failedBatchId = H_NIGHT;
-  await act(async () => batchDialogButton("关联到所选图片").click());
-  await vi.waitFor(() => expect(batchDialog().textContent).toContain("雨夜霓虹.jpg"));
-  expect(batchDialog().textContent).toContain("library.io_failed");
-  failedBatchId = null;
-  await act(async () => batchDialogButton("重试失败项").click());
+  await vi.waitFor(() => expect(associationDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
+  expect(associationDialog().querySelector('input[value="prompt-1"]')).toBeNull();
+  await act(async () => associationDialog().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
+  inspectorWriteFailure = true;
+  const submit = [...associationDialog().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "建立 2 条普通关联");
+  if (submit === undefined) throw new Error("缺少批量关联提交按钮");
+  await act(async () => submit.click());
+  await vi.waitFor(() => expect(associationDialog().textContent).toContain("关联写入失败"));
+  expect(associationDialog().querySelector<HTMLInputElement>('input[value="prompt-0"]')?.checked).toBe(true);
+  inspectorWriteFailure = false;
+  const retry = [...associationDialog().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "建立 2 条普通关联");
+  if (retry === undefined) throw new Error("缺少批量关联重试按钮");
+  await act(async () => retry.click());
   await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-  const writes = ipcCalls.filter((call) => call.command === "batch_link_to_prompt");
-  expect(record(writes[0]?.payload).hashes).toEqual([H_STREET, H_NIGHT]);
-  expect(record(writes[1]?.payload).hashes).toEqual([H_NIGHT]);
+  const writes = ipcCalls.filter((call) => call.command === "link_images");
+  expect(writes).toHaveLength(2);
+  expect(writes.every((call) => JSON.stringify(sortedIds(stringArray(record(call.payload).hashes))) === JSON.stringify(sortedIds([H_STREET, H_NIGHT])))).toBe(true);
   await act(async () => card(H_STREET).click());
   await vi.waitFor(() => expect(inspector().querySelector('button[aria-label="打开提示词 光影参考"]')).not.toBeNull());
   await act(async () => card(H_NIGHT).click());
   await vi.waitFor(() => expect(inspector().querySelector('button[aria-label="打开提示词 光影参考"]')).not.toBeNull());
+});
+
+test("图片关联台冻结多选目标、允许多选提示词并只计算实际新增关系", async () => {
+  prompts = [
+    { ...prompts[0]!, linked_image_hashes: [H_STREET] },
+    prompts[1]!,
+    { ...prompts[0]!, id: "prompt-2", title: "平面海报构图", linked_image_hashes: [] },
+  ];
+  snapshotsByLibrary[LIB_A] = threeAssetSnapshot();
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  await chooseBatchMore("关联提示词");
+  await vi.waitFor(() => expect(associationDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
+
+  expect(associationDialog().textContent).toContain("已选图片 2 张");
+  expect(associationDialog().textContent).toContain("晨光街道.png");
+  expect(associationDialog().textContent).toContain("雨夜霓虹.jpg");
+  expect(associationDialog().querySelector('label:has(input[value="prompt-0"])')?.textContent).toContain("已关联 1/2 张");
+
+  await act(async () => associationDialog().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
+  await act(async () => associationDialog().querySelector<HTMLInputElement>('input[value="prompt-2"]')!.click());
+  expect(associationDialog().textContent).toContain("已选提示词 2 条");
+  const submit = [...associationDialog().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "建立 3 条普通关联");
+  if (submit === undefined) throw new Error("关联台没有按缺失关系显示提交数量");
+
+  await rerenderWorkspace({ session: makeSession(LIB_A, "甲库"), active: true, entry: { kind: "locate", requestId: "association-target-frozen", hash: parseAssetId(H_DAWN), location: "active" } });
+  expect(associationDialog().textContent).toContain("已选图片 2 张");
+  expect(associationDialog().textContent).not.toContain("黎明广场.webp");
+
+  await act(async () => submit.click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(sortedIds(prompts.find((prompt) => prompt.id === "prompt-0")?.linked_image_hashes ?? [])).toEqual(sortedIds([H_STREET, H_NIGHT]));
+  expect(sortedIds(prompts.find((prompt) => prompt.id === "prompt-2")?.linked_image_hashes ?? [])).toEqual(sortedIds([H_STREET, H_NIGHT]));
+  const writes = ipcCalls.filter((call) => call.command === "link_images");
+  expect(writes.map((call) => record(call.payload).promptId)).toEqual(["prompt-0", "prompt-2"]);
+  expect(writes.every((call) => JSON.stringify(sortedIds(stringArray(record(call.payload).hashes))) === JSON.stringify(sortedIds([H_STREET, H_NIGHT])))).toBe(true);
+});
+
+test("图片关联台跨搜索保留所选提示词并按全部选择计算关系", async () => {
+  prompts = [
+    prompts[0]!,
+    prompts[1]!,
+    { ...prompts[0]!, id: "prompt-2", title: "平面海报构图", linked_image_hashes: [] },
+  ];
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_NIGHT)).toBeDefined());
+  await act(async () => card(H_NIGHT).click());
+  await vi.waitFor(() => expect(inspectorButton("添加已有提示词")).toBeDefined());
+  await act(async () => inspectorButton("添加已有提示词").click());
+  await vi.waitFor(() => expect(associationDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
+  await act(async () => associationDialog().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
+
+  const search = associationDialog().querySelector<HTMLInputElement>('input[name="association-prompt-search"]');
+  if (search === null) throw new Error("关联台缺少提示词搜索框");
+  await act(async () => setInput(search, "海报"));
+  await vi.waitFor(() => expect(associationDialog().querySelector('input[value="prompt-2"]')).not.toBeNull());
+  expect(associationDialog().querySelector('input[value="prompt-0"]')).toBeNull();
+  await act(async () => associationDialog().querySelector<HTMLInputElement>('input[value="prompt-2"]')!.click());
+
+  expect(associationDialog().textContent).toContain("已选提示词 2 条");
+  const submit = associationDialogButton("建立 2 条普通关联");
+  await act(async () => submit.click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(prompts.find((prompt) => prompt.id === "prompt-0")?.linked_image_hashes).toContain(H_NIGHT);
+  expect(prompts.find((prompt) => prompt.id === "prompt-2")?.linked_image_hashes).toContain(H_NIGHT);
+});
+
+test("图片关联台先重试刷新，再继续处理同批失败提示词", async () => {
+  prompts = [
+    prompts[0]!,
+    prompts[1]!,
+    { ...prompts[0]!, id: "prompt-2", title: "平面海报构图", linked_image_hashes: [] },
+  ];
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await vi.waitFor(() => expect(inspectorButton("添加已有提示词")).toBeDefined());
+  await act(async () => inspectorButton("添加已有提示词").click());
+  await vi.waitFor(() => expect(associationDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
+  await act(async () => associationDialog().querySelector<HTMLInputElement>('input[value="prompt-0"]')!.click());
+  await act(async () => associationDialog().querySelector<HTMLInputElement>('input[value="prompt-2"]')!.click());
+
+  relationFailurePromptId = "prompt-2";
+  promptFailure = true;
+  await act(async () => associationDialogButton("建立 2 条普通关联").click());
+  await vi.waitFor(() => expect(associationDialog().textContent).toContain("关系已写入、刷新失败"));
+  expect(associationDialog().textContent).toContain("关联写入失败");
+  expect(associationDialog().textContent).toContain("已选提示词 1 条");
+
+  promptFailure = false;
+  await act(async () => associationDialogButton("重试刷新").click());
+  await vi.waitFor(() => expect(associationDialog().textContent).not.toContain("关系已写入、刷新失败"));
+  expect(associationDialog().textContent).toContain("关联写入失败");
+  await vi.waitFor(() => expect(associationDialog().querySelector<HTMLInputElement>('input[value="prompt-2"]')?.checked).toBe(true));
+  relationFailurePromptId = null;
+  await act(async () => associationDialogButton("建立 1 条普通关联").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(prompts.find((prompt) => prompt.id === "prompt-2")?.linked_image_hashes).toContain(H_STREET);
+});
+
+test("图片关联台手动创建一条提示词并关联全部冻结图片", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
+  await chooseBatchMore("关联提示词");
+  await vi.waitFor(() => expect(associationDialog()).toBeDefined());
+  await act(async () => associationDialogButton("新建提示词").click());
+
+  const body = associationDialog().querySelector<HTMLTextAreaElement>('textarea[name="association-create-body"]');
+  const title = associationDialog().querySelector<HTMLInputElement>('input[name="association-create-title"]');
+  const model = associationDialog().querySelector<HTMLInputElement>('input[name="association-create-model"]');
+  if (body === null || title === null || model === null) throw new Error("关联台缺少手写提示词字段");
+  expect(body.value).toBe("");
+  await act(async () => setInput(title, "柔光参考"));
+  await act(async () => setInput(model, "SDXL"));
+  await act(async () => setTextarea(body, "主体偏右，柔和侧光，保留暗部细节。"));
+  await act(async () => associationDialogButton("创建提示词并关联到 2 张图片").click());
+
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  const created = prompts.find((prompt) => prompt.title === "柔光参考");
+  expect(created?.body).toBe("主体偏右，柔和侧光，保留暗部细节。");
+  expect(created?.model).toBe("SDXL");
+  expect(sortedIds(created?.linked_image_hashes ?? [])).toEqual(sortedIds([H_STREET, H_NIGHT]));
+  expect(ipcCalls.filter((call) => call.command === "create_prompt")).toHaveLength(1);
+  expect(ipcCalls.filter((call) => call.command === "link_images")).toHaveLength(1);
+});
+
+test("图片关联台保留创建失败草稿，创建后关联失败只重试关系", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await vi.waitFor(() => expect(inspectorButton("添加已有提示词")).toBeDefined());
+  await act(async () => inspectorButton("添加已有提示词").click());
+  await vi.waitFor(() => expect(associationDialog()).toBeDefined());
+  await act(async () => associationDialogButton("新建提示词").click());
+  const body = associationDialog().querySelector<HTMLTextAreaElement>('textarea[name="association-create-body"]');
+  if (body === null) throw new Error("关联台缺少手写提示词正文");
+  await act(async () => setTextarea(body, "失败后仍要保留的正文"));
+
+  promptCreateFailure = true;
+  await act(async () => associationDialogButton("创建提示词并关联到 1 张图片").click());
+  await vi.waitFor(() => expect(associationDialog().textContent).toContain("提示词目录只读"));
+  expect(body.value).toBe("失败后仍要保留的正文");
+
+  promptCreateFailure = false;
+  inspectorWriteFailure = true;
+  await act(async () => associationDialogButton("创建提示词并关联到 1 张图片").click());
+  await vi.waitFor(() => expect(associationDialog().textContent).toContain("提示词已创建、关联失败"));
+  const created = prompts.find((prompt) => prompt.body === "失败后仍要保留的正文");
+  expect(created).toBeDefined();
+  expect(ipcCalls.filter((call) => call.command === "create_prompt")).toHaveLength(2);
+
+  inspectorWriteFailure = false;
+  await act(async () => associationDialogButton("重试关联到 1 张图片").click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(ipcCalls.filter((call) => call.command === "create_prompt")).toHaveLength(2);
+  expect(prompts.find((prompt) => prompt.id === created?.id)?.linked_image_hashes).toEqual([H_STREET]);
+});
+
+test("图片关联台的新建草稿统一拦截外部导航与直接关闭", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await vi.waitFor(() => expect(inspectorButton("添加已有提示词")).toBeDefined());
+  await act(async () => inspectorButton("添加已有提示词").click());
+  await vi.waitFor(() => expect(associationDialog()).toBeDefined());
+  await act(async () => associationDialogButton("新建提示词").click());
+  const body = associationDialog().querySelector<HTMLTextAreaElement>('textarea[name="association-create-body"]');
+  if (body === null) throw new Error("关联台缺少手写提示词正文");
+  await act(async () => setTextarea(body, "需要守卫的图片上下文草稿"));
+
+  const continueNavigation = vi.fn();
+  let blocked = false;
+  await act(async () => { blocked = blockIfPromptDraftDirty(continueNavigation); });
+  expect(blocked).toBe(true);
+  const guardDialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find((dialog) => dialog.textContent?.includes("有未保存的修改"));
+  if (guardDialog === undefined) throw new Error("外部导航没有打开统一草稿决议");
+  const stay = [...guardDialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "留在当前页");
+  if (stay === undefined) throw new Error("草稿决议缺少留在当前页");
+  await act(async () => stay.click());
+  expect(continueNavigation).not.toHaveBeenCalled();
+  expect(body.value).toBe("需要守卫的图片上下文草稿");
+
+  await act(async () => associationDialogButton("关闭").click());
+  const closeGuard = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find((dialog) => dialog.textContent?.includes("有未保存的修改"));
+  if (closeGuard === undefined) throw new Error("直接关闭没有打开统一草稿决议");
+  const discard = [...closeGuard.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "放弃草稿");
+  if (discard === undefined) throw new Error("草稿决议缺少放弃草稿");
+  await act(async () => discard.click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  expect(blockIfPromptDraftDirty(vi.fn())).toBe(false);
 });
 
 test("移除筛选标签导致多选变单选时，批量编辑会话与失败目标仍保留", async () => {
@@ -2916,13 +3169,18 @@ test("批量关联候选读取失败可明确重试，不对旧候选或回收�
   await act(async () => clickWithModifiers(H_NIGHT, { ctrl: true }));
   promptFailure = true;
   await chooseBatchMore("关联提示词");
-  await vi.waitFor(() => expect(batchDialog().textContent).toContain("候选读取失败"));
-  expect(batchDialogButton("关联到所选图片").disabled).toBe(true);
+  await vi.waitFor(() => expect(associationDialog().textContent).toContain("候选读取失败"));
+  const submit = [...associationDialog().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "建立 0 条普通关联");
+  expect(submit?.disabled).toBe(true);
   promptFailure = false;
-  await act(async () => batchDialogButton("重试读取提示词").click());
-  await vi.waitFor(() => expect(batchDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
-  expect(batchDialog().querySelector('input[value="prompt-1"]')).toBeNull();
-  await act(async () => batchDialogButton("关闭").click());
+  const retry = [...associationDialog().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "重试读取提示词");
+  if (retry === undefined) throw new Error("缺少提示词候选重试入口");
+  await act(async () => retry.click());
+  await vi.waitFor(() => expect(associationDialog().querySelector('input[value="prompt-0"]')).not.toBeNull());
+  expect(associationDialog().querySelector('input[value="prompt-1"]')).toBeNull();
+  const close = [...associationDialog().querySelectorAll<HTMLButtonElement>("button")].find((button) => button.getAttribute("aria-label") === "关闭");
+  if (close === undefined) throw new Error("关联台缺少关闭按钮");
+  await act(async () => close.click());
   expect(ipcCalls.filter((call) => call.command === "batch_link_to_prompt")).toHaveLength(0);
 });
 

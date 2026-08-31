@@ -11,6 +11,7 @@ import type {
   AssetRow,
   BatchReport,
   CatalogSnapshot,
+  LinkedImageState,
   PromptQuery,
   PromptRow,
   PromptSnapshot,
@@ -88,6 +89,7 @@ let simulateFolderMutation: boolean;
 let liveFolder: string | null;
 /** 正常区快照条目；空状态测试按需设为空，不修改共享 fixture。 */
 let activePrompts: PromptRow[];
+let linkedStatesReply: LinkedImageState[];
 
 class DormantIntersectionObserver implements IntersectionObserver {
   readonly root = null;
@@ -174,6 +176,7 @@ beforeEach(() => {
   simulateFolderMutation = false;
   liveFolder = "人像";
   activePrompts = [...SNAPSHOT.prompts];
+  linkedStatesReply = [];
   vi.stubGlobal("IntersectionObserver", DormantIntersectionObserver);
   vi.stubGlobal("URL", {
     createObjectURL: vi.fn(() => "blob:vistash-test"),
@@ -281,8 +284,7 @@ beforeEach(() => {
       return undefined;
     }
     if (command === "linked_image_states") {
-      // 工作区测试不关心关联明细：给空列表让分区呈现空态即可。
-      return [];
+      return linkedStatesReply;
     }
     throw new Error(`未预期的 IPC：${command}`);
   });
@@ -860,6 +862,24 @@ test("单选检查器使用五个连续可折叠分区，动作只集中在摘�
   }
   await act(async () => headings[1]?.click());
   expect(headings[1]?.getAttribute("aria-expanded")).toBe("false");
+  await harness.unmount();
+});
+
+test("提示词公共工作区在检查器原地切换关联图片主预览", async () => {
+  linkedStatesReply = [
+    { hash: "a".repeat(64), deleted: false, display_filename: "封面.png", folder: "构图", width: 1600, height: 900 },
+    { hash: "b".repeat(64), deleted: false, display_filename: "侧光.png", folder: "光线", width: 1200, height: 1600 },
+  ];
+  const harness = await setupWorkspace();
+  const card = harness.container.querySelector<HTMLButtonElement>('[data-prompt-card][data-id="prompt-1"]');
+  if (card === null) throw new Error("缺少带关联图片的提示词卡片");
+  await act(async () => card.click());
+  await vi.waitFor(() => expect(harness.container.querySelector<HTMLElement>('[data-preview-hash]')?.dataset.previewHash).toBe("a".repeat(64)));
+  const second = harness.container.querySelector<HTMLButtonElement>('button[aria-label="预览关联图片 侧光.png"]');
+  if (second === null) throw new Error("检查器缺少第二张关联图片预览入口");
+  await act(async () => second.click());
+  expect(harness.container.querySelector<HTMLElement>('[data-preview-hash]')?.dataset.previewHash).toBe("b".repeat(64));
+  expect(harness.container.querySelector('[data-ui="prompt-workbench"]')).not.toBeNull();
   await harness.unmount();
 });
 
