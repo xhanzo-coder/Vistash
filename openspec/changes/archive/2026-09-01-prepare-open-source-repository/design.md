@@ -62,5 +62,5 @@ Vistash 已经公开发布 `v0.1.1`，但仓库仍缺少标准许可证和社区
 
 ## Open Questions
 
-- `xhanzo-coder` 是否就是希望写入 MIT LICENSE 的法律著作权标识；若不是，提交前替换为项目所有者指定名称。
+- 当前无阻断问题。MIT LICENSE 暂以 GitHub 项目标识 `xhanzo-coder` 作为著作权标识；若后续确认法律主体不同，应通过独立变更更新许可证和元数据。
 - 是否在社区开始增长后补充可执行的 `CODE_OF_CONDUCT.md` 和公开行为问题联系人。

@@ -31,4 +31,4 @@
 - [x] 6.1 通过 UTF-8 无 BOM、绝对路径/凭据扫描、README/Markdown 链接、许可证元数据、截图隐私和 `git diff --check`
 - [x] 6.2 串行通过 `pnpm lint`、`pnpm typecheck`、`pnpm test`、Rust Clippy、Rust 测试和 `openspec validate --all --strict --no-interactive`
 - [x] 6.3 运行 Standards/Spec 双轴 code review，修复阻断项并记录结论
-- [ ] 6.4 归档 `prepare-open-source-repository`，同步主规格，合并 PR，清理临时分支并确认最终只保留 `main`
+- [x] 6.4 归档 `prepare-open-source-repository`，同步主规格，合并 PR，清理临时分支并确认最终只保留 `main`
