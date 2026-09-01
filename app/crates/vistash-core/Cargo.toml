@@ -2,6 +2,7 @@
 name = "vistash-core"
 description = "Vistash 的领域逻辑：库骨架、寻址、导入、媒体处理、色卡与索引"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

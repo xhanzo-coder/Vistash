@@ -2,6 +2,7 @@
 name = "vistash"
 description = "Vistash 本地图片素材管理与控制提示词生成"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 

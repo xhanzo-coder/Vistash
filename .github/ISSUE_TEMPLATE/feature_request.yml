@@ -1,0 +1,35 @@
+name: 功能建议
+description: 提议一个符合 Vistash 本地优先边界的新能力
+title: "[建议] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Vistash 当前聚焦本地图片素材管理和提示词素材管理。请先说明问题和使用场景，不要直接规定内部实现。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 谁在什么情况下遇到什么阻碍？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议体验
+      description: 描述使用者希望完成的流程和结果。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已考虑的替代方案
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 范围确认
+      options:
+        - label: 这个建议不依赖网页抓取、账号、云同步或自动更新。
+          required: true

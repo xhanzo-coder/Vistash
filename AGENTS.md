@@ -32,7 +32,7 @@ Vistash 是一个 Windows 优先、本地优先的桌面应用，只覆盖两项
 
 - `.agents/skills` 是当前项目的 Skill 中心。
 - `.codex/skills` 和 `.claude/skills` 均为指向项目中心的 junction，因此 Codex 与 Claude 能发现同一组 Skill。
-- 19 个可复用工程 Skill 和技术 Skill 均通过 junction 指向中央库 `E:\.118-skill-linker\AgentSkills`。
+- 19 个可复用工程 Skill 和技术 Skill 均通过 junction 指向开发者本机的中央 Skill 库；公开仓库不依赖某个开发者的绝对路径。
 - `openspec-propose`、`openspec-explore`、`openspec-apply-change` 和 `openspec-archive-change` 是当前项目拥有的 OpenSpec 生成目录。它们是中央化策略的明确例外，因为 `openspec update` 会按当前仓库使用的 OpenSpec 版本管理它们。
 - 除非用户明确要求修改中央原件并理解会影响所有引用项目，否则不得编辑 junction 背后的 Skill。
 - 不得手工把可复用 Skill 复制进当前项目。必须使用 `e8-skill-linker`，并在实际链接前先运行 dry-run。

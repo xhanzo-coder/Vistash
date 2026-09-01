@@ -1,5 +1,5 @@
 {
-  "library": "C:\\Users\\zyxu9\\AppData\\Local\\Temp\\vistash-merge-native-5dtlekiy\\library",
+  "library": "%TEMP%\\vistash-merge-native-<run-id>\\library",
   "prompt_count": 4,
   "box": {
     "visible_items": 4,

@@ -2,10 +2,16 @@
 
 > Windows 优先、本地优先的图片素材与提示词工作台。
 
+<p align="center">
+  <img src="docs/assets/vistash-icon-256.png" width="96" alt="Vistash 产品图标">
+</p>
+
 Vistash 把图片、提示词和它们之间的可选关系放在同一个本地素材库里。它适合需要长期整理视觉参考、反复复用提示词、并希望保留文件原始身份的创作者。
 
 [![CI](https://github.com/xhanzo-coder/Vistash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xhanzo-coder/Vistash/actions/workflows/ci.yml)
 [![最新公开预览](https://img.shields.io/badge/preview-v0.1.1-e8664a)](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.1)
+
+[下载 v0.1.1](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.1) · [参与贡献](.github/CONTRIBUTING.md) · [报告安全问题](.github/SECURITY.md) · [提交 Issue](https://github.com/xhanzo-coder/Vistash/issues)
 
 > ⚠️ **v0.1.1 是未签名的公开预览版。** Windows 可能显示 SmartScreen 警告。请从本 README 或 GitHub Release 下载，并在安装前核对 SHA-256；正式 Authenticode 签名将在后续发布流程中单独完成。
 
@@ -44,6 +50,22 @@ Vistash 把图片、提示词和它们之间的可选关系放在同一个本地
 - 自定义紧凑标题栏：拖动、双击最大化/还原、最小化、关闭和 Windows 贴靠。
 - 中等和窄窗口优先保留中央内容，导航与检查器按需折叠或覆盖。
 - 深色、浅色和跟随系统三种主题，键盘焦点和文本粘贴保持 Windows 习惯。
+
+## 界面预览
+
+以下截图来自匿名测试数据，只用于展示当前生产界面的结构和交互语言，不包含个人素材或真实用户库。
+
+<p align="center">
+  <img src="docs/assets/screenshots/welcome-dark.png" width="49%" alt="Vistash 本地视觉档案欢迎页">
+  <img src="docs/assets/screenshots/image-workspace-light.png" width="49%" alt="Vistash 图片工作区">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/prompt-workspace-dark.png" width="49%" alt="Vistash 提示词工作区">
+  <img src="docs/assets/screenshots/prompt-gallery-dark.png" width="49%" alt="Vistash 提示词关联多张图片的主预览与缩略图列表">
+</p>
+
+截图中的内容是可重复的匿名 fixture；产品不会把这些测试图片上传到云端。
 
 ## 典型使用流程
 
@@ -128,10 +150,12 @@ Windows 发布流程、隔离安装生命周期、SHA-256 清单和签名边界�
 
 ## 项目结构
 
+- `.github/`：CI、发布工作流、贡献指南、安全政策和 Issue/PR 模板。
 - `app/`：Tauri 2、React/TypeScript、Rust 和 SQLite 应用。
 - `app/src/modules/asset-library/`：图片工作区的实现。
 - `app/src/modules/prompt-library/`：提示词工作区的实现。
 - `app/src-tauri/`：Tauri 窗口、IPC 和平台能力。
+- `docs/assets/`：README 使用的产品图标和匿名界面截图。
 - `openspec/`：产品规格、工程决策和验收记录。
 - `docs/`：发布和维护文档。
 
@@ -139,7 +163,7 @@ Vistash 的图片像素处理、缩放、缩略图和色卡分析在 Rust 侧完
 
 ## 反馈与贡献
 
-欢迎通过 [GitHub Issues](https://github.com/xhanzo-coder/Vistash/issues) 报告可复现的问题或提出建议。反馈时请尽量包含：
+欢迎通过 [GitHub Issues](https://github.com/xhanzo-coder/Vistash/issues) 报告可复现的问题或提出建议；代码、文档和截图贡献请先阅读 [`CONTRIBUTING.md`](.github/CONTRIBUTING.md)。安全问题请遵循 [`SECURITY.md`](.github/SECURITY.md)，不要直接公开漏洞细节。反馈时请尽量包含：
 
 1. Vistash 版本和 Windows 版本；
 2. 复现步骤与预期/实际结果；
@@ -150,4 +174,4 @@ Vistash 的图片像素处理、缩放、缩略图和色卡分析在 Rust 侧完
 
 ## 许可证
 
-仓库当前尚未提交 `LICENSE` 文件。仓库公开可见不等同于已经授予开源、再分发或商用许可；在许可证正式确定前，如需复制、再分发或商用，请先联系项目维护者。
+Vistash 自有源代码和明确归属的项目文档以 [MIT License](LICENSE) 发布。MIT 允许使用、修改和再分发，但必须保留版权和许可证声明；它不改变第三方依赖、字体、图标或外部素材各自的许可证义务。依赖与资产归属见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，仓库治理调研见 [`docs/research/open-source-repository-hygiene.md`](docs/research/open-source-repository-hygiene.md)。
