@@ -49,10 +49,15 @@
 .relationList { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
 .relationList li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: var(--space-1); border-bottom: 1px solid var(--border-subtle); }
 .relationMain { width: 100%; min-width: 0; justify-content: flex-start; padding: var(--space-2); text-align: start; }
+.relationActions { display: flex; align-items: center; gap: 2px; padding-block: var(--space-1); }
+.relationDirectAction { color: var(--text-danger); opacity: 0; visibility: hidden; pointer-events: none; transform: translateX(3px); transition: opacity 120ms ease, transform 120ms ease, visibility 120ms; }
+.relationList li:hover .relationDirectAction, .relationList li:focus-within .relationDirectAction { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(0); }
 .relationText { display: grid; min-width: 0; gap: 2px; }
 .relationText strong, .relationText small, .relationText em { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .relationText small { color: var(--text-secondary); font-weight: 400; }
 .relationText em { color: var(--text-tertiary); font-size: var(--text-size-xs); font-style: normal; font-weight: 400; }
+@media (hover: none), (max-width: 780px) { .relationDirectAction { opacity: 1; visibility: visible; pointer-events: auto; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .relationDirectAction { transition: none; } }
 .candidates { min-width: 0; padding: var(--space-2); max-height: 14rem; overflow: auto; border: 1px solid var(--border-subtle); }
 .candidates label { display: flex; align-items: start; gap: var(--space-2); padding: var(--space-2) 0; overflow-wrap: anywhere; }
 .candidates label, .links li { content-visibility: auto; contain-intrinsic-size: auto 48px; }

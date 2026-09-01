@@ -39,4 +39,9 @@
 .thumbName strong { font-size: var(--text-size-xs); font-weight: 500; }
 .thumbName small { color: var(--text-tertiary); font-size: var(--text-size-xs); }
 .thumbBadges { position: absolute; z-index: 1; inset: var(--space-1) auto auto var(--space-1); display: flex; flex-wrap: wrap; gap: 2px; pointer-events: none; }
-.thumbMenu { position: absolute; z-index: 2; inset: var(--space-1) var(--space-1) auto auto; }
+.thumbActions { position: absolute; z-index: 2; inset: var(--space-1) var(--space-1) auto auto; display: flex; gap: 2px; }
+.thumbMenu { display: inline-flex; }
+.thumbDirectAction { color: var(--text-danger); background: var(--surface-backdrop); opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-2px); transition: opacity 120ms ease, transform 120ms ease, visibility 120ms; }
+.thumbnailItem:hover .thumbDirectAction, .thumbnailItem:focus-within .thumbDirectAction, .thumbnailItem[data-current="true"] .thumbDirectAction { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0); }
+@media (hover: none), (max-width: 780px) { .thumbDirectAction { opacity: 1; visibility: visible; pointer-events: auto; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .thumbDirectAction { transition: none; } }

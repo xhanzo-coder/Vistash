@@ -1,6 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { parseAssetId, type LibraryId } from "../../app/common";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
+import { LinkBreakIcon } from "@phosphor-icons/react/dist/csr/LinkBreak";
 import { IpcError } from "../../shared/errors";
 import type { ImagePromptRelations } from "../../modules/image-prompt-relations";
 import { Button, IconButton } from "../../ui/button/Button";
@@ -464,7 +465,7 @@ export function PromptImageLinks({
             {states.map((state) => {
               const isExplicitCover = state.hash === explicitCover;
               const isEffectiveCover = state.hash === effectiveCover;
-              return <li key={state.hash} data-linked-hash={state.hash} className={styles.thumbnailItem}>
+              return <li key={state.hash} data-linked-hash={state.hash} data-current={state.hash === current.hash ? "true" : undefined} className={styles.thumbnailItem}>
                 <button type="button" className={styles.thumbButton} aria-label={`预览关联图片 ${state.display_filename}`} aria-pressed={state.hash === current.hash} data-deleted={state.deleted ? "true" : undefined} onClick={() => setSelectedHash(state.hash)}>
                   {(isEffectiveCover || state.deleted) ? <span className={styles.thumbBadges}>
                     {isEffectiveCover ? <span className={styles.coverBadge} data-relation-badge="cover">封面</span> : null}
@@ -473,12 +474,15 @@ export function PromptImageLinks({
                   <LinkedThumb hash={state.hash} width={state.width} height={state.height} />
                   <span className={styles.thumbName}><strong>{state.display_filename}</strong><small>{state.width} × {state.height}</small></span>
                 </button>
-                <span className={styles.thumbMenu}><Menu trigger={<IconButton size="compact" label={`关联图片操作 ${state.display_filename}`} icon={<DotsThreeIcon />} disabled={busy} />}>
-                  {!state.deleted && !isEffectiveCover ? <MenuItem onSelect={() => void changeCover(state.hash)}>设为封面</MenuItem> : null}
-                  {isExplicitCover ? <MenuItem onSelect={() => void changeCover(null)}>取消封面</MenuItem> : null}
-                  {(!state.deleted && !isEffectiveCover) || isExplicitCover ? <MenuSeparator /> : null}
-                  <MenuItem destructive onSelect={() => void removeLinked(state.hash)}>解除关联</MenuItem>
-                </Menu></span>
+                <span className={styles.thumbActions}>
+                  <IconButton className={styles.thumbDirectAction} size="compact" title="解除关联" label={`解除与图片 ${state.display_filename} 的关联`} icon={<LinkBreakIcon />} disabled={busy} onClick={() => void removeLinked(state.hash)} />
+                  <span className={styles.thumbMenu}><Menu trigger={<IconButton size="compact" label={`关联图片操作 ${state.display_filename}`} icon={<DotsThreeIcon />} disabled={busy} />}>
+                    {!state.deleted && !isEffectiveCover ? <MenuItem onSelect={() => void changeCover(state.hash)}>设为封面</MenuItem> : null}
+                    {isExplicitCover ? <MenuItem onSelect={() => void changeCover(null)}>取消封面</MenuItem> : null}
+                    {(!state.deleted && !isEffectiveCover) || isExplicitCover ? <MenuSeparator /> : null}
+                    <MenuItem destructive onSelect={() => void removeLinked(state.hash)}>解除关联</MenuItem>
+                  </Menu></span>
+                </span>
               </li>;
             })}
           </ul>
