@@ -4,7 +4,7 @@
 //! 删掉重建——这条性质是 `asset-library` 已生效需求的核心承诺之一，也给出一个免费的
 //! 诊断手段：任何"索引与磁盘不一致"的疑虑都可以用删除索引重建来排除。
 //!
-//! 结构变更时的策略见设计第二条：读取 `user_version`，与当前程序期望值不符即删除索引
+//! 结构变更时的策略见约束：读取 `user_version`，与当前程序期望值不符即删除索引
 //! 文件并全量重扫重建，不写增量迁移脚本。重建成本等于一次目录扫描；而迁移脚本要为每个
 //! 版本对编写并测试，一旦写错会污染索引却不被发现——正因为索引可重建，写错迁移的代价
 //! 反而比不写迁移更大。
@@ -24,11 +24,11 @@ use std::path::{Path, PathBuf};
 /// 索引结构版本。表结构、列语义或写入口径的任何改动都必须提升此值——提升即触发全量重建。
 ///
 /// v2：新增 prompts、prompt_folders、prompt_tags、prompt_images，并为 assets 增加
-/// note/favorite 列（设计第五条）。
+/// note/favorite 列。
 ///
 /// v3：assets 增加 display_filename 列；多对多 asset_folders 表被 assets.folder 单值
 /// 列取代——库格式 v3 的素材只属于零个或一个文件夹，索引如实派生，不再保留
-/// 多归属的表示空间（设计第八条）。
+/// 多归属的表示空间。
 pub const INDEX_USER_VERSION: i32 = 3;
 
 /// 表结构。
@@ -120,7 +120,7 @@ CREATE TABLE prompt_tags (
   PRIMARY KEY (id, tag)
 );
 
--- 普通关联的反查表（设计第三条）：提示词文件是关联的唯一权威方，图片侧车不写
+-- 普通关联的反查表：提示词文件是关联的唯一权威方，图片侧车不写
 -- 反向列表，从图片找提示词全靠这张表。image_hash 刻意没有指向 assets 的外键：
 -- 关联是跨领域的软引用，回收站中的图片其行仍在索引里，而“外部改写造成的悬空
 -- 关联”应当被查询层标记为已删除，而不是让整次重建失败。
@@ -402,7 +402,7 @@ fn upsert_asset_in_transaction(
 
 /// 在事务内写入或覆盖一条提示词及其子表。
 ///
-/// 覆盖语义与图片 upsert 相同（编辑就是覆盖，设计第二条）：先删子表再删主表，
+/// 覆盖语义与图片 upsert 相同（编辑就是覆盖，约束）：先删子表再删主表，
 /// 重复写入不得让标签、文件夹或关联累积。
 fn upsert_prompt_in_transaction(
     tx: &rusqlite::Transaction<'_>,
@@ -511,7 +511,7 @@ impl Index {
 
     /// 以库根路径为入口的全量重建。
     ///
-    /// 存在的理由是迁移（设计第四条）：迁移必须在提交 v2 `library.json` **之前**重建
+    /// 存在的理由是迁移：迁移必须在提交 v2 `library.json` **之前**重建
     /// 索引，而那一刻构造不出 `Library`——`Library::open` 只认 v2 元数据。重建实际
     /// 只用到路径推导与两份文件夹清单，不需要库级元数据，因此以根路径为入口恰好
     /// 覆盖迁移的需要，也让 `rebuild` 与迁移回调共用同一条实现。
@@ -644,7 +644,7 @@ impl Index {
     }
 
     /// 正常提示词使用的不同标签及其数量。回收站提示词不计入；
-    /// 与图片侧的 [`Index::active_tag_counts`] 共享词表但分别计数（设计第二条）。
+    /// 与图片侧的 [`Index::active_tag_counts`] 共享词表但分别计数。
     pub fn active_prompt_tag_counts(&self) -> Result<Vec<(String, usize)>> {
         let mut stmt = self
             .conn
@@ -754,7 +754,7 @@ impl Index {
 
     /// 反查关联了某张图片的全部提示词（含回收站），按 ID 排序。
     ///
-    /// 反查必须包含回收站提示词：设计第三条要求图片反查能显示"关联提示词已
+    /// 反查必须包含回收站提示词：约束要求图片反查能显示"关联提示词已
     /// 删除"，过滤掉它们会让这个状态无从呈现。轻量行足够——反查用于列表与
     /// 计数，完整正文经按需详情读取。
     pub fn prompts_for_image(&self, hash: &str) -> Result<Vec<PromptRow>> {
@@ -1827,7 +1827,7 @@ mod tests {
 
     #[test]
     fn an_empty_prompt_folder_survives_a_rebuild() {
-        // 提示词文件夹清单独立持久化（设计第二条），不从提示词元数据派生，
+        // 提示词文件夹清单独立持久化，不从提示词元数据派生，
         // 否则不含任何提示词的文件夹会在重建后消失。
         let f = fixture();
         let (index, _, _) = seed_v2(&f);
@@ -1913,7 +1913,7 @@ mod tests {
 
     #[test]
     fn upserting_the_same_prompt_twice_does_not_duplicate_rows() {
-        // 编辑就是覆盖（设计第二条）。若提示词 upsert 不是覆盖语义，
+        // 编辑就是覆盖。若提示词 upsert 不是覆盖语义，
         // 标签、文件夹与关联会一轮一轮地累积。
         let f = fixture();
         let (mut index, _, prompts) = seed_v2(&f);

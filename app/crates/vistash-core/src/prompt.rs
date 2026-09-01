@@ -1,11 +1,11 @@
 //! 提示词素材：库内可独立组织的文本素材及其权威文件。
 //!
-//! 提示词与图片是两类一等素材（设计第一条），因此它有自己的权威文件、自己的文件夹
+//! 提示词与图片是两类一等素材，因此它有自己的权威文件、自己的文件夹
 //! 清单和自己的格式版本，而不是挂在图片侧车上的一个字段——挂成字段的提示词无法拥有
 //! 独立的收藏、组织与检索语义。
 //!
-//! 正文只保存一份"当前值"（设计第二条）：第一版不保留版本历史，因此本模块不存在任何
-//! 形如 `versions` 的集合，编辑就是覆盖。普通关联的唯一权威方也在这里（设计第三条）：
+//! 正文只保存一份"当前值"：第一版不保留版本历史，因此本模块不存在任何
+//! 形如 `versions` 的集合，编辑就是覆盖。普通关联的唯一权威方也在这里：
 //! `linked_image_hashes` 有序保存关联图片，图片侧车不写反向列表，使一次关联只改一份
 //! 权威文件。
 
@@ -27,7 +27,7 @@ pub const PROMPT_FORMAT_VERSION: u32 = 1;
 /// 用独立类型而不是裸 `String`，理由与 [`ContentHash`] 相同：未校验的字符串不能直接
 /// 参与库内路径拼接，否则库目录结构就对调用方输入开放了。
 ///
-/// ID 在编辑时不变（设计第二条），因此它绝不能由正文内容派生——内容派生的 ID 会让
+/// ID 在编辑时不变，因此它绝不能由正文内容派生——内容派生的 ID 会让
 /// 一次改写变成一次身份更替，连带丢掉该素材的收藏、文件夹与全部普通关联。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PromptId(String);
@@ -203,7 +203,7 @@ impl PromptAsset {
 
 /// 提示词文件夹清单。
 ///
-/// 与图片的 `folders.json` 是两份彼此独立的文件（设计第二条），因此这里刻意不复用
+/// 与图片的 `folders.json` 是两份彼此独立的文件，因此这里刻意不复用
 /// `FolderList`：同一个类型服务两棵树时，"这份清单属于哪一侧"就只能靠调用点的路径
 /// 参数区分，而那正是把图片文件夹写进提示词清单的那类缺陷的入口。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn overwriting_an_existing_prompt_file_succeeds() {
-        // 编辑就是覆盖（设计第二条），因此覆盖写必须是常态路径而不是例外。
+        // 编辑就是覆盖，因此覆盖写必须是常态路径而不是例外。
         let (_d, p) = tmp_file("prompt.json");
         let mut a = minimal();
         a.write_atomic(&p).expect("首次写入");
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn a_missing_required_field_is_refused_instead_of_defaulted() {
-        // 设计第四条：不以 serde 默认值猜测缺失字段。少了 note 与 favorite 的文件
+        // 约束：不以 serde 默认值猜测缺失字段。少了 note 与 favorite 的文件
         // 是损坏的 v2 文件，而不是"备注为空、未收藏"的正常文件。
         let (_d, p) = tmp_file("prompt.json");
         let json = format!(

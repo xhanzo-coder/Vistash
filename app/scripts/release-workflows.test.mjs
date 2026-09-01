@@ -25,7 +25,6 @@ test("PR 与 main CI 从正确目录串行执行全部工程门禁", () => {
   assert.match(workflow, /pull_request:/);
   assert.match(workflow, /branches: \[main\]/);
   assert.match(workflow, /working-directory: app/);
-  assert.match(workflow, /@fission-ai\/openspec@1\.3\.0/);
   assertInOrder(workflow, [
     "pnpm release:verify",
     "pnpm lint",
@@ -33,7 +32,6 @@ test("PR 与 main CI 从正确目录串行执行全部工程门禁", () => {
     "pnpm test",
     "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo test --workspace",
-    "openspec validate --all --strict --no-interactive",
   ]);
 });
 
@@ -67,7 +65,6 @@ test("版本标签工作流先验签约与门禁，再生成双安装器草稿�
     "pnpm test",
     "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo test --workspace",
-    "openspec validate --all --strict --no-interactive",
     "pnpm release:build",
     "pnpm release:checksums",
     "gh release create",

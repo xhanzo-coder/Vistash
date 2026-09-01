@@ -2,7 +2,7 @@ import { setPromptNote } from "../../shared/ipc";
 import { NoteAutoSaveEditor } from "../workspace/NoteAutoSaveEditor";
 
 /**
- * 提示词备注编辑器（任务 10.4）。
+ * 提示词备注编辑器。
  *
  * 与图片备注共用同一台自动保存状态机（停止输入 800ms、失焦、Ctrl+Enter 三个
  * 触发时机，失败保留草稿）；这里只注入提示词侧的写入命令与无障碍命名。备注是

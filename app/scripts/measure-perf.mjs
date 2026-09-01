@@ -1,7 +1,7 @@
 /**
- * 生产渲染层的性能基线测量（任务 11.4）。
+ * 生产渲染层的性能基线测量。
  *
- * 口径沿用原型阶段（design.md「性能」）：Chromium 内核对 release 构建实测——这里
+ * 口径为 Chromium 内核对 release 构建的实测——这里
  * 用系统 Microsoft Edge（WebView2 与它同为 Chromium 内核）加载 `pnpm build` 产出的
  * dist，IPC 层以注入桩应答 10,000 条 fixture，因此测得的是真实的虚拟化、布局与
  * 合成成本（不含 Rust 编目耗时）。
@@ -236,7 +236,7 @@ async function main() {
   for (const scenario of scenarios) results.push(await measure(context, port, scenario));
 
   console.table(results.map(({ scenario, firstScreenMs, initialDom, avgDoubleFrameMs, worstDoubleFrameMs, peakDom, heapMiB, switchMs }) => ({ scenario, firstScreenMs, initialDom, avgDoubleFrameMs, worstDoubleFrameMs, peakDom, heapMiB, switchMs })));
-  // 纠偏证据单独保存，不覆盖先前的历史基线。
+  // 纠偏结果单独保存，不覆盖已有测量结果。
   const artifactDir = new URL("../artifacts/archive-desk-correction/", import.meta.url);
   await mkdir(artifactDir, { recursive: true });
   const out = fileURLToPath(new URL("perf-report.json", artifactDir));

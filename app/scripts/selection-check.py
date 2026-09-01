@@ -1,4 +1,4 @@
-"""验收图片多选与部分成功反馈；只操作开发入口的内存库。"""
+"""验收图片多选与部分成功反馈；只操作内存演示库。"""
 import argparse
 import json
 from pathlib import Path

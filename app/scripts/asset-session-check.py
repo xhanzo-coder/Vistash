@@ -1,4 +1,4 @@
-"""验收 8.2 图片会话切片，只操作开发入口与独立的测试偏好。"""
+"""验证图片会话切片，只操作内存入口与独立的测试偏好。"""
 import argparse
 import json
 from pathlib import Path

@@ -122,7 +122,7 @@ describe("visitNavigationEntry", () => {
   });
 });
 
-describe("类型锁（设计第三条：判别联合与明确方法，禁止字符串事件）", () => {
+describe("类型锁（判别联合与明确方法，禁止字符串事件）", () => {
   test("WorkspaceId 恰好是两个一级入口", () => {
     expectTypeOf<WorkspaceId>().toEqualTypeOf<"assets" | "prompts">();
   });

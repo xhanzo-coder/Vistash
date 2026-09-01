@@ -1,4 +1,4 @@
-"""回收站还原与永久清空浏览器验收；仅操作开发展台内存数据。"""
+"""回收站还原与永久清空浏览器验收；仅操作内存演示数据。"""
 import argparse
 import json
 from pathlib import Path

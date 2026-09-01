@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// 错误码所属的域。`Observe` 与 `Compile` 属于反推能力，本变更不产生这两域的
-/// 错误，但保留枚举项以免后续变更改动这里的判别逻辑。
+/// 错误码所属的域。`Observe` 与 `Compile` 属于反推能力，当前版本暂不产生这两域的
+/// 错误，但保留枚举项以保持错误码空间稳定。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Domain {
     Import,
@@ -15,10 +15,10 @@ pub enum Domain {
     Library,
     Prompt,
     Migration,
-    /// Windows 剪贴板读取、写入与位图校验（设计第十一条；写入属任务 5.6）。
+    /// Windows 剪贴板读取、写入与位图校验。
     Clipboard,
     Export,
-    /// 默认程序打开等外部集成出站（任务 5.6，设计第十二条）。
+    /// 默认程序打开等外部集成出站。
     External,
     /// 导入与导出共享的长任务身份、状态和停止协议。
     Transfer,
@@ -45,11 +45,11 @@ impl Domain {
     }
 }
 
-/// 全部错误码。序列化时用 `as_str` 给出的字符串，因此前端、日志与规格文档看到的
+/// 全部错误码。序列化时用 `as_str` 给出的字符串，因此前端、日志与文档看到的
 /// 是同一个标识符。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Code {
-    // import 域：九个，与 asset-library 规格一致
+    // import 域
     ImportSourceUnreadable,
     ImportUnsupportedMediaType,
     ImportDecodeFailed,
@@ -69,7 +69,7 @@ pub enum Code {
     ColorCardDecodeFailed,
     ColorCardInsufficientOpaquePixels,
     ColorCardClusterFailed,
-    // library 域：本变更新增，填充既有设计已保留的域
+    // library 域
     LibraryNotFound,
     LibraryPathUnreadable,
     LibraryFormatTooNew,
@@ -130,7 +130,7 @@ pub enum Code {
     MigrationPlanStale,
     /// v2→v3 提交的暂存写入失败。此时权威字节尚未改动，工作目录会被整体撤掉。
     MigrationStagingFailed,
-    // clipboard 域：Windows 剪贴板端口（设计第十一条）
+    // clipboard 域：Windows 剪贴板端口
     /// 打开系统剪贴板失败，通常是其他进程正在独占。必须如实上抛，
     /// 不得冒充"剪贴板为空"，否则界面会把粘贴无效果误报成没有内容。
     ClipboardBusy,
@@ -140,10 +140,10 @@ pub enum Code {
     ClipboardImageInvalid,
     /// 位图超出允许的最大像素数或宽高相乘溢出。
     ClipboardImageTooLarge,
-    /// 把位图写入系统剪贴板失败（任务 5.6 的复制图像）。与读取侧的
+    /// 把位图写入系统剪贴板失败。与读取侧的
     /// `clipboard.read_failed` 分开：写失败时库内数据无损，重试即可。
     ClipboardWriteFailed,
-    // export 域：原图导出（设计第十二条）
+    // export 域：原图导出
     /// 导出目标不是目录或不可用。导出只写入使用者明确选择的既有目录，
     /// 不代建目录树：写错位置比少写一个目录更难收拾。
     ExportTargetInvalid,
@@ -152,7 +152,7 @@ pub enum Code {
     ExportAssetMissing,
     /// 把本体复制到导出目标失败。目标侧的 IO 问题：磁盘满、权限、路径过长等。
     ExportWriteFailed,
-    // external 域：默认程序打开（任务 5.6，设计第十二条）
+    // external 域：默认程序打开
     /// 把只读临时副本交给系统默认程序启动失败。副本已就绪且库内数据无损；
     /// 常见原因是该扩展名的文件关联被改动或启动被系统策略阻止。
     ExternalOpenFailed,
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn import_domain_has_exactly_ten_codes() {
-        // 设计第十条为统一导入协调器新增 import.already_running（库级并发键拒绝
+        // 约束为统一导入协调器新增 import.already_running（库级并发键拒绝
         // 第二个任务），导入错误码从九个变为十个。数量变化必须是有意的，
         // 因此在这里锁死，防止随手增删。
         let n = ALL_CODES
@@ -511,10 +511,10 @@ mod tests {
 
     #[test]
     fn clipboard_domain_has_exactly_five_codes() {
-        // 设计第十一条冻结的四个剪贴板读取侧失败：busy 是打开系统剪贴板被占用
-        // （调研明确禁止冒充空剪贴板）；read_failed 是已打开但读取内容失败；
+        // 约束冻结的四个剪贴板读取侧失败：busy 是打开系统剪贴板被占用
+        // （产品约定禁止冒充空剪贴板）；read_failed 是已打开但读取内容失败；
         // image_invalid 与 image_too_large 分别对应位图形状非法与超出像素上限。
-        // 任务 5.6 的复制图像新增 write_failed（写入方向），数量从四变为五。
+        // 复制图像新增 write_failed（写入方向），数量从四变为五。
         // 数量变化必须是有意的，因此在这里锁死。
         let n = ALL_CODES
             .iter()
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn external_domain_has_exactly_one_code() {
-        // 任务 5.6：默认程序打开目前只有一个稳定失败——把只读副本交给系统
+        // 当前实现：默认程序打开目前只有一个稳定失败——把只读副本交给系统
         // 启动失败。准备副本阶段的失败沿用 library/export 域既有码，不在此重复。
         let n = ALL_CODES
             .iter()

@@ -1,6 +1,6 @@
 //! 库格式迁移的持久化 journal 与备份布局。
 //!
-//! 迁移要重写全库的图片侧车（设计第四条），因此它必然是一个可以被断电、被任务管理器
+//! 迁移要重写全库的图片侧车，因此它必然是一个可以被断电、被任务管理器
 //! 结束、被杀毒软件打断的长操作。journal 存在的唯一理由是：进程下次启动时必须能判断
 //! "上次迁移走到哪一步"，并据此继续或回滚，而 MUST NOT 把一个混合了 v1 与 v2 侧车的
 //! 目录当成正常库打开。
@@ -240,7 +240,7 @@ pub fn detect_library_format(root: &Path) -> Result<LibraryFormatState> {
     }
     // journal 的判断必须先于版本号：被中断的迁移里 `library.json` 仍然是旧版本，
     // 只看版本号会把一个半迁移的库判成"还没开始迁移"，于是第二次迁移会以已经重写成
-    // v2 的侧车为输入从头再来，而那正是设计第四条禁止的情形。
+    // v2 的侧车为输入从头再来，而那正是约束禁止的情形。
     let journal_path = root.join(JOURNAL_FILE);
     if journal_path.is_file() {
         return Ok(LibraryFormatState::MigrationIncomplete(
@@ -579,7 +579,7 @@ impl V3MigrationPlan {
 // ---------------------------------------------------------------------------
 // v2→v3 迁移提交
 //
-// 设计第九条的提交流程：校验计划 → 把新侧车与新库级元数据写入库内同卷暂存区 →
+// 约束的提交流程：校验计划 → 把新侧车与新库级元数据写入库内同卷暂存区 →
 // 写恢复日志并把旧权威元数据备份进同一工作目录 → 逐项原子替换 → 删除并重建派生
 // 索引 → 校验不变量 → 删除恢复日志并清理。任一步失败按恢复日志整体回滚；进程在
 // 提交期间被结束时，下次开库必须先经 [`recover_interrupted_v3_commit`] 回滚。
@@ -821,7 +821,7 @@ impl<'a> V3MigrationCommit<'a> {
         }
     }
 
-    /// 提交主体。阶段顺序即设计第九条的流程，每段之间以 [`Self::checkpoint`] 划界。
+    /// 提交主体。阶段顺序即约束的流程，每段之间以 [`Self::checkpoint`] 划界。
     fn advance(
         &self,
         meta: &LibraryMetaV2,
@@ -1062,7 +1062,7 @@ impl<'a> V3MigrationCommit<'a> {
     /// 就意味着备份树完整、可以整体盖回；它不存在则替换必然尚未开始，只需撤掉自己的
     /// 痕迹。这里不再调用 rebuild_index：索引要么没被动过（替换前失败），要么刚由调用
     /// 方的闭包自己报错（索引阶段失败），重跑一次都不会让结果更正确；索引与元数据的
-    /// 一致性自愈属于开库流程（设计第九条），不属于失败回滚。
+    /// 一致性自愈属于开库流程，不属于失败回滚。
     ///
     /// 回滚自身失败时以 `migration.rollback_failed` 取代原始失败上报：那时库里可能同时
     /// 存在新旧两种元数据，“不要继续使用这个库”比原始失败原因更需要先被看到。
@@ -1252,7 +1252,7 @@ fn emit_progress(
 
 /// 构造暂存区里的 v3 库级元数据字节。
 ///
-/// 打开门禁（任务 3.5）之前程序里还没有 LibraryMetaV3 类型；这里显式构造只携带既有
+/// 打开门禁之前程序里还没有 LibraryMetaV3 类型；这里显式构造只携带既有
 /// 字段的 JSON——v3 的库级元数据与 v2 字段相同、仅版本号推进到
 /// [`LIBRARY_FORMAT_VERSION_V3`]，字段含义随 v2 定义走，不引入第二种解释。
 fn staged_meta_json(meta: &LibraryMetaV2) -> Result<Vec<u8>> {
@@ -1266,7 +1266,7 @@ fn staged_meta_json(meta: &LibraryMetaV2) -> Result<Vec<u8>> {
     .map_err(|e| staging_failed(format!("序列化 v3 库级元数据失败: {e}")))
 }
 
-/// 把一张 v2 侧车映射为设计第八条的 v3 形状。
+/// 把一张 v2 侧车映射为约束的 v3 形状。
 ///
 /// 归属取解决后的唯一文件夹：零归属与单归属自动继承，多归属来自使用者的明确选择。
 /// 回收站素材的活动归属必须保持为空，删除前的唯一归属单独写入
@@ -1651,7 +1651,7 @@ impl Migration {
     ///
     /// 代价是诚实的：两个进程同时对同一个库发起迁移时，后者可能在前者写下 journal 之后
     /// 才检查，于是把一次正在进行的迁移当成崩溃现场接管。本项目内不会发生（权威变更都
-    /// 串行在同一个 Catalog 锁边界内，见设计第六、七条），跨进程的真正互斥需要心跳或
+    /// 串行在同一个 Catalog 锁边界内，跨进程的真正互斥需要心跳或
     /// 进程存活探测，属于独立需求。
     fn acquire_lock(&self, taking_over: bool) -> Result<()> {
         let path = self.root.join(LOCK_FILE);
@@ -1856,7 +1856,7 @@ impl Migration {
     fn rewrite_one(&self, path: &Path, nth: usize) -> Result<()> {
         let rewrite_failed =
             |detail: String| AppError::detailed(Code::MigrationSidecarRewriteFailed, detail);
-        // 显式按 v1 解析（设计第四条）。v1 的形状已经冻结，因此这次解析的含义不会
+        // 显式按 v1 解析。v1 的形状已经冻结，因此这次解析的含义不会
         // 随 v2 将来的字段变化而漂移。
         let v1 = AssetSidecarV1::read(path)
             .map_err(|e| rewrite_failed(format!("按 v1 解析侧车失败 {}：{e}", path.display())))?;
@@ -2393,7 +2393,7 @@ mod tests {
     fn v1_library(normal: usize) -> V1Fixture {
         let dir = tempfile::tempdir().expect("建立临时目录");
         let root = dir.path().join("我的素材库");
-        // 自己写一份 v1 库，而不是用 `Library::create`：建库已经只产出 v2（任务 3.3），
+        // 自己写一份 v1 库，而不是用 `Library::create`：建库已经只产出 v2，
         // 而这个夹具的全部意义就是提供一个真实的迁移输入。刻意不建 `prompts/objects`、
         // `prompts/trash` 与提示词文件夹清单——那三样正是迁移要建立的东西。
         for d in [OBJECTS_DIR, TRASH_DIR, "thumbnails", PROMPTS_DIR] {
@@ -2725,7 +2725,7 @@ mod tests {
             .expect("改写库级元数据");
     }
 
-    /// 任务 3.5：v3 是当前代。检测必须把它判为 Current 并放行打开；而 v2→v3 的规划
+    /// 当前实现：v3 是当前代。检测必须把它判为 Current 并放行打开；而 v2→v3 的规划
     /// 与提交门禁必须拒绝已是 v3 的输入——否则第二次提交会把 v3 侧车当 v2 解析，
     /// 用垃圾字段顶替权威字节。
     #[test]
@@ -2752,13 +2752,12 @@ mod tests {
         assert_eq!(err.code, Code::MigrationPlanStale);
     }
 
-    /// 任务 2.6 的 release 基线：1,000 与 10,000 侧车下的迁移耗时、磁盘峰值、
-    /// 中断恢复耗时与回滚结果。
+    /// release 构建下 1,000 与 10,000 侧车的迁移耗时、磁盘峰值、中断恢复耗时与回滚结果。
     ///
     /// 数字只在 release 构建下有意义，因此与查询基线一样 cfg 掉 debug 构建、
     /// 以 `--ignored` 显式运行：
     /// `cargo test -p vistash-core --release --ignored migration_release_baseline -- --nocapture`。
-    /// 产出的数字记录在 tasks.md 的 2.6 备注里；本测试只负责让它们可复现。
+    /// 本测试只负责让这些测量可复现。
     #[test]
     #[cfg(not(debug_assertions))]
     #[ignore = "release 性能基线：显式运行 --release --ignored"]
@@ -2845,7 +2844,7 @@ mod tests {
         total
     }
 
-    // ---------------------------------------------------- v2→v3 提交（任务 3.3）
+    // ---------------------------------------------------- v2→v3 提交
 
     use crate::library::Library;
     use crate::sidecar::{AssetSidecarV3, AssetSource};
@@ -2922,7 +2921,7 @@ mod tests {
         let library = Library::create(&dir.path().join("我的素材库")).expect("建立 v2 库");
         let root = library.root().to_path_buf();
         let library_id = library.meta().library_id.clone();
-        // 建库入口自任务 3.5 起直接产出 v3 库级元数据；v2→v3 迁移的输入必须是真
+        // 建库入口直接产出 v3 库级元数据；v2→v3 迁移的输入必须是真
         // v2 库，夹具因此显式把 library.json 降写回 v2——这正是迁移提交前旧库的样子。
         // 侧车仍由下方 place() 按 v2 写出，与库级版本一致。
         LibraryMetaV2 {
@@ -3070,7 +3069,7 @@ mod tests {
             serde_json::to_value(&f.library_id).expect("序列化库 ID")
         );
 
-        // 每张侧车都能按 v3 读出，映射符合设计第八条：来源显式、显示名取自旧原始名。
+        // 每张侧车都能按 v3 读出，映射符合约束：来源显式、显示名取自旧原始名。
         let mut by_hash = BTreeMap::new();
         for path in f.original_sidecars.keys() {
             let v3 = AssetSidecarV3::read(path).expect("侧车应可按 v3 读出");

@@ -1,10 +1,10 @@
 //! Tauri 装配层。
 //!
-//! 本 crate 的职责边界见变更 `implement-vistash-import-and-browse` 的设计第一条：
+//! 本 crate 负责 Tauri 装配、窗口、插件和 command 注册：
 //! 窗口、插件与 command 注册在这里，业务判断在 `vistash-core`。
 
 pub mod commands;
-// Windows 剪贴板生产 adapter（任务 5.1）：本项目 Windows 优先，模块内的
+// Windows 剪贴板生产 adapter：本项目 Windows 优先，模块内的
 // Win32 调用不需要跨平台替身；非 Windows 目标编译时整个模块缺席。
 #[cfg(target_os = "windows")]
 pub mod windows_clipboard;
@@ -19,15 +19,15 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        // 剪贴板位图读取（任务 5.3，设计第十一条）：只在 Rust 侧注册插件——
+        // 剪贴板位图读取：只在 Rust 侧注册插件——
         // 不给 WebView 添加任何剪贴板 ACL 权限，前端全程不见像素；窗口级
         // Ctrl+V 由 paste_import 命令在后端完成分流裁决。
         .plugin(tauri_plugin_clipboard_manager::init())
-        // 默认程序打开（任务 5.6）：只在 Rust 侧经 OpenerExt 打开后端创建并
+        // 默认程序打开：只在 Rust 侧经 OpenerExt 打开后端创建并
         // 校验过的只读副本路径，不给 WebView 开任何 opener 权限——前端拿到的
-        // 只是"按素材哈希打开"的窄命令（调研 §3.3）。
+        // 只是"按素材哈希打开"的窄命令。
         .plugin(tauri_plugin_opener::init())
-        // 库级导入运行注册表（设计第十条）：begin 在 import_sources 内占用槽位，
+        // 库级导入运行注册表：begin 在 import_sources 内占用槽位，
         // import_stop 经它按并发键定位运行中的任务。命令层只克隆 Arc 句柄。
         .manage(commands::managed_transfer_runs())
         .setup(|app| {
@@ -37,7 +37,7 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let settings_path = config_dir.join("settings.json");
             let layouts_dir = config_dir.join("layouts");
-            // 只读临时副本根（任务 5.6，调研 §4–§5）：位于应用缓存侧，与库根、
+            // 只读临时副本根：位于应用缓存侧，与库根、
             // 内容哈希树和导出目标结构性隔离。会话 ID 本次运行生成一次；启动时
             // 顺手清理过期会话——被占用的留待下次启动重试。清理是自愈动作而非
             // 前置条件：失败不阻塞启动，报告暂无界面呈现。

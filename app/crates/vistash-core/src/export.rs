@@ -1,14 +1,14 @@
-//! 原图导出协调器（任务 5.5，设计第十二条）。
+//! 原图导出协调器。
 //!
 //! 导出是纯出站操作：Rust 读权威索引定位库内本体，按"显示文件名主体 + 真实扩展名"
 //! 复制原始字节到使用者明确选择的目标目录。全程只读库——本体与侧车一个字节都不改，
-//! 这是规格的硬性要求，也是本模块所有测试的第一断言。
+//! 这是产品行为要求，也是本模块所有测试的第一断言。
 //!
 //! 同名冲突的处理顺序是冻结的：先生成冲突计划（[`plan_export`]，不写任何目标），
 //! 使用者明确选择跳过、覆盖或自动编号后才写入（[`export_assets`]）。覆盖是破坏性
 //! 操作，core 层收到的 [`ConflictPolicy::Overwrite`] 即代表界面上的明确确认已经发生。
 //!
-//! 任务语义与导入完全共享（设计第十条）：同一把库级并发闸、同一个运行句柄的
+//! 任务语义与导入完全共享：同一把库级并发闸、同一个运行句柄的
 //! 停止协议、同样的"协调器返回即确认退出"。停止只在单文件边界观察——每个文件
 //! 要么完整出现在目标目录，要么完全不出现，绝不留下半成品。
 
@@ -70,7 +70,7 @@ pub struct PlannedExport {
     pub existing: bool,
 }
 
-/// 一项导出的失败。逐项隔离（asset-transfer 规格）：批量中的一项失败
+/// 一项导出的失败。逐项隔离：批量中的一项失败
 /// 不阻止其余项继续，也不把整体变成 `Err`。
 #[derive(Debug, Clone, Serialize)]
 pub struct ExportFailure {
@@ -83,7 +83,7 @@ pub struct ExportFailure {
 
 /// 一次导出的结果。部分成功是常态，因此这不是 `Result`。
 ///
-/// 四个桶互相独立、数量齐全（与导入的停止规格同构）：成功看
+/// 四个桶互相独立、数量齐全：成功看
 /// [`Self::exported`]，冲突跳过看 [`Self::skipped_existing`]，失败看
 /// [`Self::failed`]，停止后尚未处理看 [`Self::pending_count`]。
 #[derive(Debug, Clone, Serialize)]
@@ -134,7 +134,7 @@ pub(crate) fn resolve_asset(
 }
 
 /// 完整导出名。侧车的 `display_filename` 本身就是含真实扩展名的完整文件名
-/// （任务 2.2 的领域不变量），直接使用即可，不得再拼一次扩展名。
+/// ，直接使用即可，不得再拼一次扩展名。
 pub(crate) fn composed_name(sidecar: &AssetSidecarV3) -> String {
     sidecar.display_filename.as_str().to_owned()
 }
@@ -335,18 +335,18 @@ fn decide_target(
 impl TransferRuns {
     /// 占用该库的导出槽位。
     ///
-    /// 与导入共用同一把库级闸（设计第十条）：导入与导出都依赖"运行期间库内
+    /// 与导入共用同一把库级闸：导入与导出都依赖"运行期间库内
     /// 对象集合稳定"，互斥是最便宜的保证。
     pub fn begin_export(&self, library: &Library) -> Result<Arc<TransferRun>> {
         self.begin(library)
     }
 }
 
-/// 单图复制位图（任务 5.6）：把库内本体解码为 RGBA 位图，交由调用方写入系统
+/// 单图复制位图：把库内本体解码为 RGBA 位图，交由调用方写入系统
 /// 剪贴板（Windows 上是设备无关位图格式）。
 ///
-/// 参数是单个哈希——规格冻结的"复制图像只允许单张，多选不合成、多选出站走
-/// 批量导出"由 API 形状保证：这里在结构上就不存在一次喂进多张图的入口。
+/// 参数是单个哈希——"复制图像"只允许单张，多选不合成，多选出站走批量导出；
+/// 这一约束由 API 形状保证，这里在结构上就不存在一次喂进多张图的入口。
 /// 解码错误沿用媒体域的错误码，如实反映失败原因而不是笼统的"复制失败"。
 pub fn asset_bitmap(lib: &Library, hash: &ContentHash) -> Result<crate::clipboard::BitmapImage> {
     let (_, body) = resolve_asset(lib, hash)?;

@@ -1,4 +1,4 @@
-"""验证 9.1 文件夹组织，仅操作开发内存库，不接触真实文件或图片。"""
+"""验证文件夹组织，仅操作内存库，不接触真实文件或图片。"""
 import argparse
 import json
 from pathlib import Path

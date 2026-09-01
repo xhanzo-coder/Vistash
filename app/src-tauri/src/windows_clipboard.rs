@@ -1,4 +1,4 @@
-//! Windows 剪贴板生产 adapter（任务 5.1，选型冻结于设计第十一条）。
+//! Windows 剪贴板生产 adapter。
 //!
 //! 文件列表与纯文本经 Win32 读取：`OpenClipboard` 打开失败必须返回稳定的
 //! `clipboard.busy`（其他进程独占剪贴板很常见，冒充空剪贴板会让界面把粘贴
@@ -13,8 +13,8 @@
 //!
 //! 分流一律交给核心的 [`vistash_core::clipboard::arbitrate`]，本模块只负责
 //! "取出有什么"，不做产品判断。真实系统剪贴板的端到端行为无法在自动化测试里
-//! 确定性地播种，按设计第十一条的风险预案由 release Tauri 构建的 Windows 层
-//! 验收（任务 11.5）覆盖；本模块的分流正确性由核心契约测试保证。
+//! 确定性地播种，按约束的风险预案由 release Tauri 构建的 Windows 层
+//! 验收覆盖；本模块的分流正确性由核心契约测试保证。
 
 use std::path::PathBuf;
 

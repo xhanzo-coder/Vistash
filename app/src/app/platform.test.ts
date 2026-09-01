@@ -4,8 +4,8 @@ import type { ImageLease, PlatformPort } from "./platform";
 import type { ImportOutcome, TransferProgress } from "../shared/types";
 
 /**
- * 任务 6.1 只锁 port 的形状与合同基线；Tauri/Memory 双 adapter 与完整
- * contract tests（错误码、媒体租约、文件对话框、拖放、取消监听）在任务 6.2。
+ * 这里只锁定 port 的形状与合同基线；Tauri/Memory 双 adapter 与完整
+ * contract tests 覆盖错误码、媒体租约、文件对话框、拖放和取消监听。
  */
 
 const EMPTY_IMPORT: ImportOutcome = {
@@ -57,7 +57,7 @@ describe("PlatformPort 形状", () => {
     const lease: ImageLease = await port.acquireThumbnail("a".repeat(64));
     expect(typeof lease.url).toBe("string");
     expect(typeof lease.release).toBe("function");
-    // 释放是幂等的借用归还：这里只验证形状，释放时机的合同在任务 10.5 验证。
+    // 释放是幂等的借用归还：这里只验证形状，释放时机由生命周期合同覆盖。
     expect(() => lease.release()).not.toThrow();
   });
 
@@ -68,7 +68,7 @@ describe("PlatformPort 形状", () => {
   });
 });
 
-describe("类型锁（设计第三条与第十四条）", () => {
+describe("类型锁（平台接口与媒体租约）", () => {
   test("ImageLease 就是设计冻结的显式租约形状", () => {
     expectTypeOf<ImageLease>().toEqualTypeOf<{ url: string; release(): void }>();
   });

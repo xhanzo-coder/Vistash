@@ -1,4 +1,4 @@
-"""单选检查器真实浏览器验收；仅访问开发内存库，不读写用户素材。"""
+"""单选检查器真实浏览器验收；仅访问内存演示库，不读写用户素材。"""
 import argparse
 import json
 from pathlib import Path

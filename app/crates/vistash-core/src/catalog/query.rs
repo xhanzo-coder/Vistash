@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn deleting_and_rebuilding_the_index_reproduces_the_full_v2_snapshot() {
-        // 任务 3.4：删除并重建索引后，完整快照与增量索引逐字段相等。比较范围刻意取
+        // 当前实现：删除并重建索引后，完整快照与增量索引逐字段相等。比较范围刻意取
         // 整个 IndexSnapshot 而不是单侧查询：两套空文件夹、图片 note/favorite、提示词
         // 全字段、两类回收站与普通关联/封面都必须在重建后原样出现。
         let mut fixture = fixture();

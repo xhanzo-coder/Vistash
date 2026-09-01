@@ -1,4 +1,4 @@
-"""大图灯箱浏览器验收，只使用开发内存库和本地品牌原图。"""
+"""大图灯箱浏览器验收，只使用内存演示库和本地品牌原图。"""
 import argparse
 import json
 from pathlib import Path

@@ -5,8 +5,7 @@ import type { AppError } from "./types";
  * 判断一个未知值是否是后端的 `AppError`。
  *
  * 用类型守卫而不是 `as AppError`：断言只是让编译器闭嘴，运行时该值仍可能是别的东西，
- * 而随后读 `error.code` 会得到 undefined，界面就会显示一条没有错误码的失败——那正是
- * `app-shell` 规格禁止的"只显示通用失败文案"。
+ * 而随后读 `error.code` 会得到 undefined，界面就会显示一条没有错误码的失败。
  */
 function isAppError(value: unknown): value is AppError {
   if (typeof value !== "object" || value === null) return false;
@@ -53,7 +52,7 @@ export function describeCode(code: string): string {
 /**
  * 供界面直接呈现的一行文本：错误码与可读说明同时出现。
  *
- * 规格要求两者并存，因此这里不提供"只要说明"或"只要码"的变体——那种变体一旦存在，
+ * 错误码和可读说明必须同时存在，因此这里不提供"只要说明"或"只要码"的变体——那种变体一旦存在，
  * 迟早会有某个视图只用其中一个。
  */
 export function formatError(error: AppError): string {

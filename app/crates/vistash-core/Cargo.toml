@@ -6,7 +6,7 @@ license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
-# 本 crate 刻意不依赖 tauri。这张依赖表就是设计第一条的编译期检查：
+# 本 crate 刻意不依赖 tauri。这张依赖表就是约束的编译期检查：
 # 想在核心逻辑里调用 Tauri API 必须先改这里，而依赖表的改动在评审中看得见。
 [dependencies]
 serde.workspace = true

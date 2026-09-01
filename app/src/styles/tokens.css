@@ -83,7 +83,7 @@
   --z-toast: 60;
   --z-skip: 70;
 
-  /* 旧工作区在任务 11.3 切换前消费的兼容语义名称，不包含具体颜色。 */
+  /* 保留兼容语义名称，不包含具体颜色。 */
   --surface-paper: var(--surface-panel);
   --surface-card: var(--surface-raised);
   --text-on-rail: var(--text-primary);

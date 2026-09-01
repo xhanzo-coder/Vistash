@@ -1,4 +1,4 @@
-//! 普通关联与封面：唯一权威方是提示词文件（设计第三条）。
+//! 普通关联与封面：唯一权威方是提示词文件。
 //!
 //! 一次关联只改动一份权威文件——提示词的有序 `linked_image_hashes`；图片侧车
 //! 不写反向列表，从图片反查提示词走 SQLite 的 `prompt_images` 派生表。双写两侧
@@ -217,7 +217,7 @@ impl Catalog {
 
     /// 图片永久删除前，从所有关联它的提示词（含回收站）移除该哈希并重选封面。
     ///
-    /// 设计第三条：这是唯一被允许批量改写提示词权威文件的跨文件事务——图片一旦
+    /// 约束：这是唯一被允许批量改写提示词权威文件的跨文件事务——图片一旦
     /// 物理消失，指向它的关联就成了永远无法解析的悬空引用。任一提示词写入失败都
     /// 让整个清理失败，已写回的文件逆序恢复原字节；调用方（图片生命周期）据此让
     /// 这张图的 purge 整体失败，图片对保持完整。
@@ -639,7 +639,7 @@ mod tests {
                 .catalog
                 .link_images(&owner.id, &[image_a.hash.clone(), image_b.hash.clone()])
                 .expect("关联");
-            // 显式封面指向甲图：设为封面的公开接口在 6.7 落地，这里直接改写权威文件。
+            // 显式封面指向甲图：直接通过公开接口改写权威文件。
             let owner_path = fixture.catalog.library().prompt_path(&owner.id);
             let mut crafted = fixture.catalog.prompt_detail(&owner.id).expect("读取详情");
             crafted.cover_image_hash = Some(image_a.hash.clone());

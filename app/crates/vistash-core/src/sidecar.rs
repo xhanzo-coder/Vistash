@@ -13,12 +13,12 @@ use std::path::Path;
 
 /// v1 侧车格式版本。与库级元数据的格式版本分开，因为侧车结构的演进节奏与库骨架不同。
 ///
-/// 生产路径已切到 v2（任务 3.3），这个值此后只用于迁移：它标记的是"迁移的输入长什么样"。
+/// 生产路径已切到 v2，这个值此后只用于迁移：它标记的是"迁移的输入长什么样"。
 pub const SIDECAR_FORMAT_VERSION: u32 = 1;
 
 /// 图片侧车格式 v2 的版本号。
 ///
-/// v2 强制写入纯文本 `note` 与布尔 `favorite`（设计第四条）。两个字段刻意没有 serde
+/// v2 强制写入纯文本 `note` 与布尔 `favorite`。两个字段刻意没有 serde
 /// 默认值：缺少它们的文件就是 v1 文件，必须走迁移，而不是被当成"备注为空、未收藏"的
 /// 正常 v2 文件——后者会让一次误判永久顶替掉使用者真实写过的备注。
 pub const SIDECAR_FORMAT_VERSION_V2: u32 = 2;
@@ -31,7 +31,7 @@ pub const SIDECAR_FORMAT_VERSION_V3: u32 = 3;
 
 /// v1 侧车：一个素材在库格式 v1 下的全部权威元数据。
 ///
-/// 形状已冻结，只服务迁移（设计第四条）。生产读写走 [`AssetSidecarV2`]，即类型别名
+/// 形状已冻结，只服务迁移。生产读写走 [`AssetSidecarV2`]，即类型别名
 /// [`AssetSidecar`]。冻结的理由是迁移的正确性完全依赖"读一个 v1 文件"的含义固定：
 /// 这个结构若继续跟随新字段演进，迁移的输入含义就会随之漂移。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -609,8 +609,7 @@ fn invalid_folder_path(raw: &str) -> AppError {
 /// 这件事应当只在一处改写。索引、导入与编目全部引用这个名字，因此下一次格式升级只需要
 /// 改这一行，而不是再一次全仓库改名。
 ///
-/// 任务 3.7 起（迁移提交门禁与恢复入口均已就位）生产切换为 v3：显式来源、必填显示
-/// 文件名与单一可选文件夹归属。
+/// 生产使用 v3：显式来源、必填显示文件名与单一可选文件夹归属。
 pub type AssetSidecar = AssetSidecarV3;
 
 #[cfg(test)]
@@ -688,7 +687,7 @@ mod tests {
 
     #[test]
     fn a_v1_sidecar_is_refused_by_the_v2_reader_instead_of_defaulted() {
-        // 设计第四条：不以 serde 默认值猜测 note/favorite。少了这两个字段的文件是
+        // 约束：不以 serde 默认值猜测 note/favorite。少了这两个字段的文件是
         // v1 文件，必须交给迁移，而不是当成"备注为空、未收藏"的 v2 文件。
         let dir = tempfile::tempdir().expect("建立临时目录");
         let p = dir.path().join("a.json");

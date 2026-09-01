@@ -661,7 +661,7 @@ mod tests {
     }
 
     /// 直接构造一条带关联图片的回收站提示词。普通关联的 link/unlink 入口属于
-    /// 任务 6.x；purge 的"清理派生关联"语义现在就能用权威文件里的有序哈希钉住。
+    /// 当前实现；purge 的"清理派生关联"语义现在就能用权威文件里的有序哈希钉住。
     fn placed_deleted_prompt(
         catalog: &mut Catalog,
         id: &str,

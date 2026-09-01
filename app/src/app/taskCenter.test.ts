@@ -107,7 +107,7 @@ describe("isCleanSuccess（完成报告保留规则）", () => {
   });
 });
 
-describe("类型锁（设计第十三条：六状态与封闭种类）", () => {
+describe("类型锁（六状态与封闭种类）", () => {
   test("运行状态恰好六种：只有后端确认后才进入 stopped", () => {
     expectTypeOf<TaskRunState>().toEqualTypeOf<
       "running" | "stopping" | "stopped" | "succeeded" | "partial" | "failed"
@@ -128,7 +128,7 @@ describe("类型锁（设计第十三条：六状态与封闭种类）", () => {
   });
 });
 
-describe("TaskCenter interface 可实现性（store 实现在任务 6.3）", () => {
+describe("TaskCenter interface 可实现性", () => {
   test("一个不依赖任何框架的最小实现即可满足整个 interface", () => {
     const records: TaskRecord[] = [];
     let nextId = 0;

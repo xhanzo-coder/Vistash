@@ -1,4 +1,4 @@
-"""图片工作区导入入口浏览器验收，只使用开发内存库。"""
+"""图片工作区导入入口浏览器验收，只使用内存演示库。"""
 import argparse
 import json
 from pathlib import Path

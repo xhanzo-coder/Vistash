@@ -1,4 +1,4 @@
-"""多选检查器与批量编辑浏览器验收；仅操作开发内存库。"""
+"""多选检查器与批量编辑浏览器验收；仅操作内存演示库。"""
 import argparse
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ from playwright.sync_api import expect, sync_playwright
 
 
 def toggle_failure(page):
-    # 模拟外部磁盘故障变化：只激活开发展台的内存故障开关，不操作生产数据。
+    # 模拟外部磁盘故障变化：只激活内存演示库的故障开关，不操作生产数据。
     page.get_by_role("button", name="模拟部分失败", exact=True, include_hidden=True).evaluate("button => button.click()")
 
 

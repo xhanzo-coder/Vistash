@@ -1,4 +1,4 @@
-/* Hallmark · genre: editorial · macrostructure: Workbench · tone: utilitarian · anchor hue: coral · design-system: OpenSpec Archive Desk A · designed-as-app
+/* Hallmark · genre: editorial · macrostructure: Workbench · tone: utilitarian · anchor hue: coral · design-system: Archive Desk · designed-as-app
  * pre-emit critique: P5 H4 E4 S5 R4 V4
  */
 .workspace { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; color: var(--text-primary); background: var(--surface-canvas); }

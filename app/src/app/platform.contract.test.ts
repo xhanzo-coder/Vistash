@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 
 /*
- * PlatformPort 的共享合同套件（任务 6.2，设计第三条与第十六条）。
+ * PlatformPort 的共享合同套件。
  *
  * 同一组场景分别对 Memory 与 Tauri 两个 adapter 运行：错误码保留、媒体租约、
  * 文件对话框、拖放事件与取消监听。生产侧经官方 mockIPC 走真实 invoke 路径，
  * 只有 webview 事件源被替换成可注入的桩——adapter 的装配逻辑本身被完整执行。
- * 真实 Windows 拖放与对话框行为由任务 11.5 的 release 构建验收兜底。
+ * 真实 Windows 拖放与对话框行为由 release 构建验收覆盖。
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";

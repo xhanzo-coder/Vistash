@@ -75,7 +75,7 @@ import { usePromptPaneModes } from "./promptPaneModes";
 
 /** 二次确认对话框的待办：确认时执行，取消即丢弃。 */
 /**
- * 提示词工作区外壳（任务 10.3 首版）。
+ * 提示词工作区外壳。
  *
  * 与图片模块同构：左分类、中央集合、右检查器三栏；查询状态、
  * 快照刷新与变更协调都在这里，中央视图与检查器只是呈现端。
@@ -93,7 +93,7 @@ export function PromptWorkspace({
   active?: boolean;
   libraryId: LibraryId;
   relations: ImagePromptRelations;
-  /** 全局搜索发来的定位请求（任务 11.1）；由 App 保证只发给本库。 */
+  /** 全局搜索发来的定位请求；由 App 保证只发给本库。 */
   locate?: (GlobalLocateRequest & { nonce: number }) | null;
   onLocateHandled?: (nonce: number) => void;
 }) {
@@ -120,17 +120,17 @@ export function PromptWorkspace({
   const [creatingPrompt, setCreatingPrompt] = useState(false);
   const [cardDensity, setCardDensity] = useState(1);
   // 聚焦阅读：由双击、Enter 或检查器的显式按钮进入；单击仅更新右检查器。
-  // bodyFocusEdit 区分"聚焦阅读"与"编辑主字段"两种进入方式（任务 10.4）。
+  // bodyFocusEdit 区分"聚焦阅读"与"编辑主字段"两种进入方式。
   const [bodyFocusId, setBodyFocusId] = useState<string | null>(null);
   const [bodyFocusEdit, setBodyFocusEdit] = useState(false);
   // 右检查器抽屉（中等/窄窗口）的开关；宽屏原位展开时忽略。
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [mutating, setMutating] = useState(false);
-  // 回收站（任务 10.6）：还原缺失文件夹的非阻断警告、清空回收站二次确认与逐项结果。
+  // 回收站：还原缺失文件夹的非阻断警告、清空回收站二次确认与逐项结果。
   const [notice, setNotice] = useState<AppError | null>(null);
   const [confirm, setConfirm] = useState<PromptConfirmRequest | null>(null);
   const [purgeReport, setPurgeReport] = useState<PromptPurgeReport | null>(null);
-  // 批量操作（任务 11.2）：进度按项转交呈现，报告按项列出失败（设计第六条）。
+  // 批量操作：进度按项转交呈现，报告按项列出失败。
   const [batchReport, setBatchReport] = useState<BatchReport | null>(null);
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   // 两视图共用同一顺序；view 由提示词自己的持久化 section 提供。
@@ -247,7 +247,7 @@ export function PromptWorkspace({
     });
   }
 
-  // 批量动作的统一协调（任务 11.2，设计第六条）：BatchOrganizer 只翻译意图，
+  // 批量动作的统一协调：BatchOrganizer 只翻译意图，
   // 写入经后端批量命令逐项隔离，进度按项转交呈现，报告按项列出失败。
   function runBatch(
     operation: (onProgress: (progress: BatchProgress) => void) => Promise<BatchReport>,
@@ -301,9 +301,9 @@ export function PromptWorkspace({
   }
 
   /**
-   * 批量建立图片关联（任务 11.2）：后端没有批量关联命令，这里逐条
+   * 批量建立图片关联：后端没有批量关联命令，这里逐条
    * link_images 并聚合出同一形状的 BatchReport——单条失败不阻断其余条目
-   * （设计第六条），失败项优先用标题呈现，行已不在时回退用 id。
+   * 失败项优先用标题呈现，行已不在时回退用 id。
    */
   function batchLinkImagesTo(hash: string, ids: string[]) {
     runBatch(async (onProgress) => {
@@ -458,7 +458,7 @@ export function PromptWorkspace({
 
       {/* 统一选择模型：Provider 上移到中央区与右检查器之外，视图等价切换共享选择。 */}
       <SelectionProvider ids={sortedPrompts.map((prompt) => prompt.id)}>
-      {/* 定位桥（任务 11.1）：点击入口在 Provider 内部，定位请求由外壳驱动，
+      {/* 定位桥：点击入口在 Provider 内部，定位请求由外壳驱动，
           这里用普通单击语义把目标项落进统一选择模型。 */}
       <ExternalActivation request={activation} onHandled={onLocateHandled} />
       <div className={styles.content}>
@@ -485,7 +485,7 @@ export function PromptWorkspace({
           </div>
         </div>
 
-        {/* 回收站工具条（任务 10.6）：清空必须显式二次确认，取消不执行任何写入。 */}
+        {/* 回收站工具条：清空必须显式二次确认，取消不执行任何写入。 */}
         {location === "trash" && (
           <div className="trash-toolbar">
             <p>删除提示词仍保存在当前库内，正文、组织与图片关联原样保留。</p>
@@ -514,7 +514,7 @@ export function PromptWorkspace({
             ))}
           </div>
         )}
-        {/* 批量进度与报告（任务 11.2，设计第六条）：失败按项列出，成功计数汇总。 */}
+        {/* 批量进度与报告：失败按项列出，成功计数汇总。 */}
         {batchProgress !== null && (
           <p role="status" className="folder-progress">
             正在批量处理 {batchProgress.done}/{batchProgress.total}…
@@ -559,7 +559,7 @@ export function PromptWorkspace({
           />
         ) : (
           /*
-            集合视图（任务 10.1/10.2）。选择权威在统一 SelectionModel：单击只选中并
+            集合视图。选择权威在统一 SelectionModel：单击只选中并
             更新右检查器。瀑布流与详情列表挂在同一个 Provider 上，切换视图时查询、
             排序、选择与活动项全部保留。
           */
@@ -573,7 +573,7 @@ export function PromptWorkspace({
             </div>
           ) : view === "list" ? (
             <PromptDetailList
-              /* 集合视图按库重挂载（任务 11.2）：换库即全新 DOM，滚动恢复等该库
+              /* 集合视图按库重挂载：换库即全新 DOM，滚动恢复等该库
                  自己的读取返回后进行，上一库的滚动位置不会残留。 */
               key={`${libraryId}:${active ? "active" : "inactive"}`}
               prompts={sortedPrompts}
@@ -684,7 +684,7 @@ export function PromptWorkspace({
 }
 
 /**
- * 全局搜索定位的选中桥（任务 11.1）：点击入口只在 SelectionProvider 内部可得，
+ * 全局搜索定位的选中桥：点击入口只在 SelectionProvider 内部可得，
  * 而定位请求由外壳状态驱动，这里以普通单击语义分派目标项。
  *
  * nonce 记账保证同一次请求只分派一次——分派会推进选择状态并换出新的
