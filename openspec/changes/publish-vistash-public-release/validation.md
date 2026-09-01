@@ -6,7 +6,7 @@
 
 - `v0.1.1` 是受 `immutable-version-tags` 保护的 annotated tag，解析到已合并 `main` 提交 `a8e8fd10a879fa5021b5776dbd72f0b7bc3d41f8`。
 - Windows Release workflow `33478622218` 成功完成前端 lint/typecheck/test、Rust Clippy/test、OpenSpec strict、NSIS/MSI 构建和 SHA-256 清单。
-- 远程草稿 Release 当前包含恰好三个资产：NSIS、MSI 和 `SHA256SUMS.txt`。
+- 公开前的远程草稿 Release 包含恰好三个资产：NSIS、MSI 和 `SHA256SUMS.txt`；公开后资产未改变。
 - 真实 Windows 桌面 11.5 验收、0.1.0→0.1.1 隔离升级、同版本重装、卸载与数据保留均已通过。
 
 ## README 与发布说明
