@@ -1,6 +1,6 @@
 # Vistash 开源仓库文件与目录治理调研
 
-日期：2026-09-01  
+日期：2026-09-01
 范围：公开 GitHub 仓库在什么条件下可以称为“开源”，以及 `LICENSE`、`README`、`CONTRIBUTING`、`CODE_OF_CONDUCT`、`SECURITY`、`NOTICE` 和 Vistash 的 Agent/OpenSpec 目录应如何处理。
 
 > 本文是工程与仓库治理调研，不替代律师意见。许可证必须由实际著作权人作最终选择。文中的“当前仓库盘点”记录的是本次开源治理变更实施前的基线；实施后的文件状态和验收结果以对应 change 的 validation 记录为准。
