@@ -7,7 +7,7 @@ import { useDialogFocusTrap } from "./dialogFocus";
  *
  * 规格钉死两条：取消是默认焦点（Enter/空格的失手落在安全侧），取消绝不触发
  * 任何写入。挂载即聚焦取消按钮；busy 期间两个按钮都不可再点，Esc 同样被忽略。
- * 焦点陷阱、Esc 关闭与触发器归还由 useDialogFocusTrap 统一落实（任务 11.3）。
+ * 焦点陷阱、Esc 关闭与触发器归还由 useDialogFocusTrap 统一落实。
  */
 export function ConfirmDialog({
   title,

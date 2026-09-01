@@ -28,7 +28,7 @@ pub const RESAMPLE_FILTER: FilterType = FilterType::Lanczos3;
 
 /// 缩略图的 WebP 有损质量。
 ///
-/// 取 80 的依据是任务 6.4 在真实素材上的实测（结论已写回设计第四条）：512 长边下
+/// 取 80 的依据是对真实素材的测量：512 长边下
 /// q=80 产出 17–18 KB，而无损是 168–189 KB，相差十倍；再往上到 85 与 90 分别多花
 /// 25% 与 60% 的体积。
 ///
@@ -36,10 +36,10 @@ pub const RESAMPLE_FILTER: FilterType = FilterType::Lanczos3;
 /// 而不报任何错。
 pub const THUMBNAIL_WEBP_QUALITY: f32 = 80.0;
 
-/// 本变更支持的图片格式。
+/// 当前支持的图片格式。
 ///
 /// PSD 与 RAW 已被 asset-library 的 v1 范围需求显式排除；AVIF 与 HEIC 排除的原因
-/// 是其解码通常需要额外的系统级依赖，会把"引入一个 C 库"的成本压进第一个变更。
+/// 是其解码通常需要额外的系统级依赖，会增加发布和部署成本。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaType {
@@ -178,8 +178,7 @@ pub fn decode(path: &Path) -> Result<Decoded> {
     finish_decode(image, detected)
 }
 
-/// 解码一段内存字节（设计第十一条：剪贴板位图在 Rust 侧编码为 PNG 后直接
-/// 进入导入管线，没有源文件可读）。格式只由文件头判定。
+/// 解码一段内存字节。格式只由文件头判定。
 pub fn decode_bytes(bytes: &[u8]) -> Result<Decoded> {
     let reader = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
@@ -283,7 +282,7 @@ mod tests {
 
     #[test]
     fn supported_list_has_exactly_five_entries() {
-        // 设计第八条把本次范围收窄为五种。数量变化必须是有意的。
+        // 约束把本次范围收窄为五种。数量变化必须是有意的。
         assert_eq!(SUPPORTED_MEDIA_TYPES.len(), 5);
     }
 

@@ -5,13 +5,12 @@ app/dist-ssr/
 app/target/
 app/src-tauri/gen/
 app/src-tauri/target/
+app/artifacts/
 .vite/
 coverage/
-test/pinterest_images/
 
 # 本机开发与工具产物
 .playwright-mcp/
-.research/
 .codex/skills/
 .claude/skills/
 .vscode/
@@ -19,16 +18,10 @@ test/pinterest_images/
 *.code-workspace
 *.log
 
-# 由 e8-skill-linker 链接的外部 Skill；仅提交项目自有的 OpenSpec Skill
-.agents/skills/*
-!.agents/skills/openspec-apply-change/
-!.agents/skills/openspec-apply-change/**
-!.agents/skills/openspec-archive-change/
-!.agents/skills/openspec-archive-change/**
-!.agents/skills/openspec-explore/
-!.agents/skills/openspec-explore/**
-!.agents/skills/openspec-propose/
-!.agents/skills/openspec-propose/**
+# 本机工具与临时资料
+.agents/
+.claude/
+.research/
 
 # 凭据、签名材料与本机配置
 .env

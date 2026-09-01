@@ -46,7 +46,7 @@ const PLAN: V3MigrationPlan = {
   ],
 };
 
-/** 真实组件长列表验收 fixture；只由开发入口使用，不调用磁盘或原生迁移。 */
+/** 真实组件长列表验收夹具；只由演示入口使用，不调用磁盘或原生迁移。 */
 const MANY_CONFLICTS_PLAN: V3MigrationPlan = {
   entries: Array.from({ length: 60 }, (_value, index) => ({
     hash: index.toString(16).padStart(64, "0"),

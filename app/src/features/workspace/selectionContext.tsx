@@ -1,5 +1,5 @@
 /**
- * 统一选择 Context（任务 8.5，设计第七条）。
+ * 统一选择 Context。
  *
  * 图片瀑布流/列表与提示词卡片/列表共用同一个 Provider：状态机来自 selection.ts，
  * 这里只负责把修饰键单击翻译成动作、把键盘语法挂到 handleKeyDown 上，并以局部

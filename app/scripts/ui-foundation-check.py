@@ -1,4 +1,4 @@
-"""通过真实组件展台验收 UI 基础；只操作内存 fixture，不访问使用者素材库。"""
+"""通过真实组件展台验收 UI 基础；只操作内存夹具，不访问使用者素材库。"""
 import argparse
 import json
 from pathlib import Path

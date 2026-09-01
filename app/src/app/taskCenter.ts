@@ -1,9 +1,9 @@
 /**
- * 全局任务中心的应用级 seam（任务 6.1，设计第三条与第十三条）。
+ * 全局任务中心的应用级 seam。
  *
  * `TaskCenter` 只聚合长任务的可见状态，不拥有任何业务事务：导入、导出、迁移
  * 与批量组织的回滚、重试和缓存失效都由各自的协调器负责。本文件定义任务记录
- * 的封闭类型与 store 的窄 interface；store 实现、节流与保留规则在任务 6.3 落地。
+ * 的封闭类型与 store 的窄 interface；store 实现、节流与保留规则在对应模块中维护。
  *
  * 两条规格红线在这里被类型与合同钉死：
  * - 只有后端确认后才进入 `stopped`——唯一能写入 stopped 的入口是
@@ -119,7 +119,7 @@ export type TaskRegistrationInput = {
   /** 库作用域：任务属于哪个打开的库。 */
   libraryId: string;
   /**
-   * 是否允许使用者请求停止。导入与导出为 true；普通批量组织在本变更中必须为
+   * 是否允许使用者请求停止。导入与导出为 true；普通批量组织必须为
    * false——不允许冒充可取消任务；迁移进入权威写入阶段后同样为 false。
    */
   stoppable: boolean;
@@ -148,7 +148,7 @@ export type TaskRegistrationResult =
   | { kind: "rejected_by_concurrency"; conflictingTaskId: TaskId };
 
 /**
- * 任务中心 store 的窄 interface（实现见任务 6.3）。
+ * 任务中心 store 的窄 interface。
  *
  * 所有方法都是明确动作，没有字符串主题；界面经 [`TaskCenter.subscribe`] 的
  * 无参信号加快照拉取接入 React。以下不变量实现 MUST 保证，违规一律抛错而不是

@@ -156,7 +156,6 @@ Windows 发布流程、隔离安装生命周期、SHA-256 清单和签名边界�
 - `app/src/modules/prompt-library/`：提示词工作区的实现。
 - `app/src-tauri/`：Tauri 窗口、IPC 和平台能力。
 - `docs/assets/`：README 使用的产品图标和匿名界面截图。
-- `openspec/`：产品规格、工程决策和验收记录。
 - `docs/`：发布和维护文档。
 
 Vistash 的图片像素处理、缩放、缩略图和色卡分析在 Rust 侧完成；界面层不读取像素缓冲，也不内置模型供应商密钥。
@@ -174,4 +173,4 @@ Vistash 的图片像素处理、缩放、缩略图和色卡分析在 Rust 侧完
 
 ## 许可证
 
-Vistash 自有源代码和明确归属的项目文档以 [MIT License](LICENSE) 发布。MIT 允许使用、修改和再分发，但必须保留版权和许可证声明；它不改变第三方依赖、字体、图标或外部素材各自的许可证义务。依赖与资产归属见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，仓库治理调研见 [`docs/research/open-source-repository-hygiene.md`](docs/research/open-source-repository-hygiene.md)。
+Vistash 自有源代码和明确归属的项目文档以 [MIT License](LICENSE) 发布。MIT 允许使用、修改和再分发，但必须保留版权和许可证声明；它不改变第三方依赖、字体、图标或外部素材各自的许可证义务。依赖与资产归属见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

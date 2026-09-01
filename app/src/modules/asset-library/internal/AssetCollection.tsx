@@ -100,7 +100,7 @@ export function AssetCollection(props: CollectionProps): ReactNode {
     return asset;
   }, [assets]);
   const getItemKey = useCallback((index: number) => getAsset(index).hash, [getAsset]);
-  // 虚拟化已由 OpenSpec 固定选型；实例只在本集合内部使用。
+  // 虚拟化实例只在本集合内部使用。
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer({
     count: assets.length,

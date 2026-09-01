@@ -1,11 +1,11 @@
 /**
- * 统一 SelectionModel（任务 8.4，设计第七条）。
+ * 统一 SelectionModel。
  *
  * 图片瀑布流/列表与提示词卡片/列表共用这一台状态机与同一套键盘语法；渲染器各自
- * 优化，但都不持有选择权威——虚拟化依赖只负责位置与可见项（设计第八条）。状态保存
+ * 优化，但都不持有选择权威——虚拟化依赖只负责位置与可见项。状态保存
  * 五类事实：查询有序 ID、活动 ID、选中集合、范围锚点与聚焦 ID。
  *
- * 纯 reducer：不触碰 React、不触碰 IPC，Context 接线属于任务 8.5。
+ * 纯 reducer：不触碰 React、不触碰 IPC，由 Context 接线。
  */
 
 export type SelectionState = {

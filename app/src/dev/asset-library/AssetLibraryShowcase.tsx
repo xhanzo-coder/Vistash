@@ -35,10 +35,10 @@ const assetsByLibrary = new Map(LIBRARIES.map((library, libraryIndex) => [librar
   byte_size: original.byteLength, width: 1024, height: 1024, imported_at: "2026-08-27T00:00:00Z",
   original_filename: `fixture-${index}.png`, display_filename: `${libraryIndex === 0 ? "甲" : "乙"}库测试图-${index}.png`,
   source_path: null, folder: null, deleted_at: null, color_card_status: "ok", color_card_algo_version: 1,
-  color_card_failure_reason: null, color_card_sampled_pixel_count: 1, note: "开发专用品牌测试图", favorite: false, tags: [], colors: [{ hex: "#E8664A", oklab_l: .6, oklab_a: .2, oklab_b: .1, share: .8, role: "dominant" }, { hex: "#171919", oklab_l: .2, oklab_a: 0, oklab_b: 0, share: .2, role: "neutral" }],
+  color_card_failure_reason: null, color_card_sampled_pixel_count: 1, note: "品牌演示测试图", favorite: false, tags: [], colors: [{ hex: "#E8664A", oklab_l: .6, oklab_a: .2, oklab_b: .1, share: .8, role: "dominant" }, { hex: "#171919", oklab_l: .2, oklab_a: 0, oklab_b: 0, share: .2, role: "neutral" }],
 }))]));
 const promptsByLibrary = new Map(LIBRARIES.map((library) => [library.id, ["光影参考", "归档提示词"].map((title, index): PromptRow => ({
-  id: `fixture-prompt-${index}`, title, body: "开发专用普通提示词，不执行图像反推。", model: null, parameters: null, note: "", favorite: false, folders: [], tags: [], linked_image_hashes: index === 1 ? ["0".repeat(64)] : [], cover_image_hash: null, resolved_cover_hash: null, created_at: "2026-08-28T00:00:00Z", updated_at: "2026-08-28T00:00:00Z", deleted_at: index === 1 ? "2026-08-28T00:00:00Z" : null,
+  id: `fixture-prompt-${index}`, title, body: "演示用普通提示词，不执行图像反推。", model: null, parameters: null, note: "", favorite: false, folders: [], tags: [], linked_image_hashes: index === 1 ? ["0".repeat(64)] : [], cover_image_hash: null, resolved_cover_hash: null, created_at: "2026-08-28T00:00:00Z", updated_at: "2026-08-28T00:00:00Z", deleted_at: index === 1 ? "2026-08-28T00:00:00Z" : null,
 }))]));
 
 function record(value: unknown): Record<string, unknown> {
@@ -56,7 +56,7 @@ function folderName(value: unknown): string {
   return name;
 }
 
-/** 只安装在开发展台；生产入口不会加载此模块，也不会访问真实库。 */
+/** 只安装在演示入口；生产入口不会加载此模块，也不会访问真实库。 */
 mockIPC((command, payload) => {
   const request = record(payload);
   switch (command) {
@@ -333,8 +333,8 @@ export function AssetLibraryShowcase(): ReactNode {
   const [originalFailure, setOriginalFailure] = useState(false);
   const [exportConflictState, setExportConflict] = useState(false);
   return <main className={styles.page}>
-    <div className={styles.controls} aria-label="开发验收控制">
-      <span>图片模块验收 · 品牌测试图 · 非完整工作区</span>
+    <div className={styles.controls} aria-label="演示控制">
+      <span>图片模块演示 · 品牌测试图 · 非完整工作区</span>
       <Button size="compact" onClick={() => {
         const index = libraryIndex === 0 ? 1 : 0;
         currentLibrary = LIBRARIES[index].id;

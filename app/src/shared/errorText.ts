@@ -1,7 +1,7 @@
 /**
  * 错误码到中文文案的映射。**全项目唯一一处。**
  *
- * 界面必须同时呈现错误码本身与这份可读说明，不得只显示通用失败文案——`app-shell` 规格的
+ * 界面必须同时呈现错误码本身与这份可读说明，不得只显示通用失败文案——这是统一的界面约定。
  * 理由是：错误码是本项目诊断问题的唯一稳定标识，只给通用文案会让失败无法归因。
  *
  * 这张表的完整性由 Rust 侧的测试守着（见 `src-tauri` 的 `error_text_covers_every_code`）：
@@ -91,12 +91,12 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "clipboard.image_too_large": "剪贴板里的图片超出本应用支持的像素上限，未导入。",
   "clipboard.write_failed": "把图片复制到系统剪贴板失败。库内素材未受影响，可重试。",
 
-  // export 域：原图导出（设计第十二条）
+  // export 域：原图导出
   "export.target_invalid": "导出目标不是可用的文件夹。导出只写入你明确选择的既有文件夹，请重新选择目标位置。",
   "export.asset_missing": "找不到这张图的原始数据。列表可能已过期——请刷新后重试；其余素材不受影响。",
   "export.write_failed": "把原图写入目标文件夹失败。已写入的其他文件保持不变，可重试失败的条目。",
 
-  // external 域：默认程序打开（任务 5.6）
+  // external 域：默认程序打开
   "external.open_failed": "用系统默认程序打开这张图失败。库内素材未受影响；请检查该图片类型的默认打开方式设置后重试。",
 
   // transfer 域：导入与导出共享的任务身份

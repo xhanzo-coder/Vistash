@@ -4,7 +4,7 @@ import { useLazyThumbnailUrl } from "../workspace/thumbnailUrl";
 import { ErrorLine } from "../library/ErrorLine";
 
 /**
- * 提示词卡片的封面缩略图（任务 10.1）。
+ * 提示词卡片的封面缩略图。
  *
  * 与素材缩略图共用同一套懒加载生命周期；画幅固定为卡片封面的 3:2，超出部分由
  * `object-fit: cover` 裁剪。图片对卡片而言是装饰：卡片的可访问名称已经携带标题

@@ -1,5 +1,5 @@
 /**
- * 基线测量的共享 fixture 与 IPC 桩（任务 11.4）。
+ * 基线测量的共享 fixture 与 IPC 桩。
  *
  * measure-perf 与诊断脚本共同消费：buildBootstrap() 返回一段注入页面的初始化
  * 脚本——先铺 10,000 条素材/提示词数据，再把 window.__TAURI_INTERNALS__ 换成

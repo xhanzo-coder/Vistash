@@ -1,4 +1,4 @@
-"""验证显示文件名编辑，只操作开发内存库及品牌测试图。"""
+"""验证显示文件名编辑，只操作内存演示库及品牌测试图。"""
 import argparse
 import json
 from pathlib import Path

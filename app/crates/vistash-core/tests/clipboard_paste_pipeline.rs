@@ -1,10 +1,10 @@
-//! 剪贴板粘贴进入导入管线的桥接测试（任务 5.2 失败测试，任务 5.3 完成接线）。
+//! 剪贴板粘贴进入导入管线的桥接测试。
 //!
 //! 资源管理器复制的文件与目录必须复用既有路径导入流程——按磁盘事实分类成
 //! `ImportSource`，不允许另起一套粘贴语义；截图位图必须在 Rust 侧编码为
-//! PNG 并获得包含本地时间的显示文件名（asset-library 规格与调研文档 2.2 节），
+//! PNG 并获得包含本地时间的显示文件名（产品契约），
 //! 前端全程不见像素。末尾两组用例走真实协调器：粘贴入库的来源身份、归属与
-//! 内容查重必须与文件导入完全一致（设计第十条）。
+//! 内容查重必须与文件导入完全一致。
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -53,7 +53,7 @@ fn a_clipboard_bitmap_encodes_to_a_decodable_png() {
 
 #[test]
 fn the_clipboard_display_name_carries_local_time_and_png_extension() {
-    // 调研文档冻结的形态："剪贴板图片 YYYY-MM-DD HHMMSS.png"。时间取本地时区，
+    // 产品约定的形态："剪贴板图片 YYYY-MM-DD HHMMSS.png"。时间取本地时区，
     // 使用者在外部资源管理器里能按名字直接认出截图时刻。
     let at = chrono::Local
         .with_ymd_and_hms(2026, 8, 26, 14, 25, 30)
@@ -65,7 +65,7 @@ fn the_clipboard_display_name_carries_local_time_and_png_extension() {
     );
 }
 
-// —— 任务 5.3：经统一协调器的端到端合同 ——
+// —— 当前实现：经统一协调器的端到端合同 ——
 
 struct Fixture {
     _dir: tempfile::TempDir,

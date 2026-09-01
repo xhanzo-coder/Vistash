@@ -1,12 +1,12 @@
 /**
- * `asset-library` 模块的唯一公共出口（任务 6.4，设计第二条）。
+ * `asset-library` 模块的唯一公共出口。
  *
  * 本模块内部拥有查询、选择、文件夹、标签、检查器、灯箱、导入导出、布局偏好、
  * query key、虚拟化与图片 URL 生命周期。其他模块与应用外壳只允许从本文件
  * 导入，`internal/` 是实现细节——结构检查 `scripts/module-boundaries.lib.mjs`
  * 强制这一契约；与 `prompt-library` 的关联变更经权威写入结果与模块级失效事件
- * 协调，不经任何一方内部实现。会话切片已由任务 8.2 实现，后续能力仍通过
- * 这一个 interface 接入；生产 App 的统一切换属于任务 11.3。
+ * 协调，不经任何一方内部实现。后续能力仍通过这一个 interface 接入；生产 App
+ * 只依赖公开出口。
  */
 
 import type { AssetId, RequestId } from "../../app/common";

@@ -16,14 +16,14 @@ pub const LIBRARY_FORMAT_VERSION: u32 = 1;
 
 /// 库格式 v2 的版本号。
 ///
-/// v2 相对 v1 只有两处差别（设计第四条）：`library.json` 增加稳定 `library_id`，
+/// v2 相对 v1 只有两处差别：`library.json` 增加稳定 `library_id`，
 /// 图片侧车升级到 v2 并强制写入纯文本备注与收藏。它与 `LIBRARY_FORMAT_VERSION` 并存
 /// 而不是直接把后者改成 2，因为迁移实现之前生产读写路径必须继续按 v1 处理既有库，
 /// 否则一次普通启动就会把正常的 v1 库判成缺字段的损坏库。
 pub const LIBRARY_FORMAT_VERSION_V2: u32 = 2;
 
 /// 库格式 v3：图片侧车改为显式来源、必填显示名与单一文件夹归属，库级元数据字段与
-/// v2 相同、仅版本号推进。由 v2→v3 迁移提交写入；打开门禁自任务 3.5 起识别它。
+/// v2 相同、仅版本号推进。由 v2→v3 迁移提交写入；打开门禁识别此版本。
 pub const LIBRARY_FORMAT_VERSION_V3: u32 = 3;
 
 pub const META_FILE: &str = "library.json";
@@ -33,7 +33,7 @@ pub const OBJECTS_DIR: &str = "objects";
 pub const TRASH_DIR: &str = "trash";
 pub const THUMBNAILS_DIR: &str = "thumbnails";
 pub const PROMPTS_DIR: &str = "prompts";
-/// 提示词权威文件子目录，位于 `prompts/` 之下（设计第二条）。
+/// 提示词权威文件子目录，位于 `prompts/` 之下。
 pub const PROMPT_OBJECTS_DIR: &str = "objects";
 /// 提示词回收站子目录。它与图片回收站分开，使两类素材各自呈现自己的可恢复删除区。
 pub const PROMPT_TRASH_DIR: &str = "trash";
@@ -48,7 +48,7 @@ const SUBDIRS: &[&str] = &[OBJECTS_DIR, TRASH_DIR, THUMBNAILS_DIR, PROMPTS_DIR];
 
 /// v1 库级元数据。
 ///
-/// 生产路径已切到 [`LibraryMetaV2`]（任务 3.3），这个结构此后只服务迁移：迁移在提交
+/// 生产路径已切到 [`LibraryMetaV2`]，这个结构此后只服务迁移：迁移在提交
 /// 新版本之前必须读出旧文件里的建库时间与建库版本，而那些字段只存在于 v1 文件里。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LibraryMeta {
@@ -85,7 +85,7 @@ impl LibraryMeta {
 
 /// 库的稳定标识。
 ///
-/// 前端按库分别记住布局、视图、筛选与滚动上下文（设计第一条），这些偏好的键必须是
+/// 前端按库分别记住布局、视图、筛选与滚动上下文，这些偏好的键必须是
 /// 这个 ID 而不是库路径：使用者把库目录改名或搬到另一个盘之后，路径键会静默丢掉全部
 /// 偏好，而使用者看到的现象是"设置自己复位了"。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -287,7 +287,7 @@ impl From<LibraryMetaV3> for LibraryMetaV2 {
 
 /// 文件夹清单。
 ///
-/// 本变更只负责建立并读写这个文件，文件夹的增删改与界面属于后续变更。用斜杠分隔的
+/// 本模块负责建立并读写这个文件，文件夹的增删改与界面使用相同的
 /// 路径字符串而不是带 id 的树结构，是为了与 `AssetSidecar::folders` 保持同一种表示——
 /// 两处若用不同表示，同步逻辑就会成为一个必须存在的模块。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -403,7 +403,7 @@ impl Library {
         }
 
         let meta = LibraryMetaV2 {
-            // 任务 3.5 起新库直接以当前代（v3）建立。结构体名仍是 V2：打开后的运行期
+        // 新库直接以当前代（v3）建立。结构体名仍是 V2：打开后的运行期
             // 统一按这一份同构字段消费（见 From<LibraryMetaV3> 的文档），代际只是
             // `format_version` 字段与打开门禁的事。
             format_version: LIBRARY_FORMAT_VERSION_V3,
@@ -540,7 +540,7 @@ impl Library {
         self.root.join(TRASH_DIR)
     }
 
-    /// 缩略图独立成树（设计第四条）：它是可重算的派生数据，与权威本体混在同一棵
+    /// 缩略图独立成树：它是可重算的派生数据，与权威本体混在同一棵
     /// 树里会让"重建缩略图"这类操作写进权威目录。
     pub fn thumbnails_dir(&self) -> PathBuf {
         self.root.join(THUMBNAILS_DIR)
@@ -670,7 +670,7 @@ mod tests {
 
     #[test]
     fn a_v1_metadata_file_is_refused_by_the_v2_reader_instead_of_defaulted() {
-        // 设计第四条：发现 v1 时必须启动显式迁移，而不是用 serde 默认值补出 library_id。
+        // 约束：发现 v1 时必须启动显式迁移，而不是用 serde 默认值补出 library_id。
         // 补出来的 ID 每次启动都可能不同，而它正是分库布局偏好的键。
         let (_d, root) = fresh();
         std::fs::create_dir_all(&root).expect("建立目录");
@@ -732,8 +732,8 @@ mod tests {
 
     #[test]
     fn a_freshly_created_library_is_born_at_the_current_generation() {
-        // 建库必须直接产出当前代的 `library.json`（v1→v2 时是任务 3.3 的教训，
-        // v2→v3 起同理）：否则一个刚建好的空库会被翻转后的打开门禁判成"需要迁移"。
+        // 建库必须直接产出当前代的 `library.json`：否则一个刚建好的空库会被打开门禁
+        // 判成"需要迁移"。
         let (_d, root) = fresh();
         let lib = Library::create(&root).expect("建库");
         assert!(matches!(
@@ -849,7 +849,7 @@ mod tests {
         let opened = Library::open(&root).expect("打开库");
         assert_eq!(created.meta(), opened.meta());
         assert_eq!(opened.meta().hash_algo, HASH_ALGO_ID);
-        // 任务 3.5 起新库直接以当前代（v3）建立：否则一个刚建好的库会被翻转后的
+        // 新库直接以当前代（v3）建立：否则一个刚建好的库会被打开门禁
         // 打开门禁判成"需要迁移"，而迁移的输入本该是旧库——新库里一张都没有。
         assert_eq!(opened.meta().format_version, LIBRARY_FORMAT_VERSION_V3);
     }
@@ -955,7 +955,7 @@ mod tests {
 
     #[test]
     fn thumbnails_live_in_their_own_tree() {
-        // 设计第四条：缩略图与权威本体分树，使重建缩略图不会写进 objects/。
+        // 约束：缩略图与权威本体分树，使重建缩略图不会写进 objects/。
         let (_d, root) = fresh();
         let lib = Library::create(&root).expect("建库");
         let h = ContentHash::of_bytes(b"abc");

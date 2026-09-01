@@ -1,4 +1,4 @@
-"""验收图片栏位宽度/折叠与详情列表列；只操作开发内存库。"""
+"""验收图片栏位宽度/折叠与详情列表列；只操作内存演示库。"""
 import argparse
 import json
 from pathlib import Path
@@ -68,7 +68,7 @@ def main():
                         row = collection.get_by_role("option").first
                         expect(row.locator('[data-column="folder"]')).to_have_text("未分类")
                         expect(row.locator('[data-column="format"]')).to_have_text("PNG")
-                        expect(row.locator('[data-column="note"]')).to_have_text("开发专用品牌测试图")
+                        expect(row.locator('[data-column="note"]')).to_have_text("品牌演示测试图")
                         if width == 1440:
                             expect(header.get_by_text("备注", exact=True)).to_be_visible()
                             expect(header.get_by_text("导入时间", exact=True)).to_be_visible()

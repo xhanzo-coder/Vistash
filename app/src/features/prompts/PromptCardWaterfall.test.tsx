@@ -408,7 +408,7 @@ test("单击选中、Ctrl 并入统一选择集合", async () => {
   expect(harness.selection().selected).toEqual(["prompt-1"]);
   expect(harness.item(1).getAttribute("aria-selected")).toBe("true");
 
-  // listbox 键盘模式语义（任务 11.3）：容器多选、卡片命中区是选项。
+  // listbox 键盘模式语义：容器多选、卡片命中区是选项。
   const scroller = harness.scroller();
   expect(scroller.getAttribute("role")).toBe("listbox");
   expect(scroller.getAttribute("aria-multiselectable")).toBe("true");

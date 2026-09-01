@@ -50,7 +50,7 @@ function coverHashOf(prompt: PromptRow): string | null {
 }
 
 /**
- * 虚拟化提示词卡片瀑布流（任务 10.1）。
+ * 虚拟化提示词卡片瀑布流。
  *
  * 卡片身份是提示词素材而非关联图片（规格）：有关联图片时最多展示一张封面，
  * 多图显示关联总数 `N 张`；无图片时就是可读的纯文本卡片，不要求占位图。选择权威在统一
@@ -96,7 +96,7 @@ export function PromptCardWaterfall({
 
   const { columnCount, laneWidth } = waterfallMetrics(containerWidth, targetTileWidth, GAP);
 
-  // 定点豁免：设计第八条把位置与可见项锁定给 @tanstack/react-virtual；它返回的
+  // 定点豁免：位置与可见项由 @tanstack/react-virtual 提供；它返回的
   // 函数只在本组件内消费，不进 memo 化子组件。
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer({
@@ -169,7 +169,7 @@ export function PromptCardWaterfall({
     <div
       ref={scrollRef}
       className="prompt-waterfall"
-      /* 瀑布流是 listbox 键盘模式（任务 11.3）：卡片命中区是选项，方向键/
+      /* 瀑布流是 listbox 键盘模式：卡片命中区是选项，方向键/
          Home/End 与 Shift 范围由统一 SelectionModel 接管；卡内的复制/收藏是
          Tab 可达的附属控件，不参与方向键巡游。 */
       role="listbox"

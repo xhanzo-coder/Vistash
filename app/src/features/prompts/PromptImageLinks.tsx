@@ -71,7 +71,7 @@ function outcomeLabel(outcome: ImportAndLinkReport["items"][number]["outcome"]):
 }
 
 /**
- * 提示词检查器的关联图片分区主体（任务 10.5）。
+ * 提示词检查器的关联图片分区主体。
  *
  * 关联数据经 linked_image_states 自取自刷：解除/建立只改变这条提示词自己的关联，
  * 调用方以活动提示词作 key 渲染本组件——换活动项即重新挂载，加载状态自然干净。

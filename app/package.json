@@ -9,7 +9,6 @@
     "dev:ui-kit": "vite --open /?dev=ui-kit",
     "dev:app-shell": "vite --open /?dev=app-shell",
     "dev:library-lifecycle": "vite --open /?dev=library-lifecycle&state=welcome",
-    "prototype:image-library": "vite --open /?prototype=image-library&variant=A",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "oxlint --type-aware",

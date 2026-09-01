@@ -1,11 +1,11 @@
-//! 任务 5.4 的失败测试：原图导出、显示文件名、冲突计划与安全停止的合同。
+//! 原图导出、显示文件名、冲突计划与安全停止的合同。
 //!
-//! asset-transfer 规格"原图导出与同名冲突处理"+ 设计第十二条：导出用显示文件名
+//! 原图导出与同名冲突处理：导出用显示文件名
 //! 与真实扩展名复制原始字节，绝不修改库内本体或侧车；同名冲突先生成冲突计划，
 //! 使用者明确选择跳过、覆盖或自动编号后才写入，覆盖前必须有明确确认；批量导出
 //! 以单素材为失败隔离单元并逐项报告，支持在单文件边界停止。
 //!
-//! 本文件先于实现存在，在任务 5.5 完成前保持编译失败——这正是失败测试的交付形态。
+//! 测试覆盖原图导出、显示文件名、冲突计划与安全停止等行为。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -74,7 +74,7 @@ fn write_image(path: &Path, format: ImageFormat, color: [u8; 3]) {
         .expect("写入样本图");
 }
 
-/// 占用一次导出运行：与导入共用同一长任务注册表和库级闸（设计第十条统一语义）。
+/// 占用一次导出运行：与导入共用同一长任务注册表和库级闸。
 fn begin_run(runs: &TransferRuns, library: &Library) -> Arc<TransferRun> {
     runs.begin_export(library).expect("库空闲时应能开始导出")
 }
@@ -392,7 +392,7 @@ fn stopping_at_a_file_boundary_keeps_finished_and_counts_pending() {
     )
     .expect("停止不是整体失败");
 
-    // 只有协调器确认退出才进入 stopped（asset-transfer 规格）。
+    // 只有协调器确认退出才进入 stopped。
     assert_eq!(run.state(), TransferRunState::Stopped);
     assert_eq!(
         report.exported.len() + report.skipped_existing + report.failed.len(),
@@ -476,7 +476,7 @@ fn exporting_into_a_missing_directory_is_a_stable_error() {
     );
 }
 
-// —— 组七：单图复制位图（任务 5.6）——
+// —— 组七：单图复制位图——
 //
 // 规格："复制图像"只允许单张，多选出站走批量导出；位图由后端从权威本体解码，
 // 像素全程不经过前端。API 只收一个哈希——结构上不存在"多选合成"的入口。

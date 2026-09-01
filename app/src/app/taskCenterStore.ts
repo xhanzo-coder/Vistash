@@ -1,11 +1,11 @@
 /**
- * [`TaskCenter`] 的唯一 store 实现（任务 6.3，设计第十三条）。
+ * [`TaskCenter`] 的唯一 store 实现。
  *
  * 纯 TypeScript 闭包工厂，不依赖任何框架：界面经 `subscribe` 的无参信号加
  * `snapshot` 拉取接入 React（`useSyncExternalStore`）。这里只做聚合与不变量
  * 执法——回滚、重试、缓存失效仍归各协调器。
  *
- * 三条规格红线在本文件的落点：
+ * 三条行为约束在本文件的落点：
  * - 并发键：同键非终态任务唯一，重叠注册返回指向当前任务的拒绝结果。
  * - 真实停止确认：[`confirmStopped`] 是唯一能把记录写成 `stopped` 的入口，
  *   且仅接受 `stopping`——前端隐藏进度永远不算已停止。

@@ -37,10 +37,10 @@ const SORTABLE_COLUMNS: ReadonlyArray<{ label: string; column: PromptSortColumn 
 ];
 
 /**
- * 虚拟化提示词详情列表（任务 10.2）。
+ * 虚拟化提示词详情列表。
  *
  * 以标题/正文摘要、提示词文件夹、共享标签、关联图片数、模型/平台、收藏与更新
- * 时间为主要列（规格）。窗口化交给锁定的 @tanstack/react-virtual 单车道虚拟化；
+ * 时间为主要列。窗口化交给锁定的 @tanstack/react-virtual 单车道虚拟化；
  * 选择权威在统一 SelectionModel，与卡片瀑布流共用同一个 Provider——视图等价：
  * 切换不清空查询、排序、选择与活动项。表头与行样式复用图片侧详情列表的通用类，
  * 仅在 `.prompt-detail-list` 下替换栅格列定义。
@@ -58,7 +58,7 @@ export function PromptDetailList({
   const { state, onItemClick, handleKeyDown } = useSelection();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // 定点豁免：设计第八条把位置与可见项锁定给 @tanstack/react-virtual；它返回的
+  // 定点豁免：位置与可见项由 @tanstack/react-virtual 提供；它返回的
   // 函数只在本组件内消费，不进 memo 化子组件。
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer({

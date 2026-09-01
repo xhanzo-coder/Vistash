@@ -1,5 +1,5 @@
 /**
- * 分库布局偏好模型（任务 8.3，设计第一条）。
+ * 分库布局偏好模型。
  *
  * 偏好的键是库 ID（`LibraryStatus.library_id`）而不是库路径：使用者把库目录改名
  * 或搬到另一个盘之后，路径键会静默丢掉全部偏好，而使用者看到的现象是"设置自己
@@ -145,7 +145,7 @@ export function normalizeLayout(saved: unknown): WorkspaceLayout {
  * 解析一个库的双工作台持久化值。
  *
  * `null` 只表示从未保存；其他形状必须同时包含两个 section。这里不兼容旧的单层
- * 开发期结构，损坏或过期数据应由调用方作为明确错误呈现。
+ * 结构，损坏或过期数据应由调用方作为明确错误呈现。
  */
 export function normalizeLibraryLayout(saved: unknown): LibraryWorkspaceLayout {
   if (saved === null) return defaultLibraryLayout();

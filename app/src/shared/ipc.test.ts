@@ -256,7 +256,7 @@ test("importStop 调用真实停止命令并转交任务状态", async () => {
 });
 
 test("pasteImport 走窗口粘贴命令且不携带任何像素参数", async () => {
-  // 设计第十一条：前端只决定按键由谁认领；分流在后端。这里固定的合同是
+  // 前端只决定按键由谁认领；分流在后端。这里固定的合同是
   // command 名与参数面——除当前文件夹与进度通道外不得有其他入参，更没有
   // 像素缓冲的位置。
   const outcome: ImportOutcome = {
@@ -319,7 +319,7 @@ test("pasteImport 在剪贴板无可导入内容时转交全零报告", async ()
 });
 
 test("exportAssets 使用固定 command、参数面与类型化冲突策略", async () => {
-  // 设计第十二条：导出是只读库的出站操作；策略是类型化枚举值，
+  // 导出是只读库的出站操作；策略是类型化枚举值，
   // 覆盖（overwrite）必须由界面先取得使用者明确确认后才允许传入。
   const outcome: ExportOutcome = {
     task_id: "task-export-001",
@@ -377,7 +377,7 @@ test("exportAssets 使用固定 command、参数面与类型化冲突策略", as
 });
 
 test("copyAssetToClipboard 与 openWithDefaultApp 是单哈希窄命令", async () => {
-  // 任务 5.6：复制图像与默认程序打开都只允许单张——"多选不合成"由参数面
+  // 复制图像与默认程序打开都只允许单张——"多选不合成"由参数面
   // 在结构上锁死：入参只有 hash 一个键，不存在数组形状的入口；多选出站
   // 只能走 export_assets 的批量通路。
   const seen: Record<string, Record<string, unknown>> = {};

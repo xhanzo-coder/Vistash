@@ -13,14 +13,8 @@
 
 请安装 Node.js、pnpm、Rust stable MSVC toolchain、Visual Studio 生成工具和 WebView2 Runtime。项目有两个命令工作目录：
 
-- 仓库根目录：Git、OpenSpec 和文档命令；
+- 仓库根目录：Git 和文档命令；
 - `app/`：pnpm、前端测试和 Cargo 命令。
-
-安装项目固定版本的 OpenSpec CLI：
-
-```powershell
-npm install --global @fission-ai/openspec@1.3.0
-```
 
 首次安装依赖：
 
@@ -37,16 +31,9 @@ pnpm tauri dev
 
 ## 变更流程
 
-实质性功能、缺陷修复、重构、数据库/库格式变更、构建或发布变更，都必须先建立 OpenSpec change：
+实质性功能、缺陷修复、重构、数据库/库格式变更或发布变更，请先在 Issue 中说明目标和验收标准，再从最新 `main` 创建一个聚焦的分支。变更应按“需求 → 实现 → 测试 → PR”推进，并在 PR 中保留必要的设计理由和回滚方式。
 
-```powershell
-openspec new change <verb-noun>
-openspec status --change <change-id>
-```
-
-按 proposal → specs → design（需要时）→ tasks 完成产物，再逐项实施。每项任务通过验证后立即更新 `tasks.md`；归档前必须通过严格校验。
-
-仅修改不影响运行行为的文字、注释或格式时，可以说明原因后不创建 change。
+仅修改不影响运行行为的文字、注释或格式时，可以直接提交小 PR，但仍需说明影响范围。
 
 ## 提交前门禁
 
@@ -60,12 +47,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-OpenSpec 严格校验在仓库根目录执行：
-
-```powershell
-openspec validate --all --strict --no-interactive
-```
-
 可读文档、任务和代码注释统一使用简体中文；Markdown、YAML、JSON、TOML、HTML、CSS、JavaScript 和 TypeScript 使用 UTF-8 无 BOM。提交前还应运行 `git diff --check`，并检查 README/Markdown 的仓库内相对链接和截图路径均存在。
 
 ## README、截图和文档
@@ -75,7 +56,7 @@ openspec validate --all --strict --no-interactive
 ## 提交 Pull Request
 
 1. 从最新 `main` 创建 `codex/` 或功能分支。
-2. 一个 PR 聚焦一个 OpenSpec change；说明变更目的、测试命令和已知限制。
+2. 一个 PR 聚焦一个问题或功能；说明变更目的、测试命令和已知限制。
 3. 在 PR 描述中列出未运行的检查及原因，不要用“应该可以”代替证据。
 4. 等待 GitHub CI 通过后再请求合并；不要修改或覆盖已推送的版本 tag。
 

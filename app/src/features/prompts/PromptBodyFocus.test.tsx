@@ -294,7 +294,7 @@ test("Esc 在脏状态下同样先要三选一", async () => {
   await harness.unmount();
 });
 
-test("对话框打开后 Esc 是留在当前页，Tab 圈住三个动作（任务 11.3）", async () => {
+test("对话框打开后 Esc 是留在当前页，Tab 圈住三个动作", async () => {
   const closed: number[] = [];
   const harness = await setupFocus(makePrompt(), { onClose: () => closed.push(1) }, true);
 

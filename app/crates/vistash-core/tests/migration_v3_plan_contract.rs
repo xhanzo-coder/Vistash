@@ -36,7 +36,7 @@ fn v2_sidecar(seed: &[u8], folders: &[&str]) -> AssetSidecarV2 {
 fn library_with_sidecar(sidecar: &AssetSidecarV2) -> (tempfile::TempDir, Library) {
     let directory = tempfile::tempdir().expect("建立临时目录");
     let library = Library::create(&directory.path().join("library")).expect("建立库");
-    // 建库入口自任务 3.5 起直接产出 v3 库级元数据；本契约验证的是 v2→v3 规划，
+    // 建库入口直接产出 v3 库级元数据；本契约验证的是 v2→v3 规划，
     // 夹具因此显式把 library.json 降写回 v2，与下方按 v2 写出的侧车保持同代。
     let v2_meta = vistash_core::library::LibraryMetaV2 {
         format_version: vistash_core::library::LIBRARY_FORMAT_VERSION_V2,

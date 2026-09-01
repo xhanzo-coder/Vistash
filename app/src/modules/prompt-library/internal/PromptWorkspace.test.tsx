@@ -74,13 +74,13 @@ let purgeReply: {
   purged: number;
   failures: Array<{ id: string; title: string | null; error: { code: string; detail: string | null } }>;
 };
-/** 全部 batch_* 命令的统一应答；多选批量测试按需改写（任务 11.2）。 */
+/** 全部 batch_* 命令的统一应答；多选批量测试按需改写。 */
 let batchReply: BatchReport;
 /** link_images 对这些提示词 id 抛错：驱动批量关联的逐项失败聚合。 */
 let linkFailureIds: string[];
 /** catalog_snapshot 的应答：批量关联选择器的图片候选，默认空库。 */
 let catalogReply: CatalogSnapshot | null;
-/** 分库布局偏好存储：read_layout 的应答源，write_layout 原样写入（任务 11.2）。 */
+/** 分库布局偏好存储：read_layout 的应答源，write_layout 原样写入。 */
 let savedLayouts: Record<string, unknown>;
 let excludeFilteredPrompts: boolean;
 let failPromptSave: boolean;
@@ -105,7 +105,7 @@ class DormantIntersectionObserver implements IntersectionObserver {
   unobserve(): void {}
 }
 
-/** jsdom 不做布局，窗口层级由显式设定的视口宽度决定（任务 8.6）。 */
+/** jsdom 不做布局，窗口层级由显式设定的视口宽度决定。 */
 function setWindowWidth(width: number): void {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
 }
@@ -231,7 +231,7 @@ beforeEach(() => {
     }
     if (command === "restore_prompt") return restoreOutcome;
     if (command === "purge_prompt_trash") return purgeReply;
-    // 多选分区的批量关联选择器自取图片候选（任务 11.2）：默认空库。
+    // 多选分区的批量关联选择器自取图片候选：默认空库。
     if (command === "catalog_snapshot") {
       return catalogReply ?? { assets: [], folders: [], tags: [], trash_count: 0 };
     }
@@ -258,7 +258,7 @@ beforeEach(() => {
       }
       return undefined;
     }
-    // 分库布局偏好（任务 11.2）：按库隔离的读写，驱动双库布局恢复 seam 测试。
+    // 分库布局偏好：按库隔离的读写，驱动双库布局恢复 seam 测试。
     if (command === "read_layout") {
       if (isRecordPayload(payload) && typeof payload.libraryId === "string") {
         return savedLayouts[payload.libraryId] ?? null;
@@ -655,7 +655,7 @@ test("工作区组合查询：搜索、文件夹、标签、收藏与回收站�
   await flush();
   expect(queries.at(-1)?.favorite).toBe(true);
 
-  // 回收站切换清空标签筛选并改查 trash 位置（任务 10.6 前先占住位置语义）。
+  // 回收站切换清空标签筛选并改查 trash 位置。
   const trash = harness.container.querySelector<HTMLButtonElement>('[aria-label="回收站"]');
   if (trash === null) throw new Error("缺少回收站入口");
   await act(async () => trash.click());
@@ -1450,7 +1450,7 @@ test("批量建立图片关联逐条建立普通关联并聚合逐项失败", as
     { promptId: "prompt-2", hashes: [candidate.hash] },
   ]);
 
-  // 单条失败不阻断其余条目（设计第六条）：失败项以可识别标题与稳定错误码呈现。
+  // 单条失败不阻断其余条目：失败项以可识别标题与稳定错误码呈现。
   const status = harness.container.querySelector<HTMLElement>(".operation-status");
   if (status === null) throw new Error("缺少批量报告区");
   expect(status.textContent).toContain("成功 1 项");

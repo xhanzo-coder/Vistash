@@ -1,11 +1,11 @@
 //! Tauri command 薄层。
 //!
-//! 本模块的职责边界见设计第一条：**只做参数转换与错误码映射，不含业务判断**。凡是
+//! 本模块的职责边界见约束：**只做参数转换与错误码映射，不含业务判断**。凡是
 //! "什么情况下算重复""缩略图缺失该怎么办"一类的判断都在 `vistash-core` 里，因为那些
 //! 判断需要被 `cargo test` 直接验证，而本模块的每个函数都要求先有一个 WebView 才能跑。
 //!
 //! 本层还承担两个适配职责：把核心导入观察点转为 Tauri typed `Channel`，以及在导入完成
-//! 后更新 SQLite 索引。`import` 与 `index` 在设计第一条里是同一层的两个模块，彼此没有
+//! 后更新 SQLite 索引。`import` 与 `index` 在约束里是同一层的两个模块，彼此没有
 //! 依赖箭头，因此只能由它们上面的命令层编排；重复判定、回滚和媒体处理仍全部留在核心。
 //!
 //! IPC 边界上的字段名一律用 Rust 侧的 snake_case，不做 camelCase 改写：核心类型与
@@ -64,7 +64,7 @@ pub struct AppState {
     recorded_path: Option<String>,
     /// 启动时恢复上次的库失败的原因。首次运行时为 `None`。
     restore_problem: Option<AppError>,
-    /// 默认程序打开的只读副本管理器（任务 5.6）。会话 ID 每次运行生成一次，
+    /// 默认程序打开的只读副本管理器。会话 ID 每次运行生成一次，
     /// 由装配层构造后传入；清理逻辑凭它识别"当前会话"并永不自删。
     external_open: ExternalOpenManager,
 }
@@ -74,7 +74,7 @@ impl AppState {
     ///
     /// 恢复走的是 [`Library::open`] 而不是 `open_or_create`：记录的路径若已被移走或改名，
     /// 必须报告并回到选择界面，**绝不能建出一个新的空库**——那会让使用者面对空库却以为
-    /// 素材全丢了。规格把这条列为明令禁止。
+    /// 素材全丢了。该路径明确报告错误，不会创建空库掩盖问题。
     pub fn restore(
         settings_path: PathBuf,
         layouts_dir: PathBuf,
@@ -110,7 +110,7 @@ impl AppState {
 
 /// 打开一个已存在的库及其派生数据。不创建库。
 fn open_at(root: &Path) -> Result<Arc<Opened>> {
-    // 设计第九条：v2→v3 提交期间进程被结束时，下次开库必须先经恢复入口整体回滚，
+    // 约束：v2→v3 提交期间进程被结束时，下次开库必须先经恢复入口整体回滚，
     // 不能带着"半迁移"现场继续。对没有未完成提交的库它是零写入的快速探测；
     // 恢复与提交共用同一份索引重建注入，保证回滚出的旧元数据配上一致的索引。
     let mut rebuild = |index_root: &Path| Index::rebuild_at(index_root).map(|_| ());
@@ -139,7 +139,7 @@ pub type Shared = Mutex<AppState>;
 pub struct LibraryStatus {
     /// 已打开的库根路径。`None` 表示需要使用者选择。
     pub path: Option<String>,
-    /// 打开库的稳定标识。分库布局偏好以它为键（设计第一条）：键是库身份而不是
+    /// 打开库的稳定标识。分库布局偏好以它为键：键是库身份而不是
     /// 路径，目录改名或搬到另一个盘后偏好仍然跟随，不会表现为"设置自己复位"。
     pub library_id: Option<LibraryId>,
     /// 设置里记录的库路径。`path` 为 `None` 而它有值时，前端可以直接对它发起迁移，
@@ -163,7 +163,7 @@ pub struct ImportOutcome {
     pub duplicates: usize,
     /// 观察到停止后尚未处理的来源数；不是失败。
     pub pending_count: usize,
-    /// 逐条失败。规格要求批量操作的失败可逐条查看，不得只报总数。
+    /// 逐条失败。批量操作的失败可逐条查看，不得只报总数。
     pub failures: Vec<ImportFailure>,
 }
 
@@ -197,7 +197,7 @@ fn not_selected() -> AppError {
 /// `Library::open` 按 v2 必填字段解析，遇到 v1 只能报"元数据损坏"；但对使用者而言
 /// 两者完全不同：前者是正常旧库，应当给出迁移入口，后者才需要担心数据。因此开库
 /// 失败后再问一次 `detect_library_format`，把前者换成一个稳定的"需要迁移"错误码，
-/// 让界面能据此启动明确的一次性迁移（设计第四条），而不是让使用者对着损坏文案发懵。
+/// 让界面能据此启动明确的一次性迁移，而不是让使用者对着损坏文案发懵。
 fn with_migration_signal<T>(root: &Path, attempt: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
     attempt(root).map_err(|open_error| {
         let needs_migration = matches!(
@@ -300,7 +300,7 @@ fn folder_filter_of(folder: FolderFilterInput) -> Result<FolderFilter> {
     })
 }
 
-/// 共享标签词面的解析。图片与提示词共用同一套标签词法（设计第五条）。
+/// 共享标签词面的解析。图片与提示词共用同一套标签词法。
 fn parse_tags(raw: &[String]) -> Result<Vec<Tag>> {
     raw.iter().map(|tag| Tag::parse(tag)).collect()
 }
@@ -400,7 +400,7 @@ pub struct MigrationProgress {
 
 /// 执行 v1→v2 一次性迁移，成功后把路径记为待 v3 迁移。
 ///
-/// 迁移可能面对上万个侧车（任务 2.6 的量级），因此放 blocking worker。进度经
+/// 迁移可能面对上万个侧车，因此放 blocking worker。进度经
 /// typed `Channel` 呈现，与文件夹批量重命名同一模式。进度发送失败不中止迁移：
 /// 迁移的完整性由独占锁、journal 与备份树保证，不依赖有没有人在观察；中止语义
 /// 属于将来显式的取消入口，而不是通道断开的副作用。
@@ -414,7 +414,7 @@ pub async fn migrate_library(
     let migration_root = root.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<()> {
         let mut migration = Migration::new(&migration_root);
-        // 索引重建由迁移以回调注入（设计第四条步骤 4）：迁移只负责权威文件，
+        // 索引重建由迁移以回调注入：迁移只负责权威文件，
         // 派生索引属于 Catalog 一侧。`rebuild_at` 以库根路径为入口，正是迁移
         // "版本最后提交"顺序所需要的——此刻 v2 library.json 还不在磁盘上。
         let mut rebuild = |root: &Path| Index::rebuild_at(root).map(|_| ());
@@ -464,7 +464,7 @@ pub enum V3FolderPlanDto {
 }
 
 /// v2→v3 迁移计划中的单个素材。刻意不暴露侧车相对路径：那是库内布局，
-/// 界面只需要素材身份与冲突候选（设计第十二条）。
+/// 界面只需要素材身份与冲突候选。
 #[derive(Debug, Clone, Serialize)]
 pub struct V3MigrationPlanEntryDto {
     pub hash: String,
@@ -498,7 +498,7 @@ fn to_v3_plan_dto(plan: V3MigrationPlan) -> V3MigrationPlanDto {
 
 /// 为一个 v2 库生成只读的 v2→v3 迁移计划。
 ///
-/// 计划阶段不写任何权威字节；多归属素材以 `conflict` 呈现候选，由使用者在界面上
+    /// 计划阶段不写任何权威字节；多归属素材以 `conflict` 呈现候选，由使用者在界面上
 /// 完成唯一目标选择后调用 [`commit_v3_migration`]。上万侧车的扫描放 blocking worker。
 #[tauri::command]
 pub async fn plan_v3_migration(path: String) -> Result<V3MigrationPlanDto> {
@@ -785,7 +785,7 @@ impl TransferObserver for ChannelObserver {
     }
 }
 
-/// 统一导入入口（设计第十条）：按钮、拖放与目录选择都汇入同一条命令。
+/// 统一导入入口：按钮、拖放与目录选择都汇入同一条命令。
 ///
 /// 前端只交来路径与当前工作区位置；来源分类由后端按磁盘事实裁决——拖放事件拿不到
 /// "这是目录还是文件"，而层级语义取决于它。目录扫描、查重、层级映射与停止观察全部
@@ -820,7 +820,7 @@ fn import_sources_blocking(
     opened: &Opened,
 ) -> Result<ImportOutcome> {
     let _import_guard = lock(&opened.import_gate)?;
-    // 来源分类复用核心的同一函数（任务 5.3）：拖放/选择与剪贴板粘贴的文件路径
+    // 来源分类复用核心的同一函数：拖放/选择与剪贴板粘贴的文件路径
     // 走完全相同的"按磁盘事实分类"，不允许两条入口各写一套判断。
     let sources = import::classify_paths(
         paths
@@ -881,7 +881,7 @@ fn run_import(
 
 /// 剪贴板里没有可导入内容时的全零报告。
 ///
-/// 文本、网址与空剪贴板不是错误（设计第十一条：纯文本不处理），前端据此提示
+/// 文本、网址与空剪贴板不是错误，前端据此提示
 /// "剪贴板里没有可导入的图片"而不是弹错误。
 const EMPTY_PASTE_OUTCOME: ImportOutcome = ImportOutcome {
     task_id: None,
@@ -926,7 +926,7 @@ fn paste_import_blocking(
     }
 }
 
-/// 窗口级 Ctrl+V 的统一入口（设计第十一条）：前端只决定"这个按键由谁认领"，
+/// 窗口级 Ctrl+V 的统一入口：前端只决定"这个按键由谁认领"，
 /// 剪贴板上有什么、按什么顺序分流全部由后端裁决。WebView 没有任何通用剪贴板
 /// 权限——位图像素从系统剪贴板到库内本体全程不经过前端。
 ///
@@ -989,7 +989,7 @@ pub async fn plan_export(
     })?
 }
 
-/// 原图导出（任务 5.5，设计第十二条）。
+/// 原图导出。
 ///
 /// 只读库的出站操作：核心协调器按"侧车显示文件名 + 真实扩展名"复制原始字节到
 /// 使用者明确选择的目标目录，库内本体与侧车一个字节都不改。`policy` 是类型化枚举，
@@ -1063,7 +1063,7 @@ fn export_assets_blocking(
     })
 }
 
-/// 单图复制位图到系统剪贴板（任务 5.6，设计第十二条）。
+/// 单图复制位图到系统剪贴板。
 ///
 /// 参数是单个哈希：复制图像只允许单张，多选不合成、多选出站一律走批量导出——
 /// 这条规则由 API 形状保证，本命令在结构上就不存在一次喂进多张图的入口。
@@ -1124,7 +1124,7 @@ fn write_bitmap_to_clipboard(
     ))
 }
 
-/// 用系统默认程序打开素材原图（任务 5.6，调研 §4–§5 冻结的隔离模型）。
+/// 用系统默认程序打开素材原图。
 ///
 /// 绝不把库内本体路径交给外部程序：外部写入与删除不可控，而本体是权威对象。
 /// 流程是把原始字节复制为应用缓存侧的只读临时副本，**只把副本路径**交给系统打开；
@@ -1167,7 +1167,7 @@ pub async fn open_with_default_app(
 }
 
 /// 导入任务的可见状态。只有后端确认后才是 `stopped`——前端仅停止等待或隐藏进度
-/// MUST NOT 冒充任务已停止（asset-transfer 规格）。
+    /// MUST NOT 冒充任务已停止。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferRunStateDto {
@@ -1192,7 +1192,7 @@ pub struct TransferRunStatusDto {
     pub state: TransferRunStateDto,
 }
 
-/// 提交导入停止请求：真实的后端命令（设计第十条）。返回提交后的任务状态；
+/// 提交导入停止请求：真实的后端命令。返回提交后的任务状态；
 /// 没有进行中的导入时报告 `stopped`——无事可停即已停。
 #[tauri::command]
 pub fn import_stop(
@@ -1935,7 +1935,7 @@ mod tests {
         );
     }
 
-    /// 为测试构造一个指向临时目录的只读副本管理器（任务 5.6）。
+    /// 为测试构造一个指向临时目录的只读副本管理器。
     ///
     /// 会话 ID 用真实生成路径：状态恢复不关心它，但构造签名要求有一份。
     fn external_manager_for(
@@ -1949,12 +1949,12 @@ mod tests {
 
     /// 界面层不得读取像素。
     ///
-    /// `app-shell` 规格禁止前端用 `Canvas`、`OffscreenCanvas` 或 `ImageData` 读取像素做缩放、
+    /// 前端禁止用 `Canvas`、`OffscreenCanvas` 或 `ImageData` 读取像素做缩放、
     /// 采样或聚类。约束的理由不是分层洁癖：浏览器的缩放行为会随内核版本变化，而 Rust 侧的
     /// 结果可以被测试锁定；色卡一旦有第二套实现，同一张图就会有两种颜色。
     ///
     /// 做成自动检查而不是一次性目视：目视只在写下这条时有效，而这条约束要长期成立。
-    /// 渲染原图用的 `<img>` 不在禁止范围内——规格明确写了那属于渲染而非像素读取。
+    /// 渲染原图用的 `<img>` 不在禁止范围内，因为那属于渲染而非像素读取。
     #[test]
     fn the_ui_layer_never_reads_pixels() {
         // 匹配调用形式而不是裸标识符。裸标识符会把说明这条约束的注释本身当成违规——
@@ -2062,7 +2062,7 @@ mod tests {
 
     /// 待迁移的旧库必须得到稳定的"需要迁移"信号，而不是"元数据损坏"。
     ///
-    /// 设计第四条要求开库发现 v1 时启动明确的一次性迁移。若这个状态被压进损坏文案，
+    /// 约束要求开库发现 v1 时启动明确的一次性迁移。若这个状态被压进损坏文案，
     /// 使用者会对一个完全正常的旧库以为素材已经丢失。
     #[test]
     fn a_v1_library_is_signaled_as_needing_migration_not_corruption() {
@@ -2102,7 +2102,7 @@ mod tests {
 
     /// 库状态必须携带稳定的库 ID。
     ///
-    /// 分库布局偏好以它为键（设计第一条）：前端拿不到 ID 就只能退回路径键，而路径键
+    /// 分库布局偏好以它为键：前端拿不到 ID 就只能退回路径键，而路径键
     /// 会在库目录改名或搬家时静默丢掉全部偏好——使用者看到的现象是"设置自己复位了"。
     /// 预期值从磁盘上的权威 `library.json` 独立读回，而不是经由同一份内存对象自证。
     #[test]

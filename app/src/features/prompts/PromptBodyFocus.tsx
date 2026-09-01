@@ -48,7 +48,7 @@ function isDirty(prompt: PromptRow, drafts: FieldDrafts): boolean {
 }
 
 /**
- * 长文本聚焦编辑器（任务 10.3 只读呈现，任务 10.4 升级为显式保存编辑）。
+ * 长文本聚焦编辑器。
  *
  * 主字段（正文/标题/模型/参数）只在明确编辑状态中修改，由"保存"或 Ctrl+S 显式
  * 写入；保存失败不退出编辑状态也不丢弃草稿（规格硬约束）。备注是独立自动保存流，
@@ -164,7 +164,7 @@ export function PromptBodyFocus({
     setStatus((current) => (current.kind === "saving" ? current : { kind: "idle" }));
   }
 
-  // 初始聚焦与键盘纪律都在 DraftGuardDialog 内部落实（任务 11.3 抽出）。
+  // 初始聚焦与键盘纪律都在 DraftGuardDialog 内部落实。
 
 
   return (

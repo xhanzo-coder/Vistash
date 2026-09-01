@@ -1,4 +1,4 @@
-//! ClipboardPort 契约测试（任务 5.1）。
+//! ClipboardPort 契约测试。
 //!
 //! 内存 adapter 与生产 Windows adapter 都必须满足同一组分流转交规则：
 //! 文件列表优先于位图——资源管理器复制图片文件时剪贴板往往同时带可显示位图，
@@ -67,8 +67,8 @@ fn bitmap_without_files_routes_to_bitmap() {
 #[test]
 fn text_only_reports_text_without_any_import() {
     // 纯文本与图片网址第一阶段都不处理：端口如实报告 Text 载荷，
-    // 由命令层据此不启动导入任务、也不发起网络下载（asset-transfer 规格的
-    // "拒绝网址抓取"场景）。端口自身绝不去抓取或改写剪贴板。
+    // 由命令层据此不启动导入任务、也不发起网络下载（纯文本不会触发网址抓取）。
+    // 端口自身绝不去抓取或改写剪贴板。
     let mut port =
         MemoryClipboard::with_availability(ClipboardAvailability::new().with_text("https://example.com/pic.jpg"));
     assert_eq!(

@@ -29,7 +29,7 @@ beforeEach(() => {
   statesReply = [];
   // 关联图片格位挂载即登记懒加载；全局 IntersectionObserver 处于休眠桩态不会
   // 触发载入，这里仍备好缩略图处理器以免意外触发时落空。多选分区的批量关联
-  // 选择器自取 catalog_snapshot 候选（任务 11.2）：本文件只测检查器自身，给空集。
+  // 选择器自取 catalog_snapshot 候选：本文件只测检查器自身，给空集。
   mockIPC((command) => {
     if (command === "plugin:event|listen" || command === "plugin:event|unlisten") {
       // 关联分区尝试订阅 Tauri 拖放事件：mock 环境没有真实事件流，静默应答。

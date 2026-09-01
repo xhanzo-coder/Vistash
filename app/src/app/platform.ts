@@ -1,13 +1,13 @@
 /**
- * 平台 seam 的领域 port（任务 6.1，设计第三条与第十六条）。
+ * 平台 seam 的领域 port。
  *
  * Tauri 是项目自有的跨进程依赖：生产用 `TauriPlatformAdapter`，测试用
- * `MemoryPlatformAdapter`（两者都在任务 6.2 实现，并满足同一套共享 contract
+ * `MemoryPlatformAdapter`（两者满足同一套共享 contract
  * tests）。port 只做传输映射——command、进度 channel、拖放事件、文件对话框、
  * 剪贴板导入意图、默认程序打开与媒体租约；产品规则、自动重试、缓存失效和
  * 默认值一律不进入 adapter。
  *
- * 合同基线（任务 6.2 的 contract tests 按此验证）：
+ * 合同基线：
  * - 所有拒绝都必须携带稳定错误码的 `AppError`（经 `IpcError` 抛出），不存在
  *   无码失败或通用"操作失败"文案的入口。
  * - 事件订阅只接受本文件与 `shared/ipc` 里类型化的判别联合载荷，返回取消
@@ -26,7 +26,7 @@ import type {
 } from "../shared/types";
 
 /**
- * 显式媒体租约（设计第十四条）：url 只是借用，release 必须由持有方在项卸载、
+ * 显式媒体租约：url 只是借用，release 必须由持有方在项卸载、
  * 换源、预览关闭、缓存淘汰或切库时调用。租约隐藏 blob URL 与未来 asset
  * protocol 的差异，调用方不感知字节来源。
  */
@@ -58,7 +58,7 @@ export interface PlatformPort {
   pickImportDirectory(): Promise<string | null>;
   /** 选择原图导出的目标目录；取消时返回 null。 */
   pickExportDirectory(): Promise<string | null>;
-  /** 选择库位置对话框；取消时解析为 null。规格禁止默认路径，因此没有位置参数。 */
+  /** 选择库位置对话框；取消时解析为 null，不提供默认路径。 */
   pickLibraryDirectory(): Promise<string | null>;
 
   // --- 拖放事件 -----------------------------------------------------------

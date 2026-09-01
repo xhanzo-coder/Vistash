@@ -1,5 +1,5 @@
 /**
- * Windows release 端到端验收（任务 11.5）。
+ * Windows release 端到端验收。
  *
  * 在真实 release WebView2（与系统 Edge 同为 Chromium 内核）里走通：v1→v2 迁移、两库
  * 组织、备注/收藏、多选批量、普通关联、封面、搜索、图片/提示词两类回收站的删除/还原/
@@ -472,7 +472,7 @@ async function main() {
     await page.keyboard.press("Escape");
 
     /* S9 种子提示词 + 提示词文件夹 UI 组织 */
-    // 创建入口属后续变更，因此只用 IPC 建立无归属种子；文件夹创建与归属必须走真实 UI。
+    // 创建入口只用 IPC 建立无归属种子；文件夹创建与归属必须走真实 UI。
     const promptTitle = `验收提示词-${process.pid}`;
     const createdPrompt = await page.evaluate(async ({ title }) => {
       return await window.__TAURI_INTERNALS__.invoke("create_prompt", {
