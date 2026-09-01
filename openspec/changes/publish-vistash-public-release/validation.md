@@ -24,6 +24,13 @@
 - PR #12 的 Windows 工程门禁运行 `33490614999` 成功（5 分 35 秒）；合并提交为 `b4385ed4dc94b099c2bc5e138228b5ae2f9687dd`。
 - `v0.1.1` 已转换为公开、非预发布 Release：[`Vistash v0.1.1`](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.1)，`isDraft=false`、`isPrerelease=false`，标题为 `Vistash v0.1.1 — 公开预览`。
 - 正文首屏明确未签名 SmartScreen 风险，并链接根目录 README；公开 Release 资产仍恰好为一个 NSIS、一个 MSI 和一个 `SHA256SUMS.txt`。
+- 公开后曾修正正文 README 相对链接为绝对 GitHub URL，并使用同一版本化说明重新更新 Release；最终 API 回读链接、标题、可见性和资产均正确。
 - 远程资产摘要未改变：NSIS `d4e5ca838788a74e103b65ffdc12ccb6bebc9cbe120ed64c2d2e2209d4d124f9`（3,790,988 字节）、MSI `57034d7328829eba26ff6bb6b6439dc16b501bd0d5214e05cad8bb15d06a6cae`（4,960,256 字节）、清单 `281200804574ec4421e0629fd1ea7f8584498524276839a471e0dd185bb84e4d`（188 字节）。
 - `v0.1.0` 与 `v0.1.1` tag 均未改变；`v0.1.0` 旧 Release 仍保持草稿状态。
 - 正式 Authenticode 签名仍未完成；本次公开对象严格称为“未签名公开预览”，没有上传任何签名凭据。
+
+## 终审
+
+- Standards 轴：PASS；未发现文档规范硬违规或需要处理的 Fowler smell。前次状态用词、源码路径和 Release 链接问题均已修正。
+- Spec 轴：PASS；公开预览、README 入口、资产完整性、SHA-256、未签名边界和旧 tag 隔离均满足规格，未发现缺失、scope creep 或错误实现。
+- 审查固定点：`b4385ed`；审查范围包含 README/发布说明提交、公开结果记录和文档修正提交，未修改生产运行代码。

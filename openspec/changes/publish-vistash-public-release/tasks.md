@@ -16,6 +16,6 @@
 
 ## 4. 终审与归档
 
-- [ ] 4.1 运行 Standards/Spec 双轴 code review，修复阻断项并记录结论
-- [ ] 4.2 通过 OpenSpec 全量 strict validate，同步 `windows-release-management` 主规格
+- [x] 4.1 运行 Standards/Spec 双轴 code review，修复阻断项并记录结论
+- [x] 4.2 通过 OpenSpec 全量 strict validate，同步 `windows-release-management` 主规格
 - [ ] 4.3 归档 `publish-vistash-public-release`，合并 PR 并清理临时发布分支，最终只保留 `main`
