@@ -54,14 +54,11 @@ node scripts/installer-lifecycle.mjs --nsis target/release/bundle/nsis/Vistash_0
 
 测试升级包移动到 `E:\vistash-release-e2e\upgrade-candidates\Vistash_0.1.1_x64-setup.exe`，大小 29,108,612 字节，SHA-256 为 `d36e017697fd4b30604f1526a6b538b456e2235c26026300f7795d35b9aadbe7`；它不属于 0.1.0 发布产物，已移出正式 bundle 目录。MSI 已完成实际 bundle、唯一性和哈希验证；本轮没有在当前使用者会话执行 MSI 的 per-machine 安装，以免引入管理员级系统变更。正式发布前仍应在专用 Windows 测试账户或 VM 补一次 MSI 安装/卸载矩阵。
 
-## 仍需发布前确认
+## 草稿公开前仍需确认
 
 - 图片工作区 change 的 11.5 仍需使用真实鼠标从 Explorer 拖入一个图片文件夹；自动化跨窗口拖动没有产生 Explorer OLE 文件载荷，不能冒充通过。
 - 在专用 Windows 测试账户或 VM 完成 MSI 安装/卸载与数据保留复验。
 - 选择并配置可信 Authenticode 方案，同时签名 NSIS 与 MSI；当前候选会触发 SmartScreen 风险。
-- 在 GitHub 启用无 bypass 的 active tag ruleset，目标包含 `refs/tags/v*`、没有 exclusion，并限制 update/deletion；发布工作流会在构建前读取并强制这些条件。
-- 完成提交、合并到清洁 `main`，由标签工作流重新构建；当前本机候选不得上传。
-- 用户确认候选后才在已合并 `main` 上创建受 active ruleset 保护的 `v0.1.0` annotated tag。0.1.0 经用户确认允许 Git tag 暂不做身份签名；本轮候选仍明确为未签名测试候选，不把 Git tag 策略混同于 Authenticode。创建 tag 前没有创建 GitHub Release，也没有生成证书或 updater 私钥。
 
 ## 2026-09-01 标签与恢复记录
 
@@ -69,3 +66,6 @@ node scripts/installer-lifecycle.mjs --nsis target/release/bundle/nsis/Vistash_0
 - PR #4 与 PR #5 的 Windows 工程门禁均通过并合并；`v0.1.0` annotated tag 已创建并固定到 `main` 提交 `74e4150bb9f1ee56732efd326c6a14909eb3e304`。
 - 首次标签工作流 `33461634057` 在 ruleset 验证阶段失败，尚未构建或创建 Release。根因是 GitHub Actions 内置 token 不返回 `bypass_actors`，PowerShell 对缺失属性执行数组计数得到 1，误判为存在 bypass。
 - 修复后的 workflow 对可见字段验证固定名称、active tag、include/exclude 与 update/deletion；若 API 返回 bypass 字段则拒绝非空值。新增 `workflow_dispatch(tag)`，从当前 `main` 的工作流定义 checkout 原标签并重跑全部门禁，不移动不可变标签。
+- PR #6 的 Windows CI 在 5 分 58 秒内通过并合并到 `main` 提交 `b68e3aff1166e027452a4b98db7cbe9f48a7a49c`。从该 `main` 手动调度 `release.yml` 并输入 `v0.1.0`，恢复运行 `33462529356` 在 16 分 38 秒内全部通过；checkout 的标签仍剥离到原提交 `74e4150bb9f1ee56732efd326c6a14909eb3e304`。
+- 草稿 Release `Vistash v0.1.0` 已创建，保持 `isDraft=true`。上传资产恰好为 `SHA256SUMS.txt`、`Vistash_0.1.0_x64-setup.exe` 与 `Vistash_0.1.0_x64_en-US.msi`。
+- GitHub 构建的 NSIS 为 3,790,974 字节，SHA-256 `fcf82724081144fe23fcf63eb3491f99572d95f39fc0f11a6895e117aefe958f`；MSI 为 4,960,256 字节，SHA-256 `da9416a6f748f89891a7726a5da243091c99c6d610652dbf34db54ea5254482c`。下载的 `SHA256SUMS.txt` 与两项资产 digest 一致。
