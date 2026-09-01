@@ -51,6 +51,12 @@ node scripts/installer-lifecycle.mjs --nsis E:\vistash-release-e2e\local-0.1.0-c
 
 用户已完成当前测试安装包的主要验收：图片页直接解除提示词关联、提示词页直接解除图片关联、多图提示词单封面＋总数展示。此前自动化视觉矩阵覆盖 18 个匿名状态，控制台错误和水平溢出均为 0。
 
+## 终审
+
+- Standards 轴：PASS；未发现违反 `AGENTS.md` / `CLAUDE.md` 的硬违规或需要处理的 Fowler smell。
+- Spec 轴：PASS；版本同步、不可变 tag、远程草稿资产、未签名边界和 0.1.0→0.1.1 隔离升级证据均覆盖当前规格；未发现缺失、scope creep 或错误实现。
+- 审查固定点：`4f9287c`；审查范围包含版本提交和本验证记录提交，未修改生产代码。
+
 ## 发布边界
 
 - `v0.1.1` tag 和 GitHub 草稿 Release 已创建；草稿仍未公开，旧 `v0.1.0` tag 和草稿未移动、未覆盖。
