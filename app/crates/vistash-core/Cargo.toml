@@ -14,7 +14,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 uuid.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = [
