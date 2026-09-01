@@ -135,4 +135,3 @@ TBD - created by archiving change redesign-image-library-workspace. Update Purpo
 
 - **WHEN** 使用者对一张图片执行“使用默认程序打开”
 - **THEN** Windows 使用默认关联程序打开该素材，Vistash 不承诺接收外部修改
-
