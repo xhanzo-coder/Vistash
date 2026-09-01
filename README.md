@@ -150,4 +150,4 @@ Vistash 的图片像素处理、缩放、缩略图和色卡分析在 Rust 侧完
 
 ## 许可证
 
-仓库当前尚未提交 `LICENSE` 文件。仓库公开可见不等同于已经授予开源、再分发或商用许可；在许可证正式确定前，如需复制、再分发或商用，请先联系项目维护者。
+Vistash 自有源代码和明确归属的项目文档以 [MIT License](LICENSE) 发布。MIT 允许使用、修改和再分发，但必须保留版权和许可证声明；它不改变第三方依赖、字体、图标或外部素材各自的许可证义务。依赖许可证审计见 [`docs/research/open-source-repository-hygiene.md`](docs/research/open-source-repository-hygiene.md)。
