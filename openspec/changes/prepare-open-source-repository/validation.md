@@ -36,3 +36,13 @@
 - topics：`image-management`、`local-first`、`prompt-management`、`react`、`rust`、`sqlite`、`tauri`、`windows`。
 - Secret Scanning、Push Protection、Dependabot security updates、vulnerability alerts 和 private vulnerability reporting 已启用。
 - `main` 仍为默认分支；不可变版本 tag ruleset 未改变。
+
+## 工程门禁
+
+- `pnpm lint`：通过。
+- `pnpm typecheck`：通过。
+- `pnpm test`：48 个 Vitest 文件、431 项测试和 26 项 Node 合同测试通过。
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过。
+- `cargo test --workspace`：Tauri crate 12 项、核心 crate 304 项及全部集成/文档测试通过。
+- `openspec validate --all --strict --no-interactive`：通过，10 项规格/变更全部通过。
+- `git diff --check`：通过；文本文件为 UTF-8 无 BOM。
