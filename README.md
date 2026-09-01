@@ -129,8 +129,8 @@ Windows 发布流程、隔离安装生命周期、SHA-256 清单和签名边界�
 ## 项目结构
 
 - `app/`：Tauri 2、React/TypeScript、Rust 和 SQLite 应用。
-- `app/src/features/assets/`：图片工作区的实现。
-- `app/src/features/prompts/`：提示词工作区的实现。
+- `app/src/modules/asset-library/`：图片工作区的实现。
+- `app/src/modules/prompt-library/`：提示词工作区的实现。
 - `app/src-tauri/`：Tauri 窗口、IPC 和平台能力。
 - `openspec/`：产品规格、工程决策和验收记录。
 - `docs/`：发布和维护文档。
