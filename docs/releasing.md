@@ -104,7 +104,35 @@ gh workflow run release.yml --ref main -f tag=v0.1.0
 
 恢复运行必须 checkout 输入标签并重新执行全部门禁；禁止移动、删除或重建标签来“重试”。
 
-## 6. 热修复与回滚
+## 6. v0.1.1 公开预览发布
+
+`v0.1.1` 已通过真实 Windows 桌面验收、安装生命周期验证、完整前端/Rust 门禁和 OpenSpec strict validate。它可以作为“未签名公开预览”对外提供，但不能被描述为已签名稳定版。
+
+公开前维护者必须确认：
+
+- `v0.1.1` 是不可变 annotated tag，且仍指向已经合并到 `main` 的提交；
+- Release 资产恰好为一个 `Vistash_0.1.1_x64-setup.exe`、一个 `Vistash_0.1.1_x64_en-US.msi` 和一个 `SHA256SUMS.txt`；
+- Release 正文首屏明确未签名 SmartScreen 风险，并链接到根目录 `README.md`；
+- `README.md`、`docs/releases/v0.1.1.md` 和 `SHA256SUMS.txt` 的版本、文件名和 SHA-256 一致；
+- 不存在 Authenticode、Git signing 或 updater 私钥，也没有把本机候选重新上传覆盖远程资产。
+
+完成核对后，把现有草稿转为公开预览，并使用版本化发布说明：
+
+```powershell
+gh release edit v0.1.1 --repo xhanzo-coder/Vistash --title "Vistash v0.1.1 — 公开预览" --notes-file docs/releases/v0.1.1.md --draft=false
+```
+
+公开后立即复核：
+
+```powershell
+gh release view v0.1.1 --repo xhanzo-coder/Vistash --json name,tagName,isDraft,assets,body
+```
+
+预期 `isDraft=false`，资产仍恰好为三个，正文含“未签名公开预览”和 SmartScreen 提示；`v0.1.0` tag 与 Release 不得改变。若公开后发现阻断问题，先把 Release 改回非公开并记录原因，再通过更高 SemVer 发布修复，不移动旧 tag 或替换旧资产。
+
+当前公开预览的安装、数据和功能边界见根目录 [`README.md`](../README.md)，版本专属说明见 [`docs/releases/v0.1.1.md`](releases/v0.1.1.md)。正式签名分发必须另立变更，选择可信 OV/EV 证书或受托云签名服务，并为更高版本重新构建、签名和验收。
+
+## 7. 热修复与回滚
 
 已发布版本发现阻断缺陷时：
 
@@ -116,7 +144,7 @@ gh workflow run release.yml --ref main -f tag=v0.1.0
 
 不得移动旧 tag、用新文件覆盖旧 Release 附件，或通过卸载用户数据实现“回滚”。需要撤回时先把有问题的 GitHub Release 标记为非公开并说明原因，再发布更高 patch。素材库格式变更必须保持前向迁移和明确备份，不能靠旧安装器写回新库。
 
-## 7. 0.1.0 不启用 updater
+## 8. 0.1.0 不启用 updater
 
 Tauri updater 与 Windows Authenticode 是两层不同签名。0.1.0 不包含 `tauri-plugin-updater`、`@tauri-apps/plugin-updater`、`updater:default` capability、endpoint、公钥、私钥或 `.sig` 产物，也不展示占位更新入口。
 
