@@ -2,13 +2,14 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type UIEvent,
 } from "react";
 
-import { waterfallMetrics } from "../assets/waterfallMetrics";
+import { waterfallMetrics } from "./waterfallMetrics";
 import { estimatedPromptCardHeight } from "./promptCardMetrics";
 import { PromptCoverImage } from "./PromptCoverImage";
 import { promptDisplayTitle } from "./promptDisplay";
@@ -17,6 +18,10 @@ import { useScrollRestore } from "../workspace/scrollRestore";
 import { useSelection } from "../workspace/selectionContext";
 import { useWaterfallBoxSelection } from "../workspace/waterfallBoxSelection";
 import type { PromptRow } from "../../shared/types";
+import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
+import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
+import { IconButton } from "../../ui/button/Button";
+import { Tooltip } from "../../ui/overlays/Tooltip";
 
 /** 列间与行间距（CSS px），与图片瀑布流共用同一节奏。 */
 const GAP = 12;
@@ -35,6 +40,8 @@ type PromptCardWaterfallProps = {
   onOpenFocused: (id: string) => void;
   /** 密度旋钮：期望卡片宽度。 */
   targetTileWidth?: number;
+  /** 外壳切换可见性时通知虚拟器重新测量隐藏容器的真实高度。 */
+  workspaceActive?: boolean;
 };
 
 /** 后端已经排除回收站图片并解析出唯一有效封面；界面层不重复推导删除状态。 */
@@ -62,15 +69,23 @@ export function PromptCardWaterfall({
   onToggleFavorite,
   onOpenFocused,
   targetTileWidth = 280,
+  workspaceActive = true,
 }: PromptCardWaterfallProps) {
   const { state, onItemClick, handleKeyDown } = useSelection();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
 
   // 容器宽度驱动列数密度；jsdom 无布局时保持 0，组件退化为单列等待真实读数。
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el === null) throw new Error("提示词瀑布流滚动容器在挂载后不存在");
+    const initialWidth = el.getBoundingClientRect().width;
+    if (initialWidth > 0) {
+      // 首次从列表切回卡片时，在浏览器绘制前建立虚拟列，避免等待
+      // ResizeObserver 的下一轮投递才出现首批卡片。
+      // oxlint-disable-next-line react/set-state-in-effect
+      setContainerWidth(initialWidth);
+    }
     const observer = new ResizeObserver((entries) => {
       const width = entries.at(-1)?.contentRect.width;
       if (width !== undefined) setContainerWidth(width);
@@ -97,6 +112,10 @@ export function PromptCardWaterfall({
     lanes: columnCount,
     getItemKey: (index) => prompts[index]?.id ?? String(index),
   });
+
+  useEffect(() => {
+    if (workspaceActive) virtualizer.measure();
+  }, [workspaceActive, virtualizer]);
 
   useScrollRestore(scrollRef, scrollKey, savedOffset);
   const boxSelection = useWaterfallBoxSelection(virtualizer, laneWidth, GAP);
@@ -154,6 +173,7 @@ export function PromptCardWaterfall({
          Home/End 与 Shift 范围由统一 SelectionModel 接管；卡内的复制/收藏是
          Tab 可达的附属控件，不参与方向键巡游。 */
       role="listbox"
+      aria-label="提示词集合"
       aria-multiselectable="true"
       aria-orientation="vertical"
       tabIndex={-1}
@@ -182,7 +202,7 @@ export function PromptCardWaterfall({
             {copyProblem}
           </p>
         )}
-        {virtualizer.getVirtualItems().map((item) => {
+        {(workspaceActive ? virtualizer.getVirtualItems() : []).map((item) => {
           const prompt = prompts[item.index];
           if (prompt === undefined) return null;
           const selected = state.selectedIds.has(prompt.id);
@@ -227,7 +247,7 @@ export function PromptCardWaterfall({
               >
                 {cover !== null && (
                   <span className="prompt-card-cover">
-                    <PromptCoverImage coverHash={cover} />
+                    <PromptCoverImage key={cover} coverHash={cover} />
                     {linkedCount > 1 && (
                       <span className="prompt-card-count" aria-hidden="true">
                         +{linkedCount - 1}
@@ -236,27 +256,23 @@ export function PromptCardWaterfall({
                   </span>
                 )}
                 <span className="prompt-card-title">{title}</span>
+                <span className="prompt-card-meta">{prompt.model ?? "未填写模型"}{prompt.tags.length === 0 ? "" : ` · ${prompt.tags.slice(0, 2).join("、")}`}{linkedCount === 0 ? "" : ` · ${linkedCount} 张关联图片`}</span>
                 <span className={`prompt-card-body${cover === null ? " is-text-only" : ""}`}>
                   {prompt.body}
                 </span>
               </button>
               <span className="prompt-card-actions">
-                <button
-                  type="button"
-                  aria-label={`复制正文 ${title}`}
-                  onClick={() => void copyBody(prompt.id, prompt.body)}
-                >
-                  复制
-                </button>
-                <button
-                  type="button"
-                  className="prompt-favorite-toggle"
-                  aria-pressed={prompt.favorite}
-                  aria-label={`${prompt.favorite ? "取消收藏" : "收藏"} ${title}`}
-                  onClick={() => onToggleFavorite(prompt.id, !prompt.favorite)}
-                >
-                  {prompt.favorite ? "★" : "☆"}
-                </button>
+                <Tooltip content="复制正文"><IconButton size="compact" label={`复制正文 ${title}`} icon={<CopyIcon />} onClick={() => void copyBody(prompt.id, prompt.body)} /></Tooltip>
+                <Tooltip content={prompt.favorite ? "取消收藏" : "收藏"}>
+                  <IconButton
+                    size="compact"
+                    className="prompt-favorite-toggle"
+                    aria-pressed={prompt.favorite}
+                    label={`${prompt.favorite ? "取消收藏" : "收藏"} ${title}`}
+                    icon={<StarIcon weight={prompt.favorite ? "fill" : "regular"} />}
+                    onClick={() => onToggleFavorite(prompt.id, !prompt.favorite)}
+                  />
+                </Tooltip>
               </span>
               {copiedId === prompt.id && (
                 <span role="status" className="prompt-copy-status">

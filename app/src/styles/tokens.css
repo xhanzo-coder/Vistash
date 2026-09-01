@@ -1,0 +1,161 @@
+:root {
+  color-scheme: light;
+
+  /* 浅色主题：同一档案结构的温和中性表面。 */
+  --surface-canvas: #ddd9d0;
+  --surface-panel: #f0ede6;
+  --surface-raised: #f8f5ee;
+  --surface-sunken: #e7e3da;
+  --surface-input: #fbf8f1;
+  /* 灯箱媒体表面独立于应用主题，方便检查透明像素与边缘。 */
+  --surface-media-dark: #0f1111;
+  --surface-media-light: #f8f5ee;
+  --surface-media-checker: #c9c5bc;
+  --surface-backdrop: rgb(17 19 19 / 72%);
+  --surface-rail: #e9e5dc;
+  --surface-rail-raised: #dedad1;
+
+  --text-primary: #171919;
+  --text-secondary: #555a57;
+  --text-tertiary: #686d69;
+  --text-inverse: #ebe7dd;
+  --text-on-accent: #111313;
+  --text-danger: #a9362d;
+
+  --border-subtle: #c9c5bc;
+  --border-strong: #777c78;
+  --border-dialog: var(--border-strong);
+
+  --accent: #e8664a;
+  --accent-hover: #d9573d;
+  --accent-muted: #f3d5cd;
+  --selection-surface: #efd1c8;
+  --selection-edge: #c94e36;
+  --focus-ring: #a9362d;
+
+  --status-success: #6e9b73;
+  --status-success-surface: #dce8dc;
+  --status-warning: #956126;
+  --status-warning-surface: #efe0c8;
+  --status-danger: #b63f35;
+  --status-danger-surface: #f2d8d4;
+
+  --font-ui: Bahnschrift, "Microsoft YaHei UI", sans-serif;
+  --font-display: Georgia, SimSun, serif;
+  --font-mono: Consolas, "Cascadia Mono", monospace;
+
+  --text-size-xs: 0.6875rem;
+  --text-size-sm: 0.75rem;
+  --text-size-md: 0.875rem;
+  --text-size-lg: 1.0625rem;
+  --text-size-xl: clamp(1.5rem, 2vw, 2rem);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-media: 3px;
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-pill: 999px;
+
+  --shadow-panel: 0 16px 42px rgb(35 37 36 / 14%);
+  --shadow-dialog: 0 28px 80px rgb(17 19 19 / 28%);
+
+  --motion-fast: 180ms;
+  --motion-layout: 220ms;
+  --motion-base: var(--motion-fast);
+  --motion-distance: 8px;
+  --motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-out: var(--motion-ease);
+
+  --breakpoint-medium: 1050px;
+  --breakpoint-narrow: 780px;
+
+  --z-sticky: 20;
+  --z-drawer: 30;
+  --z-popover: 40;
+  --z-dialog: 50;
+  --z-toast: 60;
+  --z-skip: 70;
+
+  /* 旧工作区在任务 11.3 切换前消费的兼容语义名称，不包含具体颜色。 */
+  --surface-paper: var(--surface-panel);
+  --surface-card: var(--surface-raised);
+  --text-on-rail: var(--text-primary);
+  --text-on-rail-muted: var(--text-secondary);
+  --text-on-rail-strong: var(--text-primary);
+  --border-on-rail: var(--border-subtle);
+  --border-on-rail-soft: var(--border-subtle);
+  --accent-strong: var(--accent-hover);
+  --selected-bg-on-rail: var(--selection-surface);
+  --selected-edge-on-rail: var(--selection-edge);
+  --focus-ring-on-rail: var(--focus-ring);
+  --danger: var(--status-danger);
+  --danger-strong: var(--text-danger);
+  --danger-soft: var(--status-danger-surface);
+  --danger-on-rail: var(--status-danger);
+  --danger-edge-on-rail: var(--status-danger);
+  --positive: var(--status-success);
+  --positive-edge: var(--status-success);
+  --positive-bg: var(--status-success-surface);
+  --positive-text: #335238;
+  --texture-grid-line: rgb(23 25 25 / 4%);
+  --font-body: var(--font-ui);
+  --radius-sm: var(--radius-media);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-canvas: #111313;
+  --surface-panel: #171919;
+  --surface-raised: #1c1f1e;
+  --surface-sunken: #0f1111;
+  --surface-input: #141716;
+  --surface-backdrop: rgb(5 6 6 / 74%);
+  --surface-rail: #141616;
+  --surface-rail-raised: #212422;
+
+  --text-primary: #ebe7dd;
+  --text-secondary: #adb0ab;
+  --text-tertiary: #858a86;
+  --text-inverse: #111313;
+  --text-on-accent: #111313;
+  --text-danger: #ff9b8d;
+
+  --border-subtle: #2b2e2d;
+  --border-strong: #666b67;
+
+  --accent: #e8664a;
+  --accent-hover: #f07a61;
+  --accent-muted: #3a2621;
+  --selection-surface: #30231f;
+  --selection-edge: #e8664a;
+  --focus-ring: #f58a72;
+
+  --status-success: #6e9b73;
+  --status-success-surface: #1f2b21;
+  --status-warning: #d09a59;
+  --status-warning-surface: #312719;
+  --status-danger: #e06b60;
+  --status-danger-surface: #392320;
+
+  --shadow-panel: 0 18px 48px rgb(0 0 0 / 28%);
+  --shadow-dialog: 0 30px 90px rgb(0 0 0 / 48%);
+
+  --positive-text: #b6d9b9;
+  --texture-grid-line: rgb(235 231 221 / 3%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-layout: 0ms;
+    --motion-distance: 0px;
+  }
+}

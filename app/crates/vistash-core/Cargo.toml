@@ -27,3 +27,8 @@ webp = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
+
+# 仅集成测试使用：制造真实的 ERROR_SHARING_VIOLATION（std 打开文件自带
+# FILE_SHARE_DELETE，普通句柄挡不住删除，必须显式独占打开）。
+[target."cfg(windows)".dev-dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security"] }

@@ -1,0 +1,5 @@
+.form { display: grid; gap: var(--space-3); }
+.form select { width: 100%; min-height: 2rem; padding: var(--space-2); color: var(--text-primary); background: var(--surface-input); border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
+.form button { justify-self: start; }
+.preview { display: flex; min-width: 0; align-items: baseline; gap: var(--space-2); margin: 0; color: var(--text-secondary); }
+.preview strong { min-width: 0; overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }

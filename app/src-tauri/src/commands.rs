@@ -22,17 +22,28 @@ use vistash_core::catalog::{
     ImportAndLinkReport, LinkedImageState, NewPrompt, PromptEdit, PromptLocation, PromptQuery,
     PromptPurgeReport, PromptRestoreOutcome, PromptSnapshot, PurgeReport, RestoreOutcome, Tag,
 };
+use vistash_core::clipboard::{self, ClipboardPayload};
 use vistash_core::error::{AppError, Code, Result};
+use vistash_core::external_open::ExternalOpenManager;
 use vistash_core::hashing::ContentHash;
-use vistash_core::import::{self, ImportFailure, ImportObserver, ImportOptions};
+use vistash_core::import::{self, ImportFailure, TransferObserver, TransferRuns};
 use vistash_core::index::{AssetRow, Index};
 use vistash_core::library::{Library, LibraryId};
 use vistash_core::media::MediaType;
 use vistash_core::migration::{
-    detect_library_format, LibraryFormatState, Migration, MigrationProgress as MigrationProgressCore,
+    detect_library_format, recover_interrupted_v3_commit, LibraryFormatState, Migration,
+    MigrationProgress as MigrationProgressCore, ResolvedV3MigrationPlan, V3CommitProgress,
+    V3FolderPlan, V3FolderResolution, V3MigrationCommit, V3MigrationPlan,
 };
 use vistash_core::prompt::{PromptAsset, PromptId};
 use vistash_core::settings::{AppSettings, LayoutStore};
+
+/// Tauri Builder 与全部传输命令共享的精确 managed-state 类型。
+pub type ManagedTransferRuns = Arc<TransferRuns>;
+
+pub fn managed_transfer_runs() -> ManagedTransferRuns {
+    Arc::new(TransferRuns::new())
+}
 
 /// 一个已打开的库及其索引。
 struct Opened {
@@ -53,6 +64,9 @@ pub struct AppState {
     recorded_path: Option<String>,
     /// 启动时恢复上次的库失败的原因。首次运行时为 `None`。
     restore_problem: Option<AppError>,
+    /// 默认程序打开的只读副本管理器（任务 5.6）。会话 ID 每次运行生成一次，
+    /// 由装配层构造后传入；清理逻辑凭它识别"当前会话"并永不自删。
+    external_open: ExternalOpenManager,
 }
 
 impl AppState {
@@ -61,13 +75,18 @@ impl AppState {
     /// 恢复走的是 [`Library::open`] 而不是 `open_or_create`：记录的路径若已被移走或改名，
     /// 必须报告并回到选择界面，**绝不能建出一个新的空库**——那会让使用者面对空库却以为
     /// 素材全丢了。规格把这条列为明令禁止。
-    pub fn restore(settings_path: PathBuf, layouts_dir: PathBuf) -> Self {
+    pub fn restore(
+        settings_path: PathBuf,
+        layouts_dir: PathBuf,
+        external_open: ExternalOpenManager,
+    ) -> Self {
         let mut state = Self {
             settings_path,
             layouts_dir,
             opened: None,
             recorded_path: None,
             restore_problem: None,
+            external_open,
         };
         let recorded = match AppSettings::read(&state.settings_path) {
             Ok(s) => s.last_library_path,
@@ -91,6 +110,11 @@ impl AppState {
 
 /// 打开一个已存在的库及其派生数据。不创建库。
 fn open_at(root: &Path) -> Result<Arc<Opened>> {
+    // 设计第九条：v2→v3 提交期间进程被结束时，下次开库必须先经恢复入口整体回滚，
+    // 不能带着"半迁移"现场继续。对没有未完成提交的库它是零写入的快速探测；
+    // 恢复与提交共用同一份索引重建注入，保证回滚出的旧元数据配上一致的索引。
+    let mut rebuild = |index_root: &Path| Index::rebuild_at(index_root).map(|_| ());
+    recover_interrupted_v3_commit(root, &mut rebuild)?;
     open_derived(Library::open(root)?)
 }
 
@@ -126,13 +150,31 @@ pub struct LibraryStatus {
 }
 
 /// 一次导入的结果。
+///
+/// 数量四桶互斥齐全（asset-transfer 停止规格）：已成功、重复、失败逐项与未处理。
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportOutcome {
+    /// 没有创建任务的剪贴板空操作为 `None`；真实导入始终为 `Some`。
+    pub task_id: Option<String>,
     pub imported: usize,
     /// 目录中被跳过的非图片文件数。
     pub skipped_non_images: usize,
+    /// 内容已在库内（或回收站）而未再次复制的来源数；既有素材保持原归属。
+    pub duplicates: usize,
+    /// 观察到停止后尚未处理的来源数；不是失败。
+    pub pending_count: usize,
     /// 逐条失败。规格要求批量操作的失败可逐条查看，不得只报总数。
     pub failures: Vec<ImportFailure>,
+}
+
+/// 导出命令的 IPC 结果：核心逐项报告加上传输任务身份。
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportOutcome {
+    pub task_id: String,
+    pub exported: Vec<String>,
+    pub skipped_existing: usize,
+    pub failed: Vec<vistash_core::export::ExportFailure>,
+    pub pending_count: usize,
 }
 
 fn lock_poisoned() -> AppError {
@@ -162,6 +204,7 @@ fn with_migration_signal<T>(root: &Path, attempt: impl FnOnce(&Path) -> Result<T
             detect_library_format(root),
             Ok(
                 LibraryFormatState::NeedsMigration { .. }
+                    | LibraryFormatState::NeedsV3Migration(_)
                     | LibraryFormatState::MigrationIncomplete(_)
             )
         );
@@ -355,7 +398,7 @@ pub struct MigrationProgress {
     pub current_filename: String,
 }
 
-/// 执行 v1→v2 一次性迁移，成功后把该库接管为当前库。
+/// 执行 v1→v2 一次性迁移，成功后把路径记为待 v3 迁移。
 ///
 /// 迁移可能面对上万个侧车（任务 2.6 的量级），因此放 blocking worker。进度经
 /// typed `Channel` 呈现，与文件夹批量重命名同一模式。进度发送失败不中止迁移：
@@ -368,8 +411,9 @@ pub async fn migrate_library(
     state: tauri::State<'_, Shared>,
 ) -> Result<LibraryStatus> {
     let root = PathBuf::from(&path);
-    let opened = tauri::async_runtime::spawn_blocking(move || -> Result<Arc<Opened>> {
-        let mut migration = Migration::new(&root);
+    let migration_root = root.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+        let mut migration = Migration::new(&migration_root);
         // 索引重建由迁移以回调注入（设计第四条步骤 4）：迁移只负责权威文件，
         // 派生索引属于 Catalog 一侧。`rebuild_at` 以库根路径为入口，正是迁移
         // "版本最后提交"顺序所需要的——此刻 v2 library.json 还不在磁盘上。
@@ -383,14 +427,143 @@ pub async fn migrate_library(
             });
         };
         migration.run(&mut rebuild, &mut forward)?;
-        // 迁移完成后该库必然是 v2，按普通开库路径接管。
-        open_at(&root)
+        Ok(())
     })
     .await
     .map_err(|error| {
         AppError::detailed(
             Code::LibraryIoFailed,
             format!("后台迁移任务异常终止：{error}"),
+        )
+    })??;
+
+    let recorded_path = root.to_string_lossy().into_owned();
+    let mut guard = lock(&state)?;
+    AppSettings {
+        format_version: vistash_core::settings::SETTINGS_FORMAT_VERSION,
+        last_library_path: Some(recorded_path.clone()),
+    }
+    .write_atomic(&guard.settings_path)?;
+    guard.opened = None;
+    guard.recorded_path = Some(recorded_path.clone());
+    guard.restore_problem = Some(AppError::detailed(
+        Code::LibraryFormatTooOld,
+        format!("v1→v2 已完成，仍需提交 v2→v3 迁移：{recorded_path}"),
+    ));
+    status_of(&guard)
+}
+
+/// v2→v3 迁移计划中一个素材的文件夹归属规划。
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum V3FolderPlanDto {
+    /// 零归属映射为未分类、单归属原样保留：无需使用者参与即可确定。
+    Automatic { folder: Option<String> },
+    /// 多归属冲突：必须由使用者在候选中为该素材选择唯一目标，提交前不得跳过。
+    Conflict { candidates: Vec<String> },
+}
+
+/// v2→v3 迁移计划中的单个素材。刻意不暴露侧车相对路径：那是库内布局，
+/// 界面只需要素材身份与冲突候选（设计第十二条）。
+#[derive(Debug, Clone, Serialize)]
+pub struct V3MigrationPlanEntryDto {
+    pub hash: String,
+    pub original_filename: String,
+    #[serde(flatten)]
+    pub folder: V3FolderPlanDto,
+}
+
+/// 一次 v2→v3 只读迁移计划。
+#[derive(Debug, Clone, Serialize)]
+pub struct V3MigrationPlanDto {
+    pub entries: Vec<V3MigrationPlanEntryDto>,
+}
+
+fn to_v3_plan_dto(plan: V3MigrationPlan) -> V3MigrationPlanDto {
+    V3MigrationPlanDto {
+        entries: plan
+            .entries
+            .into_iter()
+            .map(|entry| V3MigrationPlanEntryDto {
+                hash: entry.hash.as_str().to_owned(),
+                original_filename: entry.original_filename,
+                folder: match entry.folder {
+                    V3FolderPlan::Automatic(folder) => V3FolderPlanDto::Automatic { folder },
+                    V3FolderPlan::Conflict(candidates) => V3FolderPlanDto::Conflict { candidates },
+                },
+            })
+            .collect(),
+    }
+}
+
+/// 为一个 v2 库生成只读的 v2→v3 迁移计划。
+///
+/// 计划阶段不写任何权威字节；多归属素材以 `conflict` 呈现候选，由使用者在界面上
+/// 完成唯一目标选择后调用 [`commit_v3_migration`]。上万侧车的扫描放 blocking worker。
+#[tauri::command]
+pub async fn plan_v3_migration(path: String) -> Result<V3MigrationPlanDto> {
+    let root = PathBuf::from(&path);
+    let plan = tauri::async_runtime::spawn_blocking(move || V3MigrationPlan::inspect(&root))
+        .await
+        .map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("后台迁移规划任务异常终止：{error}"),
+            )
+        })??;
+    Ok(to_v3_plan_dto(plan))
+}
+
+/// 使用者对一个多归属素材选择的唯一保留文件夹。
+#[derive(Debug, Clone, Deserialize)]
+pub struct V3FolderResolutionInput {
+    pub hash: String,
+    pub folder: String,
+}
+
+/// 提交一次已完成全部冲突选择的 v2→v3 迁移，成功后把该库接管为当前库。
+///
+/// 冲突选择在这里与最新扫描的计划合并：`hash` 不在计划中或选择不属于原归属时返回
+/// 稳定的 `migration.resolution_invalid`，提交阶段还会再校验侧车摘要未被外部改动。
+/// 提交进入替换阶段后不可取消；进程中断由下一次开库经 [`open_at`] 的恢复入口回滚。
+#[tauri::command]
+pub async fn commit_v3_migration(
+    path: String,
+    resolutions: Vec<V3FolderResolutionInput>,
+    on_progress: Channel<MigrationProgress>,
+    state: tauri::State<'_, Shared>,
+) -> Result<LibraryStatus> {
+    let root = PathBuf::from(&path);
+    let mut parsed = Vec::with_capacity(resolutions.len());
+    for resolution in &resolutions {
+        parsed.push(V3FolderResolution {
+            hash: ContentHash::parse(&resolution.hash)?,
+            folder: resolution.folder.clone(),
+        });
+    }
+    let opened = tauri::async_runtime::spawn_blocking(move || -> Result<Arc<Opened>> {
+        // 以此刻的磁盘内容重新规划，而不是信任前端回传的整份计划：相对路径与
+        // 字节摘要必须来自权威扫描，前端只负责提供使用者的冲突选择。
+        let plan = V3MigrationPlan::inspect(&root)?;
+        let resolved: ResolvedV3MigrationPlan = plan.resolve(&parsed)?;
+        let mut rebuild = |index_root: &Path| Index::rebuild_at(index_root).map(|_| ());
+        let mut forward = |progress: V3CommitProgress| {
+            let _ = on_progress.send(MigrationProgress {
+                stage: progress.stage.as_str().to_owned(),
+                done: progress.done,
+                total: progress.total,
+                current_filename: progress.current_filename,
+            });
+        };
+        V3MigrationCommit::new(&resolved, &root).run(&mut rebuild, &mut forward)?;
+        // 提交完成后该库必然是 v3，按普通开库路径接管。
+        open_at(&root)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台迁移提交任务异常终止：{error}"),
         )
     })??;
     adopt_library(opened, state.inner())
@@ -464,24 +637,62 @@ pub async fn rename_folder(
 }
 
 #[tauri::command]
+pub async fn move_folder(
+    path: String,
+    destination_parent: Option<String>,
+    on_progress: Channel<FolderMutationProgress>,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let path = FolderPath::parse(&path)?;
+    let destination_parent = destination_parent
+        .as_deref()
+        .map(FolderPath::parse)
+        .transpose()?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .move_folder(&path, destination_parent.as_ref(), |progress| {
+                on_progress.send(progress).map_err(|error| {
+                    AppError::detailed(
+                        Code::LibraryAssetMetadataWriteFailed,
+                        format!("发送文件夹移动进度失败：{error}"),
+                    )
+                })
+            })?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn delete_folder(path: String, state: tauri::State<'_, Shared>) -> Result<()> {
     let path = FolderPath::parse(&path)?;
     with_catalog(state, move |catalog| catalog.delete_folder(&path)).await
 }
 
 #[tauri::command]
-pub async fn set_asset_folders(
+pub async fn move_asset_to_folder(
     hash: String,
-    folders: Vec<String>,
+    folder: Option<String>,
     state: tauri::State<'_, Shared>,
 ) -> Result<()> {
     let hash = ContentHash::parse(&hash)?;
-    let folders = folders
-        .iter()
-        .map(|folder| FolderPath::parse(folder))
-        .collect::<Result<Vec<_>>>()?;
+    let folder = folder.map(|folder| FolderPath::parse(&folder)).transpose()?;
     with_catalog(state, move |catalog| {
-        catalog.set_asset_folders(&hash, &folders)
+        catalog.move_asset_to_folder(&hash, folder.as_ref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn rename_asset_display_filename(
+    hash: String,
+    stem: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| {
+        catalog.rename_asset_display_filename(&hash, &stem)
     })
     .await
 }
@@ -498,6 +709,18 @@ pub async fn set_asset_tags(
         .map(|tag| Tag::parse(tag))
         .collect::<Result<Vec<_>>>()?;
     with_catalog(state, move |catalog| catalog.set_asset_tags(&hash, &tags)).await
+}
+
+#[tauri::command]
+pub async fn regenerate_color_card(
+    hash: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    with_catalog(state, move |catalog| {
+        catalog.regenerate_color_card(&hash).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -522,7 +745,8 @@ pub async fn purge_trash(state: tauri::State<'_, Shared>) -> Result<PurgeReport>
 
 /// 一次批量导入的进度。
 #[derive(Debug, Clone, Serialize)]
-pub struct ImportProgress {
+pub struct TransferProgress {
+    pub task_id: String,
     /// 已结束处理的素材数。
     pub done: usize,
     /// 本批次展开后的素材总数。
@@ -532,22 +756,24 @@ pub struct ImportProgress {
 }
 
 struct ChannelObserver {
-    channel: Channel<ImportProgress>,
+    task_id: String,
+    channel: Channel<TransferProgress>,
     disconnected: bool,
 }
 
-impl ImportObserver for ChannelObserver {
+impl TransferObserver for ChannelObserver {
     fn should_cancel(&self) -> bool {
         self.disconnected
     }
 
-    fn on_progress(&mut self, done: usize, total: usize, source: &Path) {
-        let current_filename = source
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
+    fn on_progress(&mut self, done: usize, total: usize, current_filename: &str) {
+        // 协调器的约定：空串表示全部结束，转成 None 让前端不再显示文件名。
+        let current_filename =
+            (!current_filename.is_empty()).then(|| current_filename.to_owned());
         if self
             .channel
-            .send(ImportProgress {
+            .send(TransferProgress {
+                task_id: self.task_id.clone(),
                 done,
                 total,
                 current_filename,
@@ -559,50 +785,427 @@ impl ImportObserver for ChannelObserver {
     }
 }
 
-/// 导入拖入或选中的路径。目录扫描与媒体处理全部在 blocking worker 中执行。
+/// 统一导入入口（设计第十条）：按钮、拖放与目录选择都汇入同一条命令。
+///
+/// 前端只交来路径与当前工作区位置；来源分类由后端按磁盘事实裁决——拖放事件拿不到
+/// "这是目录还是文件"，而层级语义取决于它。目录扫描、查重、层级映射与停止观察全部
+/// 在核心协调器内完成。目录扫描与媒体处理全部在 blocking worker 中执行。
 #[tauri::command]
-pub async fn import_paths(
+pub async fn import_sources(
     paths: Vec<String>,
-    on_progress: Channel<ImportProgress>,
+    current_folder: Option<String>,
+    on_progress: Channel<TransferProgress>,
+    runs: tauri::State<'_, std::sync::Arc<TransferRuns>>,
     state: tauri::State<'_, Shared>,
 ) -> Result<ImportOutcome> {
     let opened = current_opened(&state)?;
-    tauri::async_runtime::spawn_blocking(move || import_paths_blocking(paths, on_progress, &opened))
-        .await
-        .map_err(|error| {
-            AppError::detailed(
-                Code::LibraryIoFailed,
-                format!("后台导入任务异常终止：{error}"),
-            )
-        })?
+    let runs = std::sync::Arc::clone(runs.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        import_sources_blocking(paths, current_folder, on_progress, &runs, &opened)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台导入任务异常终止：{error}"),
+        )
+    })?
 }
 
-fn import_paths_blocking(
+fn import_sources_blocking(
     paths: Vec<String>,
-    on_progress: Channel<ImportProgress>,
+    current_folder: Option<String>,
+    on_progress: Channel<TransferProgress>,
+    runs: &TransferRuns,
     opened: &Opened,
 ) -> Result<ImportOutcome> {
     let _import_guard = lock(&opened.import_gate)?;
-    let expanded =
-        import::expand_sources(&paths.into_iter().map(PathBuf::from).collect::<Vec<_>>())?;
+    // 来源分类复用核心的同一函数（任务 5.3）：拖放/选择与剪贴板粘贴的文件路径
+    // 走完全相同的"按磁盘事实分类"，不允许两条入口各写一套判断。
+    let sources = import::classify_paths(
+        paths
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>(),
+    );
+    run_import(sources, current_folder, on_progress, runs, opened)
+}
 
-    // 拖入导入不自动推测文件夹或标签；导入后由使用者在素材详情中归类。
-    let opts = ImportOptions::default();
-    let mut observer = ChannelObserver {
-        channel: on_progress,
-        disconnected: false,
+/// 把已构造好的来源集合交给统一协调器并回填索引。
+///
+/// [`import_sources_blocking`]（文件/目录）与 [`paste_import_blocking`]（剪贴板）
+/// 的公共后半程：占库级槽位、经 `Channel` 报告进度、导入完成后更新 SQLite 索引。
+fn run_import(
+    sources: Vec<import::ImportSource>,
+    current_folder: Option<String>,
+    on_progress: Channel<TransferProgress>,
+    runs: &TransferRuns,
+    opened: &Opened,
+) -> Result<ImportOutcome> {
+    let request = import::ImportRequest {
+        sources,
+        current_folder,
     };
+
     let library = lock(&opened.catalog)?.library().clone();
-    let report = import::import_many(&library, &expanded.sources, &opts, &mut observer);
+    let run = runs.begin(&library)?;
+    let task_id = run.id().as_str().to_owned();
+    // 导入不自动推测标签；导入后由使用者在素材详情中归类。
+    let disconnected = on_progress
+        .send(TransferProgress {
+            task_id: task_id.clone(),
+            done: 0,
+            total: 0,
+            current_filename: None,
+        })
+        .is_err();
+    let mut observer = ChannelObserver {
+        task_id: task_id.clone(),
+        channel: on_progress,
+        disconnected,
+    };
+    let report = import::import_sources(&library, &request, &[], &run, &mut observer)?;
 
     // 见模块头：命令层只把核心产出的侧车送入同层索引，不重新判断导入结果。
     let mut catalog = lock(&opened.catalog)?;
     catalog.index_imported(&report.imported)?;
-
     Ok(ImportOutcome {
+        task_id: Some(task_id),
         imported: report.imported.len(),
-        skipped_non_images: expanded.skipped_non_images,
+        skipped_non_images: report.skipped_non_images,
+        duplicates: report.duplicates.len(),
+        pending_count: report.pending_count,
         failures: report.failed,
+    })
+}
+
+/// 剪贴板里没有可导入内容时的全零报告。
+///
+/// 文本、网址与空剪贴板不是错误（设计第十一条：纯文本不处理），前端据此提示
+/// "剪贴板里没有可导入的图片"而不是弹错误。
+const EMPTY_PASTE_OUTCOME: ImportOutcome = ImportOutcome {
+    task_id: None,
+    imported: 0,
+    skipped_non_images: 0,
+    duplicates: 0,
+    pending_count: 0,
+    failures: Vec::new(),
+};
+
+#[cfg(target_os = "windows")]
+fn paste_import_blocking(
+    current_folder: Option<String>,
+    on_progress: Channel<TransferProgress>,
+    runs: &TransferRuns,
+    opened: &Opened,
+) -> Result<ImportOutcome> {
+    use vistash_core::clipboard::ClipboardPort;
+
+    let _import_guard = lock(&opened.import_gate)?;
+
+    // 剪贴板是全局单例且 trait 要求独占借用：在 blocking worker 内串行读取，
+    // 并在关闭系统剪贴板之后才做 PNG 编码等耗时工作（adapter 内部保证）。
+    let payload = {
+        let mut clipboard = crate::windows_clipboard::WindowsClipboard::new();
+        clipboard.snapshot()?
+    };
+    match payload {
+        ClipboardPayload::Files(paths) => {
+            run_import(import::classify_paths(paths), current_folder, on_progress, runs, opened)
+        }
+        ClipboardPayload::Bitmap(bitmap) => {
+            // 一次只有一个位图载荷：显示名带本地时间，来源身份记 Clipboard。
+            let sources = vec![import::ImportSource::PngBytes {
+                bytes: clipboard::bitmap_to_png(&bitmap)?,
+                filename: clipboard::clipboard_image_display_name(chrono::Local::now()),
+                captured_at: chrono::Utc::now(),
+            }];
+            run_import(sources, current_folder, on_progress, runs, opened)
+        }
+        ClipboardPayload::Text(_) | ClipboardPayload::Empty => Ok(EMPTY_PASTE_OUTCOME),
+    }
+}
+
+/// 窗口级 Ctrl+V 的统一入口（设计第十一条）：前端只决定"这个按键由谁认领"，
+/// 剪贴板上有什么、按什么顺序分流全部由后端裁决。WebView 没有任何通用剪贴板
+/// 权限——位图像素从系统剪贴板到库内本体全程不经过前端。
+///
+/// 非 Windows 目标没有生产 adapter（本项目 Windows 优先），返回稳定的读取失败：
+/// 该平台上的窗口级粘贴本就不该到达这里。
+#[tauri::command]
+pub async fn paste_import(
+    current_folder: Option<String>,
+    on_progress: Channel<TransferProgress>,
+    app: tauri::AppHandle,
+    runs: tauri::State<'_, std::sync::Arc<TransferRuns>>,
+    state: tauri::State<'_, Shared>,
+) -> Result<ImportOutcome> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (current_folder, on_progress, app, runs, state);
+        Err(AppError::detailed(
+            Code::ClipboardReadFailed,
+            "当前平台尚未实现剪贴板导入",
+        ))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        drop(app);
+        let opened = current_opened(&state)?;
+        let runs = std::sync::Arc::clone(runs.inner());
+        tauri::async_runtime::spawn_blocking(move || {
+            paste_import_blocking(current_folder, on_progress, &runs, &opened)
+        })
+        .await
+        .map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("后台粘贴导入任务异常终止：{error}"),
+            )
+        })?
+    }
+}
+
+/// 只读生成导出冲突计划，确认 policy 前不写目标目录。
+#[tauri::command]
+pub async fn plan_export(
+    hashes: Vec<String>,
+    target_dir: String,
+    state: tauri::State<'_, Shared>,
+) -> Result<Vec<vistash_core::export::PlannedExport>> {
+    let opened = current_opened(&state)?;
+    let library = lock(&opened.catalog)?.library().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let hashes = parse_hashes(&hashes)?;
+        vistash_core::export::plan_export(&library, &hashes, Path::new(&target_dir))
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台生成导出冲突计划异常终止：{error}"),
+        )
+    })?
+}
+
+/// 原图导出（任务 5.5，设计第十二条）。
+///
+/// 只读库的出站操作：核心协调器按"侧车显示文件名 + 真实扩展名"复制原始字节到
+/// 使用者明确选择的目标目录，库内本体与侧车一个字节都不改。`policy` 是类型化枚举，
+/// 前端传 `"skip" / "overwrite" / "auto_number"`；覆盖属破坏性操作，前端必须先取得
+/// 使用者的明确确认才允许传 `overwrite` 进来。停止复用 [`import_stop`]——导入与
+/// 导出共用同一把库级并发键，同一时刻只有一种任务在跑。
+#[tauri::command]
+pub async fn export_assets(
+    hashes: Vec<String>,
+    target_dir: String,
+    policy: vistash_core::export::ConflictPolicy,
+    on_progress: Channel<TransferProgress>,
+    runs: tauri::State<'_, std::sync::Arc<TransferRuns>>,
+    state: tauri::State<'_, Shared>,
+) -> Result<ExportOutcome> {
+    let opened = current_opened(&state)?;
+    let runs = std::sync::Arc::clone(runs.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        export_assets_blocking(hashes, target_dir, policy, on_progress, &runs, &opened)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台导出任务异常终止：{error}"),
+        )
+    })?
+}
+
+fn export_assets_blocking(
+    hashes: Vec<String>,
+    target_dir: String,
+    policy: vistash_core::export::ConflictPolicy,
+    on_progress: Channel<TransferProgress>,
+    runs: &TransferRuns,
+    opened: &Opened,
+) -> Result<ExportOutcome> {
+    // 哈希字符串先解析成领域类型：非法值在这里变成稳定错误，
+    // 不占用槽位、也不溜进协调器。
+    let parsed = hashes
+        .iter()
+        .map(|raw| ContentHash::parse(raw))
+        .collect::<Result<Vec<_>>>()?;
+    let library = lock(&opened.catalog)?.library().clone();
+    let run = runs.begin_export(&library)?;
+    let task_id = run.id().as_str().to_owned();
+    let disconnected = on_progress
+        .send(TransferProgress {
+            task_id: task_id.clone(),
+            done: 0,
+            total: parsed.len(),
+            current_filename: None,
+        })
+        .is_err();
+    let mut observer = ChannelObserver {
+        task_id: task_id.clone(),
+        channel: on_progress,
+        disconnected,
+    };
+    let request = vistash_core::export::ExportRequest {
+        target_dir: PathBuf::from(target_dir),
+        policy,
+    };
+    let report = vistash_core::export::export_assets(&library, &parsed, &request, &run, &mut observer)?;
+    Ok(ExportOutcome {
+        task_id,
+        exported: report.exported,
+        skipped_existing: report.skipped_existing,
+        failed: report.failed,
+        pending_count: report.pending_count,
+    })
+}
+
+/// 单图复制位图到系统剪贴板（任务 5.6，设计第十二条）。
+///
+/// 参数是单个哈希：复制图像只允许单张，多选不合成、多选出站一律走批量导出——
+/// 这条规则由 API 形状保证，本命令在结构上就不存在一次喂进多张图的入口。
+/// 像素全程留在 Rust 侧：核心解码原图为 RGBA 位图后经官方插件写入系统剪贴板，
+/// 前端只见成功或错误码，与导入方向同一纪律。
+#[tauri::command]
+pub async fn copy_asset_to_clipboard(
+    hash: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    let opened = current_opened(&state)?;
+    // 解码面对的是原图本体（可能上万像素）：放 blocking worker。
+    let bitmap = tauri::async_runtime::spawn_blocking(
+        move || -> Result<vistash_core::clipboard::BitmapImage> {
+            let library = lock(&opened.catalog)?.library().clone();
+            vistash_core::export::asset_bitmap(&library, &hash)
+        },
+    )
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台解码任务异常终止：{error}"),
+        )
+    })??;
+    write_bitmap_to_clipboard(&app, bitmap)
+}
+
+/// 把已解码位图写入系统剪贴板。Windows 经官方插件的设备无关位图写入；
+/// 非 Windows 目标没有 Windows 优先之外的生产承诺，返回稳定的写入失败。
+#[cfg(target_os = "windows")]
+fn write_bitmap_to_clipboard(
+    app: &tauri::AppHandle,
+    bitmap: vistash_core::clipboard::BitmapImage,
+) -> Result<()> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let (width, height) = (bitmap.width() as u32, bitmap.height() as u32);
+    let image = tauri::image::Image::new_owned(bitmap.into_rgba(), width, height);
+    app.clipboard().write_image(&image).map_err(|e| {
+        AppError::detailed(
+            Code::ClipboardWriteFailed,
+            format!("写入系统剪贴板失败：{e}"),
+        )
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn write_bitmap_to_clipboard(
+    _app: &tauri::AppHandle,
+    _bitmap: vistash_core::clipboard::BitmapImage,
+) -> Result<()> {
+    Err(AppError::detailed(
+        Code::ClipboardWriteFailed,
+        "当前平台尚未实现剪贴板图像复制",
+    ))
+}
+
+/// 用系统默认程序打开素材原图（任务 5.6，调研 §4–§5 冻结的隔离模型）。
+///
+/// 绝不把库内本体路径交给外部程序：外部写入与删除不可控，而本体是权威对象。
+/// 流程是把原始字节复制为应用缓存侧的只读临时副本，**只把副本路径**交给系统打开；
+/// 同一素材复用同一份不可变副本，重复打开不产生副本堆积。参数同样是单哈希，
+/// 多选打开不在规格内。
+#[tauri::command]
+pub async fn open_with_default_app(
+    hash: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let hash = ContentHash::parse(&hash)?;
+    let opened = current_opened(&state)?;
+    let manager = {
+        let guard = lock(&state)?;
+        guard.external_open.clone()
+    };
+    // 复制本体字节属于磁盘 IO：放 blocking worker。
+    let path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf> {
+        let library = lock(&opened.catalog)?.library().clone();
+        manager.prepare(&library, &hash)
+    })
+    .await
+    .map_err(|error| {
+        AppError::detailed(
+            Code::LibraryIoFailed,
+            format!("后台副本准备任务异常终止：{error}"),
+        )
+    })??;
+
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| {
+            AppError::detailed(
+                Code::ExternalOpenFailed,
+                format!("用默认程序打开 {} 失败：{e}", path.display()),
+            )
+        })
+}
+
+/// 导入任务的可见状态。只有后端确认后才是 `stopped`——前端仅停止等待或隐藏进度
+/// MUST NOT 冒充任务已停止（asset-transfer 规格）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferRunStateDto {
+    Running,
+    Stopping,
+    Stopped,
+}
+
+impl From<import::TransferRunState> for TransferRunStateDto {
+    fn from(state: import::TransferRunState) -> Self {
+        match state {
+            import::TransferRunState::Running => Self::Running,
+            import::TransferRunState::Stopping => Self::Stopping,
+            import::TransferRunState::Stopped => Self::Stopped,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransferRunStatusDto {
+    pub task_id: String,
+    pub state: TransferRunStateDto,
+}
+
+/// 提交导入停止请求：真实的后端命令（设计第十条）。返回提交后的任务状态；
+/// 没有进行中的导入时报告 `stopped`——无事可停即已停。
+#[tauri::command]
+pub fn import_stop(
+    task_id: String,
+    runs: tauri::State<'_, ManagedTransferRuns>,
+    state: tauri::State<'_, Shared>,
+) -> Result<TransferRunStatusDto> {
+    let opened = current_opened(&state)?;
+    let library = lock(&opened.catalog)?.library().clone();
+    let run_state = runs.request_stop(&library, &task_id)?;
+    Ok(TransferRunStatusDto {
+        task_id,
+        state: run_state.into(),
     })
 }
 
@@ -642,11 +1245,16 @@ pub fn asset_thumbnail(
     // 先校验再用。ContentHash 存在的意义就是让未校验的字符串无法参与库内路径拼接。
     let hash = ContentHash::parse(&hash)?;
     let opened = current_opened(&state)?;
-    let (library, ext) = {
+    let (library, ext, source) = {
         let catalog = lock(&opened.catalog)?;
-        (catalog.library().clone(), ext_of(&catalog, &hash)?)
+        let source = if catalog.asset_is_deleted(&hash)? {
+            import::ThumbnailSource::Trash
+        } else {
+            import::ThumbnailSource::Active
+        };
+        (catalog.library().clone(), ext_of(&catalog, &hash)?, source)
     };
-    let bytes = import::ensure_thumbnail(&library, &hash, ext)?;
+    let bytes = import::ensure_thumbnail(&library, &hash, ext, source)?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -797,6 +1405,26 @@ pub async fn rename_prompt_folder(
     with_catalog(state, move |catalog| {
         Ok(catalog
             .rename_prompt_folder(&path, &new_name)?
+            .as_str()
+            .to_owned())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn move_prompt_folder(
+    path: String,
+    destination_parent: Option<String>,
+    state: tauri::State<'_, Shared>,
+) -> Result<String> {
+    let path = FolderPath::parse(&path)?;
+    let destination_parent = destination_parent
+        .as_deref()
+        .map(FolderPath::parse)
+        .transpose()?;
+    with_catalog(state, move |catalog| {
+        Ok(catalog
+            .move_prompt_folder(&path, destination_parent.as_ref())?
             .as_str()
             .to_owned())
     })
@@ -1027,33 +1655,17 @@ fn channel_progress(channel: Channel<BatchProgressDto>) -> ChannelProgress {
 }
 
 #[tauri::command]
-pub async fn batch_add_asset_folder(
+pub async fn batch_move_assets_to_folder(
     hashes: Vec<String>,
-    folder: String,
+    folder: Option<String>,
     on_progress: Channel<BatchProgressDto>,
     state: tauri::State<'_, Shared>,
 ) -> Result<BatchReport> {
     let hashes = parse_hashes(&hashes)?;
-    let folder = FolderPath::parse(&folder)?;
+    let folder = folder.map(|folder| FolderPath::parse(&folder)).transpose()?;
     with_catalog(state, move |catalog| {
         let mut progress = channel_progress(on_progress);
-        Ok(catalog.batch_add_asset_folder(&hashes, &folder, &mut progress))
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn batch_remove_asset_folder(
-    hashes: Vec<String>,
-    folder: String,
-    on_progress: Channel<BatchProgressDto>,
-    state: tauri::State<'_, Shared>,
-) -> Result<BatchReport> {
-    let hashes = parse_hashes(&hashes)?;
-    let folder = FolderPath::parse(&folder)?;
-    with_catalog(state, move |catalog| {
-        let mut progress = channel_progress(on_progress);
-        Ok(catalog.batch_remove_asset_folder(&hashes, &folder, &mut progress))
+        Ok(catalog.batch_move_assets_to_folder(&hashes, folder.as_ref(), &mut progress))
     })
     .await
 }
@@ -1291,7 +1903,49 @@ pub async fn write_layout(
 
 #[cfg(test)]
 mod tests {
+    use super::{ImportOutcome, TransferProgress};
     use vistash_core::error::ALL_CODES;
+
+    #[test]
+    fn transfer_progress_and_outcomes_serialize_the_same_task_id() {
+        let progress = TransferProgress {
+            task_id: "task-001".to_owned(),
+            done: 1,
+            total: 2,
+            current_filename: Some("甲.png".to_owned()),
+        };
+        let outcome = ImportOutcome {
+            task_id: Some("task-001".to_owned()),
+            imported: 1,
+            skipped_non_images: 0,
+            duplicates: 0,
+            pending_count: 1,
+            failures: Vec::new(),
+        };
+
+        assert_eq!(
+            (
+                serde_json::to_value(progress).expect("序列化进度")["task_id"].clone(),
+                serde_json::to_value(outcome).expect("序列化结果")["task_id"].clone(),
+            ),
+            (
+                serde_json::Value::String("task-001".to_owned()),
+                serde_json::Value::String("task-001".to_owned()),
+            ),
+        );
+    }
+
+    /// 为测试构造一个指向临时目录的只读副本管理器（任务 5.6）。
+    ///
+    /// 会话 ID 用真实生成路径：状态恢复不关心它，但构造签名要求有一份。
+    fn external_manager_for(
+        workspace: &std::path::Path,
+    ) -> vistash_core::external_open::ExternalOpenManager {
+        vistash_core::external_open::ExternalOpenManager::new(
+            workspace.join("cache").join("external-open").join("v1"),
+            vistash_core::external_open::ExternalOpenManager::new_session_id(),
+        )
+    }
 
     /// 界面层不得读取像素。
     ///
@@ -1468,7 +2122,11 @@ mod tests {
         };
         settings.write_atomic(&settings_path).expect("写入设置");
 
-        let state = super::AppState::restore(settings_path, workspace.path().join("layouts"));
+        let state = super::AppState::restore(
+            settings_path,
+            workspace.path().join("layouts"),
+            external_manager_for(workspace.path()),
+        );
         let status = super::status_of(&state).expect("状态应可读");
 
         let meta_text =
@@ -1488,6 +2146,7 @@ mod tests {
         let blank = super::AppState::restore(
             workspace.path().join("不存在的设置.json"),
             workspace.path().join("layouts"),
+            external_manager_for(workspace.path()),
         );
         let none_status = super::status_of(&blank).expect("空状态应可读");
         assert!(

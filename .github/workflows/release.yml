@@ -1,0 +1,130 @@
+name: Windows Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    name: 构建 Windows 草稿发布
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出标签提交
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.3.0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app -> target
+
+      - name: 安装前端依赖
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装 OpenSpec CLI
+        run: npm install --global @fission-ai/openspec@1.3.0
+
+      - name: 验证版本标签不可变 ruleset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $summaries = gh api "repos/$env:GITHUB_REPOSITORY/rulesets?includes_parents=true" | ConvertFrom-Json
+          $hasImmutableVersionTags = $false
+          foreach ($summary in $summaries) {
+            if ($summary.target -ne "tag" -or $summary.enforcement -ne "active") {
+              continue
+            }
+            $detail = gh api "repos/$env:GITHUB_REPOSITORY/rulesets/$($summary.id)" | ConvertFrom-Json
+            $includesVersionTags = @($detail.conditions.ref_name.include) -contains "refs/tags/v*"
+            $hasNoExclusions = @($detail.conditions.ref_name.exclude).Count -eq 0
+            $ruleTypes = @($detail.rules | Select-Object -ExpandProperty type)
+            $hasNoBypass = @($detail.bypass_actors).Count -eq 0
+            if ($includesVersionTags -and $hasNoExclusions -and $ruleTypes -contains "update" -and $ruleTypes -contains "deletion" -and $hasNoBypass) {
+              $hasImmutableVersionTags = $true
+              break
+            }
+          }
+          if (-not $hasImmutableVersionTags) {
+            throw "发布前必须启用 active tag ruleset：包含 refs/tags/v*、没有 exclusion、限制 update/deletion，且没有 bypass actor"
+          }
+
+      - name: 验证标签提交已进入 main
+        run: |
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "发布标签必须指向已经进入 main 的提交"
+          }
+
+      - name: 验证标签与发布契约
+        working-directory: app
+        run: node scripts/release.mjs verify --tag $env:GITHUB_REF_NAME
+
+      - name: 前端 lint
+        working-directory: app
+        run: pnpm lint
+
+      - name: TypeScript 类型检查
+        working-directory: app
+        run: pnpm typecheck
+
+      - name: 前端测试
+        working-directory: app
+        run: pnpm test
+
+      - name: Rust Clippy
+        working-directory: app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust 测试
+        working-directory: app
+        run: cargo test --workspace
+
+      - name: OpenSpec 严格校验
+        run: openspec validate --all --strict --no-interactive
+
+      - name: 构建 NSIS 与 MSI
+        working-directory: app
+        run: pnpm release:build
+
+      - name: 生成 SHA-256 清单
+        working-directory: app
+        run: pnpm release:checksums
+
+      - name: 创建草稿 GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $artifacts = @(
+            Get-ChildItem -LiteralPath "app/target/release/bundle/nsis" -Filter "*.exe" -File | Select-Object -ExpandProperty FullName
+            Get-ChildItem -LiteralPath "app/target/release/bundle/msi" -Filter "*.msi" -File | Select-Object -ExpandProperty FullName
+            Resolve-Path -LiteralPath "app/target/release/bundle/SHA256SUMS.txt" | Select-Object -ExpandProperty Path
+          )
+          if ($artifacts.Count -ne 3) {
+            throw "草稿发布必须恰好上传 NSIS、MSI 与 SHA256SUMS.txt"
+          }
+          gh release create $env:GITHUB_REF_NAME @artifacts --verify-tag --draft --generate-notes --title "Vistash $env:GITHUB_REF_NAME" --notes "未签名测试候选：Windows 可能显示 SmartScreen 警告。公开发布前必须完成人工验收与签名决策。"

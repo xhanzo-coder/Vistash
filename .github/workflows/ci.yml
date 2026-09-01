@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gates:
+    name: Windows 工程门禁
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.3.0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 构建
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app -> target
+
+      - name: 安装前端依赖
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装 OpenSpec CLI
+        run: npm install --global @fission-ai/openspec@1.3.0
+
+      - name: 验证发布契约
+        working-directory: app
+        run: pnpm release:verify
+
+      - name: 前端 lint
+        working-directory: app
+        run: pnpm lint
+
+      - name: TypeScript 类型检查
+        working-directory: app
+        run: pnpm typecheck
+
+      - name: 前端测试
+        working-directory: app
+        run: pnpm test
+
+      - name: Rust Clippy
+        working-directory: app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust 测试
+        working-directory: app
+        run: cargo test --workspace
+
+      - name: OpenSpec 严格校验
+        run: openspec validate --all --strict --no-interactive

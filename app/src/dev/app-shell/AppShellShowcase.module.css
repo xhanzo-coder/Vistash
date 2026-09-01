@@ -1,0 +1,17 @@
+.workspace {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  padding: var(--space-6);
+  background: var(--surface-canvas);
+}
+
+.workspace > section {
+  width: min(34rem, 100%);
+}
+
+@media (max-width: 780px) {
+  .workspace {
+    padding: var(--space-4);
+  }
+}

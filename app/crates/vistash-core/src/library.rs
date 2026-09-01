@@ -22,6 +22,10 @@ pub const LIBRARY_FORMAT_VERSION: u32 = 1;
 /// 否则一次普通启动就会把正常的 v1 库判成缺字段的损坏库。
 pub const LIBRARY_FORMAT_VERSION_V2: u32 = 2;
 
+/// 库格式 v3：图片侧车改为显式来源、必填显示名与单一文件夹归属，库级元数据字段与
+/// v2 相同、仅版本号推进。由 v2→v3 迁移提交写入；打开门禁自任务 3.5 起识别它。
+pub const LIBRARY_FORMAT_VERSION_V3: u32 = 3;
+
 pub const META_FILE: &str = "library.json";
 pub const FOLDERS_FILE: &str = "folders.json";
 pub const INDEX_FILE: &str = "index.sqlite";
@@ -149,7 +153,17 @@ impl LibraryMetaV2 {
                 format!("读取 {META_FILE} 失败 {}: {e}", path.display()),
             )
         })?;
-        let meta: Self = serde_json::from_slice(&bytes).map_err(|e| {
+        Self::from_bytes(path, &bytes)
+    }
+
+    pub fn write_atomic(&self, path: &Path) -> Result<()> {
+        write_json_atomic(path, self, Code::LibraryIoFailed)
+    }
+
+    /// 从字节解析并校验。[`Library::open`] 已经整读了一次 `library.json`，按版本
+    /// 分派时直接复用这份字节，避免同一文件读两遍。
+    fn from_bytes(path: &Path, bytes: &[u8]) -> Result<Self> {
+        let meta: Self = serde_json::from_slice(bytes).map_err(|e| {
             AppError::detailed(
                 Code::LibraryMetadataCorrupt,
                 format!("{META_FILE} 无法按 v2 解析 {}: {e}", path.display()),
@@ -159,25 +173,115 @@ impl LibraryMetaV2 {
             return Err(AppError::detailed(
                 Code::LibraryFormatTooNew,
                 format!(
-                    "库格式版本 {} 高于程序支持的 {}",
-                    meta.format_version, LIBRARY_FORMAT_VERSION_V2
+                    "库格式版本 {} 高于程序支持的 {}：{}",
+                    meta.format_version,
+                    LIBRARY_FORMAT_VERSION_V2,
+                    path.display()
                 ),
             ));
         }
-        if meta.hash_algo != HASH_ALGO_ID {
-            return Err(AppError::detailed(
-                Code::LibraryFormatTooNew,
-                format!(
-                    "库使用的哈希算法 {} 不被本次构建支持（本构建为 {HASH_ALGO_ID}）",
-                    meta.hash_algo
-                ),
-            ));
-        }
+        Self::ensure_supported_hash_algo(&meta.hash_algo)?;
         Ok(meta)
     }
 
-    pub fn write_atomic(&self, path: &Path) -> Result<()> {
-        write_json_atomic(path, self, Code::LibraryIoFailed)
+    fn ensure_supported_hash_algo(hash_algo: &str) -> Result<()> {
+        if hash_algo != HASH_ALGO_ID {
+            return Err(AppError::detailed(
+                Code::LibraryFormatTooNew,
+                format!(
+                    "库使用的哈希算法 {hash_algo} 不被本次构建支持（本构建为 {HASH_ALGO_ID}）"
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 库格式 v3 的库级元数据。
+///
+/// 与 [`LibraryMetaV2`] 字段完全同构、仅版本号推进：单归属改写只发生在图片侧车，
+/// 库级身份、哈希算法与建库信息沿用 v2 的含义。单独建类型而不是放宽 v2 的版本上限，
+/// 是因为"这是哪一代库"必须在打开门禁处显式判定（迁移提交只接受 v2 输入），不能靠
+/// 解析器顺带接受两种版本。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryMetaV3 {
+    pub format_version: u32,
+    pub library_id: LibraryId,
+    pub hash_algo: String,
+    pub created_at: DateTime<Utc>,
+    pub created_by_app_version: String,
+}
+
+impl LibraryMetaV3 {
+    pub fn read(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryPathUnreadable,
+                format!("读取 {META_FILE} 失败 {}: {e}", path.display()),
+            )
+        })?;
+        Self::from_bytes(path, &bytes)
+    }
+
+    fn from_bytes(path: &Path, bytes: &[u8]) -> Result<Self> {
+        let meta: Self = serde_json::from_slice(bytes).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!("{META_FILE} 无法按 v3 解析 {}: {e}", path.display()),
+            )
+        })?;
+        if meta.format_version != LIBRARY_FORMAT_VERSION_V3 {
+            return Err(AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!(
+                    "{META_FILE} 声称的版本 {} 不是 v{LIBRARY_FORMAT_VERSION_V3}：{}",
+                    meta.format_version,
+                    path.display()
+                ),
+            ));
+        }
+        LibraryMetaV2::ensure_supported_hash_algo(&meta.hash_algo)?;
+        Ok(meta)
+    }
+}
+
+/// 库格式探测保留的版本化元数据。
+///
+/// v2 只供迁移规划与旧迁移器短路使用，生产 [`Library::open`] 只放行 v3。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CurrentLibraryMeta {
+    V2(LibraryMetaV2),
+    V3(LibraryMetaV3),
+}
+
+impl CurrentLibraryMeta {
+    pub fn library_id(&self) -> &LibraryId {
+        match self {
+            Self::V2(meta) => &meta.library_id,
+            Self::V3(meta) => &meta.library_id,
+        }
+    }
+
+    pub fn format_version(&self) -> u32 {
+        match self {
+            Self::V2(meta) => meta.format_version,
+            Self::V3(meta) => meta.format_version,
+        }
+    }
+}
+
+impl From<LibraryMetaV3> for LibraryMetaV2 {
+    /// 打开后的运行期不再区分 v2/v3 代际——字段同构，所有下游模块统一按 [`LibraryMetaV2`]
+    /// 的形状消费（`format_version` 字段保留真实代际）；代际判定只发生在打开门禁的
+    /// 版本分派与 [`crate::migration::detect_library_format`] 里。
+    fn from(meta: LibraryMetaV3) -> Self {
+        Self {
+            format_version: meta.format_version,
+            library_id: meta.library_id,
+            hash_algo: meta.hash_algo,
+            created_at: meta.created_at,
+            created_by_app_version: meta.created_by_app_version,
+        }
     }
 }
 
@@ -299,7 +403,10 @@ impl Library {
         }
 
         let meta = LibraryMetaV2 {
-            format_version: LIBRARY_FORMAT_VERSION_V2,
+            // 任务 3.5 起新库直接以当前代（v3）建立。结构体名仍是 V2：打开后的运行期
+            // 统一按这一份同构字段消费（见 From<LibraryMetaV3> 的文档），代际只是
+            // `format_version` 字段与打开门禁的事。
+            format_version: LIBRARY_FORMAT_VERSION_V3,
             library_id: LibraryId::generate(),
             hash_algo: HASH_ALGO_ID.to_owned(),
             created_at: Utc::now(),
@@ -323,6 +430,50 @@ impl Library {
         })
     }
 
+    /// 打开门禁读取当前代的库级元数据：v2 与 v3 都放行，统一按 [`LibraryMetaV2`]
+    /// 的同构字段消费（见 [`From<LibraryMetaV3>`] 的文档），代际只保留在
+    /// `format_version` 字段里。
+    ///
+    /// 版本分派必须发生在按代解析之前：v1 文件缺少 v2 必填字段、更高版本的文件
+    /// 缺少 v3 必填字段，直接交给某个解析器都会得到"元数据损坏"，掩盖"待迁移"与
+    /// "版本过新"这两个完全不同的真实含义。"这是哪一代库"由这里的显式判定回答，
+    /// 不靠任何解析器顺带接受多种版本。
+    fn read_current_meta(path: &Path) -> Result<LibraryMetaV2> {
+        #[derive(serde::Deserialize)]
+        struct Probe {
+            format_version: u32,
+        }
+        let bytes = std::fs::read(path).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryPathUnreadable,
+                format!("读取 {META_FILE} 失败 {}: {e}", path.display()),
+            )
+        })?;
+        let probe: Probe = serde_json::from_slice(&bytes).map_err(|e| {
+            AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!("{META_FILE} 中读不出格式版本 {}: {e}", path.display()),
+            )
+        })?;
+        match probe.format_version {
+            LIBRARY_FORMAT_VERSION_V2 => Err(AppError::detailed(
+                Code::LibraryFormatTooOld,
+                format!("v2 库必须迁移到 v3 后才能打开：{}", path.display()),
+            )),
+            LIBRARY_FORMAT_VERSION_V3 => Ok(LibraryMetaV3::from_bytes(path, &bytes)?.into()),
+            version if version > LIBRARY_FORMAT_VERSION_V3 => Err(AppError::detailed(
+                Code::LibraryFormatTooNew,
+                format!(
+                    "库格式版本 {version} 高于程序支持的 {LIBRARY_FORMAT_VERSION_V3}：{}",
+                    path.display()
+                ),
+            )),
+            // v1 等旧版本缺当前代必填字段。真实含义是"需要迁移"，由调用方先问
+            // `detect_library_format` 区分；这里保持与既有行为一致的损坏语义即可。
+            _ => LibraryMetaV2::from_bytes(path, &bytes),
+        }
+    }
+
     /// 打开既有库。
     pub fn open(root: &Path) -> Result<Self> {
         let meta_path = root.join(META_FILE);
@@ -332,11 +483,11 @@ impl Library {
                 format!("目录中没有 {META_FILE}：{}", root.display()),
             ));
         }
-        // 版本上限与哈希算法的校验都在 `LibraryMetaV2::read` 里，两处各写一遍迟早
-        // 出现一处接受、另一处拒绝的组合。遇到 v1 库时它报"元数据损坏"，而调用方要
-        // 区分"待迁移"与"真损坏"就必须先问 `detect_library_format`——那是开库入口的
-        // 职责，不是本函数的。
-        let meta = LibraryMetaV2::read(&meta_path)?;
+        // 版本分派、版本上限与哈希算法的校验都在 [`Self::read_current_meta`] 里，
+        // 两处各写一遍迟早出现一处接受、另一处拒绝的组合。遇到 v1 库时它报
+        // "元数据损坏"，而调用方要区分"待迁移"与"真损坏"就必须先问
+        // `detect_library_format`——那是开库入口的职责，不是本函数的。
+        let meta = Self::read_current_meta(&meta_path)?;
 
         // 补齐缺失的子目录。空目录不携带任何信息，因此重建它不会掩盖数据丢失——
         // 真正的数据丢失会在索引重建时表现为素材数量下降。
@@ -580,16 +731,16 @@ mod tests {
     }
 
     #[test]
-    fn a_freshly_created_library_is_already_v2_and_needs_no_migration() {
-        // 这条断言守的是任务 3.3 的切换本身：生产路径改成写 v2 侧车之后，建库若仍产出
-        // v1 `library.json`，一个刚建好的空库就会被开库入口判成"需要迁移"，而迁移的
-        // 输入本该是 v1 侧车——新库里一张都没有，于是迁移无事可做却又必须发生。
+    fn a_freshly_created_library_is_born_at_the_current_generation() {
+        // 建库必须直接产出当前代的 `library.json`（v1→v2 时是任务 3.3 的教训，
+        // v2→v3 起同理）：否则一个刚建好的空库会被翻转后的打开门禁判成"需要迁移"。
         let (_d, root) = fresh();
         let lib = Library::create(&root).expect("建库");
         assert!(matches!(
             crate::migration::detect_library_format(&root).expect("判定库格式"),
             crate::migration::LibraryFormatState::Current(_)
         ));
+        assert_eq!(lib.meta().format_version, LIBRARY_FORMAT_VERSION_V3);
         // 新建库与迁移产出的库必须结构一致，否则两者之后的读写路径就有了隐性分叉。
         assert!(lib.prompt_objects_dir().is_dir(), "缺少提示词权威目录");
         assert!(lib.prompt_trash_dir().is_dir(), "缺少提示词回收站目录");
@@ -698,7 +849,9 @@ mod tests {
         let opened = Library::open(&root).expect("打开库");
         assert_eq!(created.meta(), opened.meta());
         assert_eq!(opened.meta().hash_algo, HASH_ALGO_ID);
-        assert_eq!(opened.meta().format_version, LIBRARY_FORMAT_VERSION_V2);
+        // 任务 3.5 起新库直接以当前代（v3）建立：否则一个刚建好的库会被翻转后的
+        // 打开门禁判成"需要迁移"，而迁移的输入本该是旧库——新库里一张都没有。
+        assert_eq!(opened.meta().format_version, LIBRARY_FORMAT_VERSION_V3);
     }
 
     #[test]
@@ -740,10 +893,31 @@ mod tests {
         let (_d, root) = fresh();
         let lib = Library::create(&root).expect("建库");
         let mut meta = lib.meta().clone();
-        meta.format_version = LIBRARY_FORMAT_VERSION_V2 + 1;
+        meta.format_version = LIBRARY_FORMAT_VERSION_V3 + 1;
         write_json_atomic(&root.join(META_FILE), &meta, Code::LibraryIoFailed).expect("改写元数据");
         let err = Library::open(&root).expect_err("本应拒绝更高版本");
         assert_eq!(err.code, Code::LibraryFormatTooNew);
+    }
+
+    #[test]
+    fn a_v3_metadata_library_opens_with_its_identity_preserved() {
+        // v2→v3 迁移提交的真实产物：字段与 v2 同构、仅版本号推进的 library.json。
+        // 打开门禁必须把它当当前代打开，而不是报"版本过新"或"元数据损坏"。
+        let (_d, root) = fresh();
+        let created = Library::create(&root).expect("建库");
+        let v3 = LibraryMetaV3 {
+            format_version: LIBRARY_FORMAT_VERSION_V3,
+            library_id: created.meta().library_id.clone(),
+            hash_algo: created.meta().hash_algo.clone(),
+            created_at: created.meta().created_at,
+            created_by_app_version: created.meta().created_by_app_version.clone(),
+        };
+        write_json_atomic(&root.join(META_FILE), &v3, Code::LibraryIoFailed)
+            .expect("改写为 v3 元数据");
+
+        let opened = Library::open(&root).expect("v3 库应可打开");
+        assert_eq!(opened.meta().format_version, LIBRARY_FORMAT_VERSION_V3);
+        assert_eq!(opened.meta().library_id, created.meta().library_id);
     }
 
     #[test]

@@ -26,7 +26,7 @@ export function makeAssets(count) {
     const [width, height] = SHAPES[i % SHAPES.length];
     return {
       hash: String(i).padStart(64, "0"),
-      hash_algo: "sha256",
+      hash_algo: "blake3",
       media_type: "png",
       ext: "png",
       byte_size: 1_200_000 + i,
@@ -34,6 +34,7 @@ export function makeAssets(count) {
       height,
       imported_at: "2026-08-01T00:00:00Z",
       original_filename: `perf-${String(i).padStart(5, "0")}.png`,
+      display_filename: `perf-${String(i).padStart(5, "0")}.png`,
       source_path: null,
       deleted_at: null,
       color_card_status: "none",
@@ -43,7 +44,7 @@ export function makeAssets(count) {
       note: "",
       favorite: i % 7 === 0,
       tags: [`标签${i % 40}`],
-      folders: i % 3 === 0 ? ["参考"] : [],
+      folder: i % 3 === 0 ? "参考" : null,
       colors: [],
     };
   });
@@ -91,7 +92,7 @@ export function buildBootstrap(itemCount) {
       const emptySnapshot = () => ({ assets: [], prompts: [], folders: [], tags: [], trash_count: 0 });
       const handlers = {
         library_status: () =>
-          ({ path: "E:\\\\perf-fixture", library_id: "perf-fixture", recorded_path: null, problem: null }),
+          ({ path: "E:\\\\perf-fixture", library_id: "018f3c9e-6c00-7000-8000-000000000099", recorded_path: null, problem: null }),
         catalog_snapshot: (args) =>
           args?.query?.location === "trash" ? { ...emptySnapshot(), trash_count: 0 }
             : { assets: data.assets, folders: ["参考"], tags: [], trash_count: 0 },
@@ -107,7 +108,7 @@ export function buildBootstrap(itemCount) {
           if (asset === undefined) throw new Error("性能 fixture 中不存在该图片：" + hash);
           return { asset, linked_prompts: [] };
         },
-        global_search: () => ({ assets: [], prompts: [] }),
+        global_search: ({ text }) => text === "" ? ({ assets: [], prompts: [] }) : ({ assets: data.assets.slice(0, 1), prompts: data.prompts.slice(0, 1) }),
         "plugin:event|listen": () => ++eventId,
         "plugin:event|unlisten": () => undefined,
       };

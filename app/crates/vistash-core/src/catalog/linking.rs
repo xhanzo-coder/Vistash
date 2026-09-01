@@ -185,7 +185,7 @@ impl Catalog {
                 self.library(),
                 source,
                 &options,
-                &mut crate::import::NoopObserver,
+                &mut crate::import::NoopTransferObserver,
             ) {
                 Ok(sidecar) => {
                     self.index_imported(std::slice::from_ref(&sidecar))?;
@@ -338,8 +338,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let left = prompt(&mut fixture.catalog, "左侧提示词");
         let right = prompt(&mut fixture.catalog, "右侧提示词");
 
@@ -387,8 +387,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let owner = prompt(&mut fixture.catalog, "关联幂等");
         fixture
             .catalog
@@ -427,8 +427,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let owner = prompt(&mut fixture.catalog, "解除关联");
         fixture
             .catalog
@@ -470,7 +470,7 @@ mod tests {
     fn linking_refuses_unknown_images_and_trashed_prompts() {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
         let owner = prompt(&mut fixture.catalog, "校验样例");
         let unknown = ContentHash::of_bytes(b"never-imported-bytes");
 
@@ -493,8 +493,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let owner = prompt(&mut fixture.catalog, "可见性");
         let other = prompt(&mut fixture.catalog, "另一位");
         fixture
@@ -550,8 +550,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let owner = prompt(&mut fixture.catalog, "封面跳过回收站图片");
         fixture
             .catalog
@@ -571,8 +571,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let owner = prompt(&mut fixture.catalog, "留下的一方");
         let other = prompt(&mut fixture.catalog, "被清理的一方");
         fixture
@@ -632,8 +632,8 @@ mod tests {
             let mut fixture = fixture();
             let first = write_png(&fixture.source, "甲.png", [255, 0, 0, 255]);
             let second = write_png(&fixture.source, "乙.png", [0, 255, 0, 255]);
-            let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-            let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+            let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+            let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
             let owner = prompt(&mut fixture.catalog, "封面回落");
             fixture
                 .catalog
@@ -729,7 +729,7 @@ mod tests {
             ("三", [0, 0, 255, 255]),
         ] {
             let source = write_png(&fixture.source, &format!("{name}.png"), color);
-            hashes.push(import_with(&mut fixture.catalog, &source, &[], &[]).hash);
+            hashes.push(import_with(&mut fixture.catalog, &source, None, &[]).hash);
         }
         let owner = prompt(&mut fixture.catalog, "封面顺序");
         fixture
@@ -801,8 +801,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let owner = prompt(&mut fixture.catalog, "purge 封面回落");
         fixture
             .catalog
@@ -833,7 +833,7 @@ mod tests {
     fn a_pure_text_prompt_has_no_cover_and_refuses_to_pin_one() {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
         let owner = prompt(&mut fixture.catalog, "纯文本卡片");
 
         assert_eq!(
@@ -861,7 +861,7 @@ mod tests {
     fn linking_from_library_reuses_the_existing_body_without_a_second_copy() {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
         let owner = prompt(&mut fixture.catalog, "从库选图");
         // 同内容的另一个本地路径副本：库里已经有这张图。
         let copy = write_png(&fixture.source, "一副本.png", [255, 0, 0, 255]);
@@ -985,8 +985,8 @@ mod tests {
         let mut fixture = fixture();
         let first = write_png(&fixture.source, "一.png", [255, 0, 0, 255]);
         let second = write_png(&fixture.source, "二.png", [0, 255, 0, 255]);
-        let image_a = import_with(&mut fixture.catalog, &first, &[], &[]);
-        let image_b = import_with(&mut fixture.catalog, &second, &[], &[]);
+        let image_a = import_with(&mut fixture.catalog, &first, None, &[]);
+        let image_b = import_with(&mut fixture.catalog, &second, None, &[]);
         let owner = prompt(&mut fixture.catalog, "关联状态");
         fixture
             .catalog
@@ -1001,6 +1001,9 @@ mod tests {
         assert_eq!(states.len(), 2);
         assert_eq!(states[0].hash, image_a.hash.as_str());
         assert!(!states[0].deleted);
+        assert_eq!(states[0].display_filename, "一.png");
+        assert_eq!((states[0].width, states[0].height), (16, 16));
+        assert_eq!(states[0].folder, None);
         assert_eq!(states[1].hash, image_b.hash.as_str());
         assert!(!states[1].deleted);
 

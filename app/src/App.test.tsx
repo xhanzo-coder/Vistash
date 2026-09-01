@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { readFileSync } from "node:fs";
 import { createRoot } from "react-dom/client";
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -8,11 +9,24 @@ import { emit } from "@tauri-apps/api/event";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { App } from "./App";
+import { createAppQueryClient } from "./app/queryClient";
+import { UiProvider } from "./ui/UiProvider";
 
-test("主窗口拥有草稿解决后继续关闭所需的最小权限", () => {
+function appNode() {
+  return <QueryClientProvider client={createAppQueryClient()}><UiProvider><App /></UiProvider></QueryClientProvider>;
+}
+
+test("主窗口拥有草稿保护和自定义窗口控制所需的最小权限", () => {
   const capabilities: unknown = JSON.parse(readFileSync("src-tauri/capabilities/default.json", "utf8"));
   expect(capabilities).toHaveProperty("windows", ["main"]);
-  expect(capabilities).toHaveProperty("permissions", expect.arrayContaining(["core:window:allow-close", "core:window:allow-destroy"]));
+  expect(capabilities).toHaveProperty("permissions", expect.arrayContaining([
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-maximize",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-unmaximize",
+  ]));
 });
 
 test("真正关闭窗口失败也保留原生错误而不是未处理拒绝", async () => {
@@ -27,7 +41,7 @@ test("真正关闭窗口失败也保留原生错误而不是未处理拒绝", as
   document.body.append(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<App />));
+    await act(async () => root.render(appNode()));
     // 等待原生模块的异步导入完成，再从真实事件 SDK 边界请求关闭。
     await act(async () => vi.dynamicImportSettled());
     await act(async () => emit("tauri://close-requested"));
@@ -70,7 +84,7 @@ test("关闭监听在组件卸载之后注册成功仍立即释放", async () =>
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<App />));
+  await act(async () => root.render(appNode()));
   await vi.waitFor(() => expect(subscribed).toBe(true));
   act(() => root.unmount());
   await act(async () => {
@@ -94,13 +108,56 @@ test("原生关闭保护注册失败时选库页持续呈现原因", async () =>
   document.body.append(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<App />));
+    await act(async () => root.render(appNode()));
     await vi.waitFor(async () => {
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
       expect(container.textContent).toContain("关闭保护不可用");
     });
     expect(container.textContent).toContain("关闭事件权限被拒绝");
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+test("兼容库通过生命周期门禁后进入新版 AppShell，并装配两个公开工作区", async () => {
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+  mockIPC((command) => {
+    if (command === "library_status") {
+      return { path: "E:\\视觉档案", library_id: "018f3c9e-6c00-7000-8000-0000000000aa", recorded_path: null, problem: null };
+    }
+    if (command === "read_layout") return null;
+    if (command === "catalog_snapshot") return { assets: [], folders: [], tags: [], trash_count: 0 };
+    if (command === "prompt_snapshot") return { prompts: [], folders: [], tags: [], trash_count: 0 };
+    throw new Error(`未预期的 IPC：${command}`);
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(appNode()));
+    await vi.waitFor(() => expect(container.querySelector('[data-workspace="assets"]')).not.toBeNull());
+    expect(container.querySelector('[data-workspace="prompts"]')).not.toBeNull();
+    const promptEntry = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "提示词",
+    );
+    if (promptEntry === undefined) throw new Error("新版 AppShell 缺少提示词一级入口");
+    await act(async () => {
+      promptEntry.click();
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => {
+      expect(container.querySelector('[data-ui="prompt-workbench"]')).not.toBeNull();
+      expect(container.querySelector('button[aria-label="收起提示词导航"]')).not.toBeNull();
+      expect(container.querySelector('button[aria-label="收起提示词检查器"]')).not.toBeNull();
+    });
+    expect(container.querySelector('[aria-label="提示词导航"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="提示词查询与视图"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="收起提示词导航"]')?.textContent).toBe("");
+    expect(container.querySelector('button[aria-label="收起提示词检查器"]')?.textContent).toBe("");
+    expect(container.textContent).not.toContain("PROMPT LIBRARY");
+    expect(container.textContent).not.toContain("NO PROMPTS");
   } finally {
     act(() => root.unmount());
   }

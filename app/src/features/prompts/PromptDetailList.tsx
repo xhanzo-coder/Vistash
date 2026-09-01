@@ -1,8 +1,9 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useCallback, useRef, type KeyboardEvent, type UIEvent } from "react";
+import { useCallback, useEffect, useRef, type KeyboardEvent, type UIEvent } from "react";
 
-import { noteSummary } from "../assets/noteSummary";
+import { noteSummary } from "./noteSummary";
 import { promptDisplayTitle } from "./promptDisplay";
+import { formatPromptDate } from "./promptDisplay";
 import { useRovingFocus } from "../workspace/rovingFocus";
 import { useScrollRestore } from "../workspace/scrollRestore";
 import { useSelection } from "../workspace/selectionContext";
@@ -26,6 +27,8 @@ type PromptDetailListProps = {
   onSortChange: (column: PromptSortColumn) => void;
   /** 双击或项目上的 Enter 显式进入聚焦阅读。 */
   onOpenFocused: (id: string) => void;
+  /** 外壳切换可见性时通知虚拟器重新测量隐藏容器的真实高度。 */
+  workspaceActive?: boolean;
 };
 
 /** 标题之外的可排序列。多值列与派生列不排序。 */
@@ -50,6 +53,7 @@ export function PromptDetailList({
   sort,
   onSortChange,
   onOpenFocused,
+  workspaceActive = true,
 }: PromptDetailListProps) {
   const { state, onItemClick, handleKeyDown } = useSelection();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -64,6 +68,10 @@ export function PromptDetailList({
     overscan: 6,
     getItemKey: (index) => prompts[index]?.id ?? String(index),
   });
+
+  useEffect(() => {
+    if (workspaceActive) virtualizer.measure();
+  }, [workspaceActive, virtualizer]);
 
   useScrollRestore(scrollRef, scrollKey, savedOffset);
 
@@ -136,7 +144,7 @@ export function PromptDetailList({
         </span>
       </div>
       <div className="asset-detail-canvas" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((item) => {
+        {(workspaceActive ? virtualizer.getVirtualItems() : []).map((item) => {
           const prompt = prompts[item.index];
           if (prompt === undefined) return null;
           const selected = state.selectedIds.has(prompt.id);
@@ -177,7 +185,7 @@ export function PromptDetailList({
               <span className="detail-value detail-mono">{prompt.linked_image_hashes.length}</span>
               <span className="detail-value detail-mono">{prompt.model ?? "—"}</span>
               <span className="detail-value">{prompt.favorite ? "★ 已收藏" : "☆ 未收藏"}</span>
-              <span className="detail-value detail-mono">{prompt.updated_at.slice(0, 10)}</span>
+              <span className="detail-value detail-mono">{formatPromptDate(prompt.updated_at)}</span>
             </button>
           );
         })}

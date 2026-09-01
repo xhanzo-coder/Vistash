@@ -6,7 +6,7 @@ const SHORT_BODY = "cinematic night";
 /** 足以超过最大行数预算的长正文。 */
 const LONG_BODY = "很长的提示词。".repeat(120);
 /** 无图、单行正文时的基准高度：内边距 + 标题行 + 两段间距 + 一行正文。 */
-const CARD_BASE = 20 + 8 + 20 + 8;
+const CARD_BASE = 20 + 8 + 20 + 8 + 18 + 8;
 
 describe("提示词卡片高度估算", () => {
   test("有封面的卡片比同正文的无图卡片高出一个封面比例的高度", () => {

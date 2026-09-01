@@ -6,8 +6,11 @@
 //! 与索引重建三类测试若需要启动窗口，就会慢到不会被真正执行。
 
 pub mod catalog;
+pub mod clipboard;
 pub mod colorcard;
 pub mod error;
+pub mod export;
+pub mod external_open;
 pub mod hashing;
 pub mod ids;
 pub mod import;

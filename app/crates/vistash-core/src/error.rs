@@ -15,6 +15,13 @@ pub enum Domain {
     Library,
     Prompt,
     Migration,
+    /// Windows 剪贴板读取、写入与位图校验（设计第十一条；写入属任务 5.6）。
+    Clipboard,
+    Export,
+    /// 默认程序打开等外部集成出站（任务 5.6，设计第十二条）。
+    External,
+    /// 导入与导出共享的长任务身份、状态和停止协议。
+    Transfer,
     Observe,
     Compile,
 }
@@ -28,6 +35,10 @@ impl Domain {
             Domain::Library => "library",
             Domain::Prompt => "prompt",
             Domain::Migration => "migration",
+            Domain::Clipboard => "clipboard",
+            Domain::Export => "export",
+            Domain::External => "external",
+            Domain::Transfer => "transfer",
             Domain::Observe => "observe",
             Domain::Compile => "compile",
         }
@@ -48,6 +59,7 @@ pub enum Code {
     ImportDuplicateInLibrary,
     ImportDuplicateInTrash,
     ImportCancelled,
+    ImportAlreadyRunning,
     // trash 域
     TrashDeleteFailed,
     TrashRestoreFailed,
@@ -75,6 +87,7 @@ pub enum Code {
     LibraryFolderExists,
     LibraryFolderNotFound,
     LibraryTagInvalid,
+    LibraryFilenameInvalid,
     LibraryAssetMetadataWriteFailed,
     // prompt 域：提示词素材及其权威文件
     PromptMetadataCorrupt,
@@ -103,7 +116,7 @@ pub enum Code {
     /// 关联目标图片不在库中。关联只能指向真实入库的图片，否则界面会把一个
     /// 永远无法解析的引用呈现成"已删除"。
     PromptLinkedImageNotFound,
-    // migration 域：库格式 v1 到 v2 的一次性迁移
+    // migration 域：库格式的一次性迁移（v1→v2 与 v2→v3）
     MigrationJournalCorrupt,
     MigrationJournalFormatTooNew,
     MigrationJournalWriteFailed,
@@ -113,6 +126,37 @@ pub enum Code {
     MigrationSidecarRewriteFailed,
     MigrationCommitFailed,
     MigrationRollbackFailed,
+    MigrationResolutionInvalid,
+    MigrationPlanStale,
+    /// v2→v3 提交的暂存写入失败。此时权威字节尚未改动，工作目录会被整体撤掉。
+    MigrationStagingFailed,
+    // clipboard 域：Windows 剪贴板端口（设计第十一条）
+    /// 打开系统剪贴板失败，通常是其他进程正在独占。必须如实上抛，
+    /// 不得冒充"剪贴板为空"，否则界面会把粘贴无效果误报成没有内容。
+    ClipboardBusy,
+    /// 剪贴板已打开但读取内容失败（取数据句柄或锁定全局内存失败）。
+    ClipboardReadFailed,
+    /// 位图像素缓冲形状非法：零尺寸或 RGBA 长度与宽高不符。
+    ClipboardImageInvalid,
+    /// 位图超出允许的最大像素数或宽高相乘溢出。
+    ClipboardImageTooLarge,
+    /// 把位图写入系统剪贴板失败（任务 5.6 的复制图像）。与读取侧的
+    /// `clipboard.read_failed` 分开：写失败时库内数据无损，重试即可。
+    ClipboardWriteFailed,
+    // export 域：原图导出（设计第十二条）
+    /// 导出目标不是目录或不可用。导出只写入使用者明确选择的既有目录，
+    /// 不代建目录树：写错位置比少写一个目录更难收拾。
+    ExportTargetInvalid,
+    /// 哈希在库内没有对应的侧车或本体。正常库中不应出现，多半意味着
+    /// 界面拿着过期列表发起导出；逐项报告而不是整体失败（规格要求失败隔离）。
+    ExportAssetMissing,
+    /// 把本体复制到导出目标失败。目标侧的 IO 问题：磁盘满、权限、路径过长等。
+    ExportWriteFailed,
+    // external 域：默认程序打开（任务 5.6，设计第十二条）
+    /// 把只读临时副本交给系统默认程序启动失败。副本已就绪且库内数据无损；
+    /// 常见原因是该扩展名的文件关联被改动或启动被系统策略阻止。
+    ExternalOpenFailed,
+    TransferTaskNotActive,
 }
 
 /// 全部错误码的清单。测试与前端文案表都以它为准，避免新增错误码后漏掉映射。
@@ -126,6 +170,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::ImportDuplicateInLibrary,
     Code::ImportDuplicateInTrash,
     Code::ImportCancelled,
+    Code::ImportAlreadyRunning,
     Code::TrashDeleteFailed,
     Code::TrashRestoreFailed,
     Code::TrashRestoreTargetFolderMissing,
@@ -148,6 +193,7 @@ pub const ALL_CODES: &[Code] = &[
     Code::LibraryFolderExists,
     Code::LibraryFolderNotFound,
     Code::LibraryTagInvalid,
+    Code::LibraryFilenameInvalid,
     Code::LibraryAssetMetadataWriteFailed,
     Code::PromptMetadataCorrupt,
     Code::PromptFormatTooNew,
@@ -172,6 +218,19 @@ pub const ALL_CODES: &[Code] = &[
     Code::MigrationSidecarRewriteFailed,
     Code::MigrationCommitFailed,
     Code::MigrationRollbackFailed,
+    Code::MigrationResolutionInvalid,
+    Code::MigrationPlanStale,
+    Code::MigrationStagingFailed,
+    Code::ClipboardBusy,
+    Code::ClipboardReadFailed,
+    Code::ClipboardImageInvalid,
+    Code::ClipboardImageTooLarge,
+    Code::ClipboardWriteFailed,
+    Code::ExportTargetInvalid,
+    Code::ExportAssetMissing,
+    Code::ExportWriteFailed,
+    Code::ExternalOpenFailed,
+    Code::TransferTaskNotActive,
 ];
 
 impl Code {
@@ -186,7 +245,8 @@ impl Code {
             | ImportMetadataWriteFailed
             | ImportDuplicateInLibrary
             | ImportDuplicateInTrash
-            | ImportCancelled => Domain::Import,
+            | ImportCancelled
+            | ImportAlreadyRunning => Domain::Import,
             TrashDeleteFailed
             | TrashRestoreFailed
             | TrashRestoreTargetFolderMissing
@@ -209,6 +269,7 @@ impl Code {
             | LibraryFolderExists
             | LibraryFolderNotFound
             | LibraryTagInvalid
+            | LibraryFilenameInvalid
             | LibraryAssetMetadataWriteFailed => Domain::Library,
             PromptMetadataCorrupt
             | PromptFormatTooNew
@@ -233,7 +294,17 @@ impl Code {
             | MigrationSidecarRewriteFailed
             | MigrationCommitFailed
             | MigrationRollbackFailed
-            => Domain::Migration,
+            | MigrationResolutionInvalid
+            | MigrationPlanStale
+            | MigrationStagingFailed => Domain::Migration,
+            ClipboardBusy
+            | ClipboardReadFailed
+            | ClipboardImageInvalid
+            | ClipboardImageTooLarge
+            | ClipboardWriteFailed => Domain::Clipboard,
+            ExportTargetInvalid | ExportAssetMissing | ExportWriteFailed => Domain::Export,
+            ExternalOpenFailed => Domain::External,
+            TransferTaskNotActive => Domain::Transfer,
         }
     }
 
@@ -249,6 +320,7 @@ impl Code {
             ImportDuplicateInLibrary => "import.duplicate_in_library",
             ImportDuplicateInTrash => "import.duplicate_in_trash",
             ImportCancelled => "import.cancelled",
+            ImportAlreadyRunning => "import.already_running",
             TrashDeleteFailed => "trash.delete_failed",
             TrashRestoreFailed => "trash.restore_failed",
             TrashRestoreTargetFolderMissing => "trash.restore_target_folder_missing",
@@ -271,6 +343,7 @@ impl Code {
             LibraryFolderExists => "library.folder_exists",
             LibraryFolderNotFound => "library.folder_not_found",
             LibraryTagInvalid => "library.tag_invalid",
+            LibraryFilenameInvalid => "library.filename_invalid",
             LibraryAssetMetadataWriteFailed => "library.asset_metadata_write_failed",
             PromptMetadataCorrupt => "prompt.metadata_corrupt",
             PromptFormatTooNew => "prompt.format_too_new",
@@ -295,6 +368,19 @@ impl Code {
             MigrationSidecarRewriteFailed => "migration.sidecar_rewrite_failed",
             MigrationCommitFailed => "migration.commit_failed",
             MigrationRollbackFailed => "migration.rollback_failed",
+            MigrationResolutionInvalid => "migration.resolution_invalid",
+            MigrationPlanStale => "migration.plan_stale",
+            MigrationStagingFailed => "migration.staging_failed",
+            ClipboardBusy => "clipboard.busy",
+            ClipboardReadFailed => "clipboard.read_failed",
+            ClipboardImageInvalid => "clipboard.image_invalid",
+            ClipboardImageTooLarge => "clipboard.image_too_large",
+            ClipboardWriteFailed => "clipboard.write_failed",
+            ExportTargetInvalid => "export.target_invalid",
+            ExportAssetMissing => "export.asset_missing",
+            ExportWriteFailed => "export.write_failed",
+            ExternalOpenFailed => "external.open_failed",
+            TransferTaskNotActive => "transfer.task_not_active",
         }
     }
 
@@ -383,14 +469,15 @@ mod tests {
     }
 
     #[test]
-    fn import_domain_has_exactly_nine_codes() {
-        // asset-library 规格明确列出九个导入错误码。数量变化必须是有意的，
+    fn import_domain_has_exactly_ten_codes() {
+        // 设计第十条为统一导入协调器新增 import.already_running（库级并发键拒绝
+        // 第二个任务），导入错误码从九个变为十个。数量变化必须是有意的，
         // 因此在这里锁死，防止随手增删。
         let n = ALL_CODES
             .iter()
             .filter(|c| c.domain() == Domain::Import)
             .count();
-        assert_eq!(n, 9, "导入错误码数量与规格不符");
+        assert_eq!(n, 10, "导入错误码数量与规格不符");
     }
 
     #[test]
@@ -420,5 +507,51 @@ mod tests {
             .filter(|c| c.domain() == Domain::ColorCard)
             .count();
         assert_eq!(n, 3, "色卡错误码数量与规格不符");
+    }
+
+    #[test]
+    fn clipboard_domain_has_exactly_five_codes() {
+        // 设计第十一条冻结的四个剪贴板读取侧失败：busy 是打开系统剪贴板被占用
+        // （调研明确禁止冒充空剪贴板）；read_failed 是已打开但读取内容失败；
+        // image_invalid 与 image_too_large 分别对应位图形状非法与超出像素上限。
+        // 任务 5.6 的复制图像新增 write_failed（写入方向），数量从四变为五。
+        // 数量变化必须是有意的，因此在这里锁死。
+        let n = ALL_CODES
+            .iter()
+            .filter(|c| c.domain() == Domain::Clipboard)
+            .count();
+        assert_eq!(n, 5, "剪贴板错误码数量与规格不符");
+        assert_eq!(Code::parse("clipboard.busy"), Some(Code::ClipboardBusy));
+        assert_eq!(
+            Code::parse("clipboard.read_failed"),
+            Some(Code::ClipboardReadFailed)
+        );
+        assert_eq!(
+            Code::parse("clipboard.image_invalid"),
+            Some(Code::ClipboardImageInvalid)
+        );
+        assert_eq!(
+            Code::parse("clipboard.image_too_large"),
+            Some(Code::ClipboardImageTooLarge)
+        );
+        assert_eq!(
+            Code::parse("clipboard.write_failed"),
+            Some(Code::ClipboardWriteFailed)
+        );
+    }
+
+    #[test]
+    fn external_domain_has_exactly_one_code() {
+        // 任务 5.6：默认程序打开目前只有一个稳定失败——把只读副本交给系统
+        // 启动失败。准备副本阶段的失败沿用 library/export 域既有码，不在此重复。
+        let n = ALL_CODES
+            .iter()
+            .filter(|c| c.domain() == Domain::External)
+            .count();
+        assert_eq!(n, 1, "外部集成错误码数量与规格不符");
+        assert_eq!(
+            Code::parse("external.open_failed"),
+            Some(Code::ExternalOpenFailed)
+        );
     }
 }

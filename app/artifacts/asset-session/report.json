@@ -1,0 +1,42 @@
+[
+  {
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "fixture_count": 1000,
+    "initial_dom": 11,
+    "isolation": true,
+    "locate": true,
+    "save_retry": true
+  },
+  {
+    "theme": "dark",
+    "width": 760,
+    "height": 600,
+    "fixture_count": 1000,
+    "initial_dom": 6,
+    "isolation": true,
+    "locate": true,
+    "save_retry": true
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "fixture_count": 1000,
+    "initial_dom": 11,
+    "isolation": true,
+    "locate": true,
+    "save_retry": true
+  },
+  {
+    "theme": "light",
+    "width": 760,
+    "height": 600,
+    "fixture_count": 1000,
+    "initial_dom": 6,
+    "isolation": true,
+    "locate": true,
+    "save_retry": true
+  }
+]

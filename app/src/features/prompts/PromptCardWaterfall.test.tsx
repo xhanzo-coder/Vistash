@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import { SelectionProvider, useSelection } from "../workspace/selectionContext";
+import { UiProvider } from "../../ui/UiProvider";
 import type { PromptRow } from "../../shared/types";
 import { PromptCardWaterfall } from "./PromptCardWaterfall";
 
@@ -32,6 +33,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearMocks();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(HTMLElement.prototype, "scrollTop");
   Reflect.deleteProperty(navigator, "clipboard");
@@ -126,21 +128,22 @@ async function setupWaterfall(
     });
     return null;
   }
-  await act(async () => {
+  const render = (nextPrompts: readonly PromptRow[]): void => {
     root.render(
-      <SelectionProvider ids={prompts.map((prompt) => prompt.id)}>
+      <UiProvider><SelectionProvider ids={nextPrompts.map((prompt) => prompt.id)}>
         <Probe />
         <PromptCardWaterfall
           onOpenFocused={() => {}}
-          prompts={prompts}
+          prompts={nextPrompts}
           scrollKey="prompts-waterfall"
           savedOffset={savedOffset}
           onScrollOffset={handlers.onScrollOffset ?? (() => {})}
           onToggleFavorite={handlers.onToggleFavorite ?? (() => {})}
         />
-      </SelectionProvider>,
+      </SelectionProvider></UiProvider>,
     );
-  });
+  };
+  await act(async () => render(prompts));
   return {
     selection: () => {
       if (latest.selection === undefined) throw new Error("探针尚未完成首次渲染");
@@ -157,6 +160,10 @@ async function setupWaterfall(
       if (el === null) throw new Error(`缺少第 ${index} 个卡片`);
       return el;
     },
+    rerender: (nextPrompts: readonly PromptRow[]) =>
+      act(async () => {
+        render(nextPrompts);
+      }),
     unmount: () =>
       act(async () => {
         root.unmount();
@@ -259,6 +266,66 @@ test("卡片只加载后端解析出的第一张正常关联图片", async () =>
 
   expect(thumbnailCalls).toEqual(["b".repeat(64)]);
   await harness.unmount();
+});
+
+test("提示词封面换源和卸载时释放媒体租约", async () => {
+  stubGeometry();
+  stubScrollTop();
+  let nextUrl = 0;
+  const createUrl = vi.fn(() => `blob:prompt-${++nextUrl}`);
+  const revokeUrl = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL: createUrl, revokeObjectURL: revokeUrl });
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "";
+      readonly scrollMargin = "";
+      readonly thresholds = [0];
+
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+
+      observe(target: Element): void {
+        queueMicrotask(() => {
+          const bounds = target.getBoundingClientRect();
+          const entry: IntersectionObserverEntry = {
+            boundingClientRect: bounds,
+            intersectionRatio: 1,
+            intersectionRect: bounds,
+            isIntersecting: true,
+            rootBounds: null,
+            target,
+            time: performance.now(),
+          };
+          this.callback([entry], this);
+        });
+      }
+
+      disconnect(): void {}
+      unobserve(): void {}
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+    },
+  );
+
+  const prompt = makePrompt(1);
+  const harness = await setupWaterfall([prompt]);
+  await vi.waitFor(() => expect(createUrl).toHaveBeenCalledTimes(1));
+  const firstUrl = "blob:prompt-1";
+
+  const nextPrompt = {
+    ...prompt,
+    cover_image_hash: "d".repeat(64),
+    resolved_cover_hash: "d".repeat(64),
+  };
+  await harness.rerender([nextPrompt]);
+  await vi.waitFor(() => expect(createUrl).toHaveBeenCalledTimes(2));
+  expect(revokeUrl).toHaveBeenCalledWith(firstUrl);
+
+  const secondUrl = "blob:prompt-2";
+  await harness.unmount();
+  expect(revokeUrl).toHaveBeenCalledWith(secondUrl);
 });
 
 test("显式标题优先于正文首行作为卡片名称", async () => {

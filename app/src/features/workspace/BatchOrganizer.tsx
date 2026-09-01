@@ -1,11 +1,12 @@
 /**
  * 批量组织操作区（任务 11.2，8.5 预留的检查器多选落点）。
  *
- * 规格钉死：多选时右检查器只呈现共同值/混合值与批量操作。组织事实经
- * summarizeCommon 折叠：文件夹/标签用三态控件表达——全有（勾选）、部分拥有
- * （半选并标注"部分"）、全无；点击即发起该维度的批量加入或移出，混合态一律
- * 按"加入全部"处理。收藏是二值字段，不一致时提供"全部收藏"出路。本组件只
- * 翻译意图，不直接发起 IPC——写入、报告与权威刷新由工作区统一协调。
+ * 规格钉死：多选时右检查器只呈现共同值/混合值与批量操作。单归属（v3）下批量
+ * 文件夹只有"整体移动"一个方向：按文件夹逐个给出"移动到"动作，另有"移回未
+ * 分类"。标签仍用三态控件表达——全有、部分拥有、全无；点击即发起该维度的批量
+ * 加入或移出，混合态一律按"加入全部"处理。收藏是二值字段，不一致时提供"全部
+ * 收藏"出路。本组件只翻译意图，不直接发起 IPC——写入、报告与权威刷新由工作区
+ * 统一协调。
  */
 
 import { useState } from "react";
@@ -15,10 +16,10 @@ import { summarizeCommon, type OrgFacts } from "./inspectorSummary";
 type Props = {
   /** 选中项的组织事实；由检查器从当前查询行里解析。 */
   items: readonly OrgFacts[];
-  /** 库内全部逻辑文件夹：勾选列表按它渲染。 */
+  /** 库内全部逻辑文件夹：移动目标列表按它渲染。 */
   folders: readonly string[];
   mutating: boolean;
-  onBatchFolders: (folder: string, add: boolean) => void;
+  onBatchMove: (folder: string | null) => void;
   onBatchTags: (tag: string, add: boolean) => void;
   onBatchFavorite: (favorite: boolean) => void;
 };
@@ -27,7 +28,7 @@ export function BatchOrganizer({
   items,
   folders,
   mutating,
-  onBatchFolders,
+  onBatchMove,
   onBatchTags,
   onBatchFavorite,
 }: Props) {
@@ -55,35 +56,43 @@ export function BatchOrganizer({
   return (
     <div className="batch-organizer">
       <fieldset>
-        <legend>逻辑文件夹</legend>
+        {/* 单归属批量：移动是替换语义，逐个文件夹给出目标动作；
+            摘要行只作呈现（共同归属/不一致），不承担三态切换。 */}
+        <legend>移动到文件夹</legend>
         {folders.length === 0 ? (
           <p className="muted">尚未创建文件夹。</p>
         ) : (
-          folders.map((folder) => {
-            const inAll =
-              summary.folders.kind !== "empty" && summary.folders.values.includes(folder);
-            const inSome = items.some((item) => item.folders.includes(folder));
-            return (
+          <>
+            <p className="muted">
+              {summary.folder.kind === "common"
+                ? `当前共同归属：${summary.folder.value ?? "未分类"}`
+                : "选中项的归属不一致。"}
+            </p>
+            {folders.map((folder) => (
               <label key={folder} className="check-row">
                 <input
-                  type="checkbox"
-                  checked={inAll}
-                  ref={(el) => {
-                    if (el !== null) el.indeterminate = !inAll && inSome;
-                  }}
+                  type="radio"
+                  name="batch-move-folder"
+                  value={folder}
                   disabled={mutating}
-                  aria-label={
-                    inAll ? `批量移出文件夹 ${folder}` : `批量加入文件夹 ${folder}`
-                  }
-                  onChange={() => onBatchFolders(folder, !inAll)}
+                  aria-label={`批量移动到文件夹 ${folder}`}
+                  onChange={() => onBatchMove(folder)}
                 />
-                <span>
-                  {folder}
-                  {!inAll && inSome ? "（部分）" : ""}
-                </span>
+                <span>{folder}</span>
               </label>
-            );
-          })
+            ))}
+            <label className="check-row">
+              <input
+                type="radio"
+                name="batch-move-folder"
+                value=""
+                disabled={mutating}
+                aria-label="批量移回未分类"
+                onChange={() => onBatchMove(null)}
+              />
+              <span>未分类</span>
+            </label>
+          </>
         )}
       </fieldset>
 

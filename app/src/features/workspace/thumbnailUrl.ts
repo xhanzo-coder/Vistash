@@ -8,8 +8,9 @@
 
 import { useEffect, useState, type RefObject } from "react";
 
+import { appPlatform } from "../../app/runtime";
+import type { ImageLease } from "../../app/platform";
 import { asAppError } from "../../shared/errors";
-import { loadThumbnail, releaseImageUrl } from "../../shared/ipc";
 import type { AppError } from "../../shared/types";
 
 export type LazyThumbnailState = {
@@ -48,19 +49,19 @@ export function useLazyThumbnailUrl(
 
   useEffect(() => {
     if (!started) return undefined;
-    let current: string | null = null;
+    let current: ImageLease | null = null;
     let cancelled = false;
 
     const load = async () => {
       try {
-        const next = await loadThumbnail(hash);
+        const lease = await appPlatform.acquireThumbnail(hash);
         if (cancelled) {
           // 组件已卸载：立刻释放，否则这份字节会一直钉在内存里。
-          releaseImageUrl(next);
+          lease.release();
           return;
         }
-        current = next;
-        setUrl(next);
+        current = lease;
+        setUrl(lease.url);
       } catch (raw) {
         if (!cancelled) setError(asAppError(raw));
       }
@@ -69,7 +70,7 @@ export function useLazyThumbnailUrl(
 
     return () => {
       cancelled = true;
-      if (current !== null) releaseImageUrl(current);
+      current?.release();
     };
   }, [hash, started]);
 

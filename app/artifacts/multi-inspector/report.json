@@ -1,0 +1,38 @@
+[
+  {
+    "theme": "dark",
+    "width": 1440,
+    "summary": true,
+    "partial_retry": true,
+    "filter_exit": true,
+    "focus_restored": true,
+    "errors": []
+  },
+  {
+    "theme": "dark",
+    "width": 760,
+    "summary": true,
+    "partial_retry": true,
+    "filter_exit": true,
+    "focus_restored": true,
+    "errors": []
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "summary": true,
+    "partial_retry": true,
+    "filter_exit": true,
+    "focus_restored": true,
+    "errors": []
+  },
+  {
+    "theme": "light",
+    "width": 760,
+    "summary": true,
+    "partial_retry": true,
+    "filter_exit": true,
+    "focus_restored": true,
+    "errors": []
+  }
+]

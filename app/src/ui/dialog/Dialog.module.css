@@ -1,0 +1,114 @@
+.overlay {
+  position: fixed;
+  z-index: var(--z-dialog);
+  inset: 0;
+  background: var(--surface-backdrop);
+  animation: overlay-in var(--motion-layout) var(--motion-ease);
+}
+
+.content,
+.confirmContent {
+  position: fixed;
+  z-index: var(--z-dialog);
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: min(42rem, calc(100dvh - 2rem));
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-dialog);
+  transform: translate(-50%, -50%);
+  animation: dialog-in var(--motion-layout) var(--motion-ease);
+}
+
+.content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.content[data-size="wide"] {
+  width: min(64rem, calc(100vw - 2rem));
+}
+
+.confirmContent {
+  width: min(28rem, calc(100vw - 2rem));
+  padding: var(--space-6);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.heading {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-size-lg);
+  font-weight: 600;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.description {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-5);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + var(--motion-distance)));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .content,
+  .confirmContent {
+    animation: none;
+  }
+}

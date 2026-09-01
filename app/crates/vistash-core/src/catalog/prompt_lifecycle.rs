@@ -632,7 +632,7 @@ mod tests {
     fn deleting_a_prompt_leaves_image_assets_byte_identical() {
         let mut fixture = fixture();
         let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-        let sidecar = import_with(&mut fixture.catalog, &source, &["参考"], &[]);
+        let sidecar = import_with(&mut fixture.catalog, &source, Some("参考"), &[]);
         fixture
             .catalog
             .create_prompt_folder(None, &name("人物"))
@@ -700,7 +700,7 @@ mod tests {
     fn purging_prompt_trash_removes_files_and_derived_links() {
         let mut fixture = fixture();
         let source = write_png(&fixture.source, "人物.png", [255, 0, 0, 255]);
-        let sidecar = import_with(&mut fixture.catalog, &source, &[], &[]);
+        let sidecar = import_with(&mut fixture.catalog, &source, None, &[]);
         let linked = placed_deleted_prompt(
             &mut fixture.catalog,
             "018f3c9e-6c00-7000-8000-0000000000d1",

@@ -1,0 +1,167 @@
+.topbar {
+  display: flex;
+  min-width: 0;
+  height: 3.125rem;
+  align-items: center;
+  gap: var(--space-3);
+  padding-inline: var(--space-3);
+  color: var(--text-primary);
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.brand {
+  display: inline-flex;
+  min-width: 7rem;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.brand img {
+  flex: 0 0 auto;
+  border-radius: 6px;
+}
+
+.navigation {
+  display: flex;
+  align-self: stretch;
+}
+
+.navigation button {
+  position: relative;
+  display: inline-flex;
+  min-width: 5.25rem;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding-inline: var(--space-3);
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  font-size: var(--text-size-sm);
+  transition:
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.navigation button::after {
+  position: absolute;
+  inset-inline: var(--space-3);
+  inset-block-end: 0;
+  height: 2px;
+  background: transparent;
+  content: "";
+}
+
+.navigation button:hover {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
+.navigation button[aria-current="page"] {
+  color: var(--text-primary);
+}
+
+.navigation button[aria-current="page"]::after {
+  background: var(--accent);
+}
+
+.navigation svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.actions {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.dragSpacer {
+  min-width: var(--space-3);
+  flex: 1;
+  align-self: stretch;
+}
+
+.windowControls {
+  display: flex;
+  align-self: stretch;
+  margin-inline: var(--space-1) calc(var(--space-3) * -1);
+}
+
+.windowControl {
+  display: inline-flex;
+  width: 2.875rem;
+  min-width: 2.875rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+}
+
+.windowControl:hover {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
+.windowControl:active {
+  background: var(--selection-surface);
+}
+
+.windowControl:focus-visible {
+  z-index: 1;
+  outline-offset: -3px;
+}
+
+.windowControl:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.closeControl:hover,
+.closeControl:active {
+  color: var(--text-inverse);
+  background: var(--text-danger);
+}
+
+.windowControl svg {
+  width: .9rem;
+  height: .9rem;
+}
+
+@media (max-width: 780px) {
+  .brand {
+    min-width: auto;
+  }
+
+  .brand span,
+  .navigation button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .navigation button {
+    min-width: 2.75rem;
+    padding-inline: var(--space-2);
+  }
+
+  .windowControl {
+    width: 2.5rem;
+    min-width: 2.5rem;
+  }
+}

@@ -1,0 +1,101 @@
+.root {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.count {
+  display: inline-grid;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  place-items: center;
+  padding-inline: 0.25rem;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.heading {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.heading > div,
+.task header > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.heading strong,
+.heading span,
+.task strong,
+.task header span {
+  font-size: var(--text-size-sm);
+}
+
+.heading span,
+.task header span {
+  color: var(--text-tertiary);
+}
+
+.list {
+  display: grid;
+  gap: var(--space-2);
+  max-height: min(28rem, calc(100dvh - 8rem));
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.task {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  content-visibility: auto;
+  contain-intrinsic-block-size: 6rem;
+}
+
+.task[data-state="failed"],
+.task[data-state="partial"] {
+  border-inline-start: 3px solid var(--status-danger);
+}
+
+.task[data-state="succeeded"] {
+  border-inline-start: 3px solid var(--status-success);
+}
+
+.task header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.task header > div {
+  flex: 1;
+}
+
+.progressBlock {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.progressBlock p,
+.outcome,
+.empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  padding: var(--space-4) 0;
+  text-align: center;
+}

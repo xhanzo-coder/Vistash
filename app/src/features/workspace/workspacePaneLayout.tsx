@@ -14,13 +14,15 @@ type WorkspaceGridStyle = CSSProperties & {
 /** 双工作台共享的 grid class 与栏宽 CSS 变量。 */
 export function workspacePanePresentation(
   baseClass: string,
-  mode: WorkspacePaneMode,
+  modes: { rail: WorkspacePaneMode; inspector: WorkspacePaneMode },
   layout: WorkspaceLayout,
 ): { className: string; style: WorkspaceGridStyle } {
   return {
-    className: `${baseClass}${mode === "drawer" ? " rail-drawer" : ""}${
-      mode === "inline" && !layout.inspectorCollapsed ? " with-inspector" : ""
-    }${mode === "inline" && layout.railCollapsed ? " rail-collapsed" : ""}`,
+    className: `${baseClass}${modes.rail === "drawer" ? " rail-drawer" : ""}${
+      modes.inspector === "inline" ? " with-inspector" : ""
+    }${modes.rail === "inline" && layout.railCollapsed ? " rail-collapsed" : ""}${
+      modes.inspector === "inline" && layout.inspectorCollapsed ? " inspector-collapsed" : ""
+    }`,
     style: {
       "--workspace-rail-width": `${layout.railWidth}px`,
       "--workspace-inspector-width": `${layout.inspectorWidth}px`,
@@ -42,6 +44,7 @@ type WorkspacePaneFrameProps = {
   maxWidth: number;
   resizeLabel: string;
   collapseLabel: string;
+  collapseControl?: ReactNode;
   onCollapse: () => void;
   onResize: (width: number) => void;
   children: ReactNode;
@@ -62,11 +65,11 @@ export function WorkspacePaneFrame({
   maxWidth,
   resizeLabel,
   collapseLabel,
+  collapseControl,
   onCollapse,
   onResize,
   children,
 }: WorkspacePaneFrameProps) {
-  if (mode === "inline" && collapsed) return null;
   return (
     <WorkspaceDrawer
       mode={mode}
@@ -76,14 +79,18 @@ export function WorkspacePaneFrame({
       onClose={onClose}
       panelId={panelId}
     >
-      <aside className={asideClassName} aria-label={side === "end" ? label : undefined}>
+      <aside
+        className={asideClassName}
+        aria-label={side === "end" ? label : undefined}
+        data-collapsed={mode === "inline" && collapsed ? "true" : undefined}
+      >
         {mode === "inline" && (
           <div className="workspace-pane-heading">
-            <button type="button" onClick={onCollapse}>{collapseLabel}</button>
+            {collapseControl ?? <button type="button" onClick={onCollapse}>{collapseLabel}</button>}
           </div>
         )}
         {children}
-        {mode === "inline" && (
+        {mode === "inline" && !collapsed && (
           <WorkspacePaneResizeHandle
             side={side}
             label={resizeLabel}

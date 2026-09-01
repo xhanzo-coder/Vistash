@@ -1,0 +1,28 @@
+.ready {
+  display: grid;
+  min-height: 100dvh;
+  place-content: center;
+  justify-items: start;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+}
+
+.ready h1,
+.ready p,
+.ready span {
+  margin: 0;
+}
+
+.ready h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-size-xl);
+  font-weight: 400;
+}
+
+.ready p,
+.ready span {
+  color: var(--text-secondary);
+  font-size: var(--text-size-sm);
+}

@@ -186,199 +186,10 @@ button:disabled {
 }
 
 /* 深色表面上的焦点环换浅色一枚，保证在深底上仍然可见。 */
-.topbar :focus-visible,
 .catalog-rail :focus-visible {
   outline-color: var(--focus-ring-on-rail);
 }
 
-.skip-link {
-  position: fixed;
-  z-index: var(--z-skip);
-  inset-block-start: var(--space-2);
-  inset-inline-start: var(--space-2);
-  padding: 0.55rem var(--space-3);
-  color: var(--text-primary);
-  background: var(--surface-raised);
-  border: 2px solid var(--accent);
-  transform: translateY(-200%);
-}
-
-.skip-link:focus-visible {
-  transform: translateY(0);
-}
-
-/* ---- 紧凑顶栏（任务 8.1）：品牌、双库一级入口、库路径同处一行 ---- */
-
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: var(--surface-paper);
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  min-height: 3.2rem;
-  padding-inline: var(--space-4);
-  color: var(--text-on-rail);
-  background: var(--surface-rail);
-}
-
-.topbar-brand {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--text-size-lg);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.topbar-nav {
-  display: flex;
-  align-self: stretch;
-}
-
-.topbar-nav button {
-  padding: 0 var(--space-3);
-  color: var(--text-on-rail-muted);
-  background: transparent;
-  border: 0;
-  border-inline-start: 1px solid var(--border-on-rail);
-  transition:
-    background-color var(--motion-fast) var(--motion-ease),
-    color var(--motion-fast) var(--motion-ease);
-}
-
-.topbar-nav button:last-child {
-  border-inline-end: 1px solid var(--border-on-rail);
-}
-
-.topbar-nav button:hover {
-  color: var(--text-on-rail-strong);
-  background: var(--surface-rail-raised);
-}
-
-.topbar-nav button[aria-current="page"] {
-  color: var(--text-on-accent);
-  background: var(--accent);
-}
-
-.topbar-library {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--text-on-rail-muted);
-  font-size: var(--text-size-sm);
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 顶栏全局搜索（任务 11.1）：输入嵌在暗色顶栏里，结果面板是浮出的亮色卡片；
-   分组标题带数量，行可进入对应素材库。面板锚定输入框，不把顶栏撑高。 */
-.global-search {
-  position: relative;
-}
-
-.global-search input {
-  width: 15rem;
-  padding: 0.42rem var(--space-3);
-  color: var(--text-primary);
-  background: var(--surface-input);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-}
-
-.global-search input::placeholder {
-  color: var(--text-secondary);
-}
-
-.global-search-panel {
-  position: absolute;
-  top: calc(100% + 0.45rem);
-  inset-inline-end: 0;
-  z-index: var(--z-drawer);
-  display: grid;
-  gap: var(--space-3);
-  width: min(26rem, 80vw);
-  max-height: min(60vh, 30rem);
-  padding: var(--space-4);
-  overflow-y: auto;
-  color: var(--text-primary);
-  background: var(--surface-card);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-panel);
-}
-
-.search-group-title {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  margin: 0 0 0.35rem;
-  color: var(--text-secondary);
-  font-size: var(--text-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.05em;
-}
-
-.search-group ul {
-  display: grid;
-  gap: 0.2rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.search-group li button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  width: 100%;
-  padding: 0.4rem 0.55rem;
-  color: var(--text-primary);
-  text-align: left;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.search-group li button:hover {
-  background: var(--surface-raised);
-  border-color: var(--border-subtle);
-}
-
-.search-group li button span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  /* 高度链的关键一环（任务 11.4）：不收缩的 flex item 会被集合内容撑穿，
-     下游的虚拟化窗口化随之失效。 */
-  min-height: 0;
-}
-
-.app-shell > [role="status"],
-.app-shell > .error-line,
-.app-shell > section:not(.asset-workspace) {
-  margin: var(--space-3) var(--space-6);
-}
-
-/* 库选择/迁移等整页区块：shell 高度已封顶，超长内容自己滚（任务 11.4）。 */
-.app-shell > section:not(.asset-workspace):not(.prompt-workspace) {
-  overflow-y: auto;
-}
-
-.asset-workspace,
 .prompt-workspace {
   flex: 1;
   display: grid;
@@ -397,7 +208,6 @@ button:disabled {
 }
 
 /* 宽屏三栏：右检查器原位常驻（with-inspector 由组件按窗口层级挂上）。 */
-.asset-workspace.with-inspector,
 .prompt-workspace.with-inspector {
   grid-template-columns:
     var(--workspace-rail-width, 240px)
@@ -405,13 +215,28 @@ button:disabled {
     var(--workspace-inspector-width, 300px);
 }
 
-.asset-workspace.rail-collapsed,
 .prompt-workspace.rail-collapsed {
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+}
+
+.prompt-workspace.rail-collapsed.with-inspector {
+  grid-template-columns: 3.5rem minmax(0, 1fr) var(--workspace-inspector-width, 300px);
+}
+
+.prompt-workspace.with-inspector.inspector-collapsed {
+  grid-template-columns: var(--workspace-rail-width, 240px) minmax(0, 1fr) 3.5rem;
+}
+
+.prompt-workspace.rail-collapsed.with-inspector.inspector-collapsed {
+  grid-template-columns: 3.5rem minmax(0, 1fr) 3.5rem;
+}
+
+/* 提示词页两侧栏独立降级：中档只收左栏，窄档才同时把右检查器变成覆盖层。 */
+.prompt-workspace.rail-drawer {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.asset-workspace.rail-collapsed.with-inspector,
-.prompt-workspace.rail-collapsed.with-inspector {
+.prompt-workspace.rail-drawer.with-inspector {
   grid-template-columns: minmax(0, 1fr) var(--workspace-inspector-width, 300px);
 }
 
@@ -678,41 +503,6 @@ button:disabled {
   font-size: var(--text-size-xs);
 }
 
-/* 已应用搜索条件（任务 11.1）：每条是一枚可单独移除的芯片，把当前查询
-   呈现为显式状态；无条件时组件不渲染，这里只负责外观。 */
-.filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding-block: var(--space-3) 0;
-}
-
-.filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.28rem 0.3rem 0.28rem 0.62rem;
-  color: var(--text-secondary);
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-size-sm);
-}
-
-.filter-chip button {
-  display: grid;
-  place-items: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  padding: 0;
-  color: var(--text-danger);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-size-md);
-  line-height: 1;
-}
-
 .trash-toolbar {
   display: flex;
   align-items: center;
@@ -743,79 +533,6 @@ button:disabled {
   color: var(--positive-text);
   background: var(--positive-bg);
   border-inline-start: 4px solid var(--positive);
-}
-
-/*
- * 虚拟化原画幅瀑布流（任务 9.1）。滚动容器占满主栏剩余高度，画布高度由
- * TanStack 按估算值给出；卡片为绝对定位的按钮，位置与尺寸全部来自内联样式，
- * 这里只负责外观状态。选中与活动是两个正交维度：选中可多项，活动至多一项。
- */
-.asset-waterfall {
-  flex: 1;
-  min-height: 0;
-  margin-top: var(--space-4);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.asset-waterfall-canvas {
-  position: relative;
-  width: 100%;
-}
-
-.asset-waterfall-item {
-  position: absolute;
-  top: 0;
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-  color: var(--text-primary);
-  text-align: left;
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition:
-    border-color var(--motion-fast) var(--motion-ease),
-    box-shadow var(--motion-fast) var(--motion-ease);
-}
-
-.asset-waterfall-item:hover {
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.asset-waterfall-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.asset-waterfall-item.is-selected {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
-.asset-waterfall-item.is-active {
-  border-color: var(--accent-strong);
-}
-
-.asset-waterfall-frame {
-  display: block;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* 瓦片高度本就按原画幅估算，网格时代的 340px 上限在这里只会裁掉竖图。 */
-.asset-waterfall .thumbnail-frame {
-  width: 100%;
-  height: 100%;
-  max-height: none;
-}
-
-.asset-waterfall .thumbnail-frame img {
-  object-fit: cover;
 }
 
 /*
@@ -936,6 +653,17 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.prompt-card-meta {
+  display: block;
+  min-height: 18px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .prompt-card-body {
   display: -webkit-box;
   overflow: hidden;
@@ -955,6 +683,16 @@ button:disabled {
   z-index: 1;
   display: flex;
   gap: 4px;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity var(--motion-fast) var(--motion-ease), transform var(--motion-fast) var(--motion-ease);
+}
+
+.prompt-card-shell:hover .prompt-card-actions,
+.prompt-card-shell:focus-within .prompt-card-actions,
+.prompt-card-shell:has(.is-selected) .prompt-card-actions {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .prompt-card-actions button {
@@ -993,19 +731,6 @@ button:disabled {
   margin: 0 0 8px;
   color: var(--text-danger);
   font-size: var(--text-size-sm);
-}
-
-/*
- * 虚拟化详情列表（任务 9.2）。表头与行共用同一组栅格列；表头吸顶，
- * 行为绝对定位按钮，位置来自内联样式。
- */
-.asset-detail-list {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  margin-top: var(--space-4);
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .detail-head,
@@ -1257,109 +982,6 @@ button:disabled {
   line-height: 1.55;
 }
 
-/* 检查器关联图片格位：固定方格，加载文案与失败原因都在格内显式呈现。 */
-.linked-thumbs {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr));
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.linked-thumb {
-  display: grid;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  place-items: center;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: var(--text-size-xs);
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-}
-
-.linked-thumb p {
-  margin: 0;
-  padding: var(--space-1);
-  text-align: center;
-}
-
-.linked-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-/*
- * 提示词关联图片分区（任务 10.5）：格位纵向堆叠徽标、缩略图与操作；
- * 拖入目标用虚线边界表达"可以放这里"，悬停命中时以进行中色实线确认。
- */
-.prompt-image-links {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.link-drop-zone {
-  padding: var(--space-3);
-  text-align: center;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-}
-
-.link-drop-zone p {
-  margin: 0;
-}
-
-.link-drop-zone.is-hover {
-  background: var(--positive-bg);
-  border-color: var(--positive-edge);
-  border-style: solid;
-}
-
-.linked-thumbs li {
-  display: grid;
-  gap: var(--space-1);
-  align-content: start;
-}
-
-.linked-thumbs li.is-deleted .linked-thumb {
-  opacity: 0.55;
-}
-
-.thumb-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
-
-.cover-badge {
-  flex-shrink: 0;
-  padding: 0 var(--space-1);
-  color: var(--positive-text);
-  background: var(--positive-bg);
-  border: 1px solid var(--positive-edge);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-size-xs, 0.72rem);
-}
-
-.import-report {
-  display: grid;
-  gap: 0.35rem;
-  margin: 0;
-  padding: var(--space-2);
-  list-style: none;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
-  font-size: var(--text-size-sm);
-}
-
-.import-report li {
-  display: grid;
-  gap: 0.25rem;
-}
-
 .view-switch {
   display: flex;
   gap: 0;
@@ -1570,32 +1192,6 @@ button:disabled {
   white-space: nowrap;
 }
 
-.deleted-badge {
-  flex-shrink: 0;
-  padding: 0 var(--space-1);
-  color: var(--text-primary);
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-size-xs, 0.72rem);
-}
-
-.link-picker {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  background: var(--surface-raised);
-  border: 1px solid var(--border-subtle);
-}
-
-.link-candidates {
-  max-height: 12rem;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-
 /* 备注编辑器与收藏快捷开关（任务 9.4）。 */
 .note-editor {
   display: grid;
@@ -1774,8 +1370,7 @@ button:disabled {
  * 栅格让出整行；rail-drawer 类由组件按窗口层级挂上。
  */
 @media (max-width: 1080px) {
-  .asset-workspace.rail-drawer,
-  .prompt-workspace.rail-drawer {
+  .asset-workspace.rail-drawer {
     grid-template-columns: minmax(0, 1fr);
   }
 }

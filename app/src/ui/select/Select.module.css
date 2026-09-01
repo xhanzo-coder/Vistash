@@ -1,0 +1,96 @@
+.trigger {
+  display: inline-flex;
+  min-width: 8rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-inline: 0.625rem 0.5rem;
+  color: var(--text-primary);
+  background: var(--surface-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  font-size: var(--text-size-sm);
+  text-align: start;
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease);
+}
+
+.trigger:hover,
+.trigger[data-state="open"] {
+  border-color: var(--border-strong);
+}
+
+.triggerIcon,
+.triggerIcon svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--text-tertiary);
+}
+
+.content {
+  z-index: var(--z-popover);
+  min-width: var(--radix-select-trigger-width);
+  max-height: min(18rem, var(--radix-select-content-available-height));
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-panel);
+  animation: select-in var(--motion-fast) var(--motion-ease);
+}
+
+.viewport {
+  padding: var(--space-1);
+}
+
+.item {
+  position: relative;
+  display: flex;
+  min-height: 1.875rem;
+  align-items: center;
+  padding: 0.35rem 0.5rem 0.35rem 1.75rem;
+  border-radius: 4px;
+  outline: 0;
+  font-size: var(--text-size-sm);
+  user-select: none;
+}
+
+.item[data-highlighted] {
+  background: var(--surface-sunken);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.item[data-disabled] {
+  opacity: 0.44;
+}
+
+.indicator {
+  position: absolute;
+  inset-inline-start: 0.5rem;
+  display: grid;
+  width: 0.875rem;
+  height: 0.875rem;
+  place-items: center;
+  color: var(--accent);
+}
+
+.indicator svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+@keyframes select-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content {
+    animation: none;
+  }
+}

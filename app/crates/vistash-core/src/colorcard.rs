@@ -14,7 +14,7 @@ use image::{DynamicImage, RgbaImage};
 use serde::{Deserialize, Serialize};
 
 /// 算法版本。写入侧车，使旧色卡可被识别为需要重算而不是被当作当前算法的输出。
-pub const ALGO_VERSION: u32 = 1;
+pub const ALGO_VERSION: u32 = 2;
 
 /// 色卡最多包含的颜色数。规格上限，超出即视为聚类失败而不是静默截断。
 pub const MAX_COLORS: usize = 8;
@@ -952,6 +952,6 @@ mod tests {
         let via_full = analyze(&big);
         let via_core = analyze_sampled(&media::sample_for_color_card(&big));
         assert_eq!(via_full, via_core);
-        assert_eq!(via_full.sampled_pixel_count, 256 * 171);
+        assert_eq!(via_full.sampled_pixel_count, 160 * 107);
     }
 }

@@ -1,46 +1,46 @@
 [
   {
     "scenario": "图片瀑布流",
-    "firstScreenMs": 295,
-    "initialDom": 12,
-    "avgDoubleFrameMs": 14.32,
-    "worstDoubleFrameMs": 29.1,
-    "peakDom": 22,
-    "heapMiB": 47.51,
-    "switchMs": 37,
-    "heapAfterSwitchMiB": 48.46
+    "firstScreenMs": 81,
+    "initialDom": 11,
+    "avgDoubleFrameMs": 13.89,
+    "worstDoubleFrameMs": 14.5,
+    "peakDom": 11,
+    "heapMiB": 47.63,
+    "switchMs": 34,
+    "heapAfterSwitchMiB": 47.08
   },
   {
     "scenario": "图片详情列表",
-    "firstScreenMs": 325,
-    "initialDom": 18,
-    "avgDoubleFrameMs": 13.33,
-    "worstDoubleFrameMs": 14,
-    "peakDom": 25,
-    "heapMiB": 51.7,
-    "switchMs": 26,
-    "heapAfterSwitchMiB": 49.43
+    "firstScreenMs": 3,
+    "initialDom": 10,
+    "avgDoubleFrameMs": 13.9,
+    "worstDoubleFrameMs": 14.3,
+    "peakDom": 10,
+    "heapMiB": 47.07,
+    "switchMs": 30,
+    "heapAfterSwitchMiB": 48.06
   },
   {
     "scenario": "提示词卡片瀑布流",
-    "firstScreenMs": 333,
+    "firstScreenMs": 6,
     "initialDom": 14,
-    "avgDoubleFrameMs": 13.69,
-    "worstDoubleFrameMs": 13.9,
+    "avgDoubleFrameMs": 13.67,
+    "worstDoubleFrameMs": 14.4,
     "peakDom": 28,
-    "heapMiB": 48.86,
-    "switchMs": 21,
-    "heapAfterSwitchMiB": 49.54
+    "heapMiB": 48.43,
+    "switchMs": 26,
+    "heapAfterSwitchMiB": 47.71
   },
   {
     "scenario": "提示词详情列表",
-    "firstScreenMs": 382,
+    "firstScreenMs": 5,
     "initialDom": 18,
-    "avgDoubleFrameMs": 13.85,
-    "worstDoubleFrameMs": 14.3,
+    "avgDoubleFrameMs": 13.83,
+    "worstDoubleFrameMs": 14,
     "peakDom": 25,
-    "heapMiB": 51.58,
+    "heapMiB": 47.86,
     "switchMs": 26,
-    "heapAfterSwitchMiB": 49.49
+    "heapAfterSwitchMiB": 48.72
   }
 ]

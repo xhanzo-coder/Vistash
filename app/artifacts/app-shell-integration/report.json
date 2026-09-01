@@ -1,0 +1,9 @@
+{
+  "shell": true,
+  "workspace_switch": true,
+  "import_menu": true,
+  "global_locate": true,
+  "task_center": true,
+  "settings": true,
+  "errors": []
+}

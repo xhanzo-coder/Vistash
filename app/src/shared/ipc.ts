@@ -18,12 +18,15 @@ import type {
   BatchProgress,
   BatchReport,
   CatalogSnapshot,
+  ConflictPolicy,
+  ExportOutcome,
   FolderMutationProgress,
   GlobalSearchResult,
   ImageDetail,
   ImportAndLinkReport,
   ImportOutcome,
-  ImportProgress,
+  TransferProgress,
+  TransferRunStatus,
   LibraryStatus,
   LinkedImageState,
   MigrationProgress,
@@ -34,8 +37,11 @@ import type {
   PromptQuery,
   PromptRestoreOutcome,
   PromptSnapshot,
+  PlannedExport,
   PurgeReport,
   RestoreOutcome,
+  V3FolderResolutionInput,
+  V3MigrationPlan,
 } from "./types";
 
 /** 唯一的 `invoke` 出口。所有失败都在这里收敛成 `IpcError`。 */
@@ -92,6 +98,24 @@ export async function pickImageFiles(): Promise<string[]> {
   }
 }
 
+/** 选择要导入的目录；取消时返回 null，不复用库位置选择器的语义。 */
+export async function pickImportDirectory(): Promise<string | null> {
+  try {
+    return await openDialog({ directory: true, multiple: false, title: "选择要导入的图片文件夹" });
+  } catch (raw) {
+    throw new IpcError(asAppError(raw));
+  }
+}
+
+/** 选择导出目标目录；取消时返回 null，不能复用库或导入目录选择语义。 */
+export async function pickExportDirectory(): Promise<string | null> {
+  try {
+    return await openDialog({ directory: true, multiple: false, title: "选择图片导出目录" });
+  } catch (raw) {
+    throw new IpcError(asAppError(raw));
+  }
+}
+
 /** 对旧版本格式的库执行一次性迁移，成功后该库成为当前库。 */
 export function migrateLibrary(
   path: string,
@@ -99,6 +123,25 @@ export function migrateLibrary(
 ): Promise<LibraryStatus> {
   const progress = new Channel<MigrationProgress>(onProgress);
   return call<LibraryStatus>("migrate_library", { path, onProgress: progress });
+}
+
+/** 为 v2 库生成只读的 v3 迁移计划；计划阶段不修改任何权威文件。 */
+export function planV3Migration(path: string): Promise<V3MigrationPlan> {
+  return call<V3MigrationPlan>("plan_v3_migration", { path });
+}
+
+/** 提交已完成全部冲突选择的 v3 迁移，成功后该库成为当前兼容库。 */
+export function commitV3Migration(
+  path: string,
+  resolutions: V3FolderResolutionInput[],
+  onProgress: (progress: MigrationProgress) => void,
+): Promise<LibraryStatus> {
+  const progress = new Channel<MigrationProgress>(onProgress);
+  return call<LibraryStatus>("commit_v3_migration", {
+    path,
+    resolutions,
+    onProgress: progress,
+  });
 }
 
 /** 网格用的素材列表，不含回收站中的素材。 */
@@ -123,16 +166,36 @@ export function renameFolder(
   return call<string>("rename_folder", { path, newName, onProgress: progress });
 }
 
+/** 把完整逻辑文件夹子树移动到目标父节点；null 表示移动到库根位置。 */
+export function moveFolder(
+  path: string,
+  destinationParent: string | null,
+  onProgress: (progress: FolderMutationProgress) => void,
+): Promise<string> {
+  const progress = new Channel<FolderMutationProgress>(onProgress);
+  return call<string>("move_folder", { path, destinationParent, onProgress: progress });
+}
+
 export function deleteFolder(path: string): Promise<void> {
   return call<void>("delete_folder", { path });
 }
 
-export function setAssetFolders(hash: string, folders: string[]): Promise<void> {
-  return call<void>("set_asset_folders", { hash, folders });
+/** 把素材移动到唯一目标文件夹；`folder` 为 null 表示移回未分类。 */
+export function moveAssetToFolder(hash: string, folder: string | null): Promise<void> {
+  return call<void>("move_asset_to_folder", { hash, folder });
+}
+
+export function renameAssetDisplayFilename(hash: string, stem: string): Promise<void> {
+  return call<void>("rename_asset_display_filename", { hash, stem });
 }
 
 export function setAssetTags(hash: string, tags: string[]): Promise<void> {
   return call<void>("set_asset_tags", { hash, tags });
+}
+
+/** 从库内权威原图重新生成色卡；像素始终留在 Rust 侧。 */
+export function regenerateColorCard(hash: string): Promise<void> {
+  return call<void>("regenerate_color_card", { hash });
 }
 
 export function deleteAsset(hash: string): Promise<void> {
@@ -147,13 +210,100 @@ export function purgeTrash(): Promise<PurgeReport> {
   return call<PurgeReport>("purge_trash");
 }
 
-/** 导入给定的文件或目录路径，并把单次任务的进度交给调用方。 */
-export function importPaths(
+/**
+ * 统一导入入口（设计第十条）：按钮、拖放与目录选择都走这一条命令。
+ *
+ * 文件与目录路径混排即可——后端按磁盘事实分类来源，目录以所选名称为逻辑根保留
+ * 相对层级。`currentFolder` 是工作区当前所在的具体逻辑文件夹；null 表示当前在
+ * 全部、未分类或回收站位置，导入一律落入未分类。
+ */
+export function importSources(
   paths: string[],
-  onProgress: (progress: ImportProgress) => void,
+  currentFolder: string | null,
+  onProgress: (progress: TransferProgress) => void,
 ): Promise<ImportOutcome> {
-  const progress = new Channel<ImportProgress>(onProgress);
-  return call<ImportOutcome>("import_paths", { paths, onProgress: progress });
+  const progress = new Channel<TransferProgress>(onProgress);
+  return call<ImportOutcome>("import_sources", {
+    paths,
+    currentFolder,
+    onProgress: progress,
+  });
+}
+
+/**
+ * 窗口级 Ctrl+V 的统一入口（任务 5.3，设计第十一条）。
+ *
+ * 前端只负责"这个按键该不该由图片工作区认领"；剪贴板上有什么、按
+ * 文件 > 位图 > 文本 > 空的顺序如何分流，全部在后端裁决。WebView 没有
+ * 任何通用剪贴板权限，位图像素从系统剪贴板到库内本体全程不经过前端。
+ * 剪贴板里没有可导入内容时后端返回全零报告而不是报错。
+ */
+export function pasteImport(
+  currentFolder: string | null,
+  onProgress: (progress: TransferProgress) => void,
+): Promise<ImportOutcome> {
+  const progress = new Channel<TransferProgress>(onProgress);
+  return call<ImportOutcome>("paste_import", {
+    currentFolder,
+    onProgress: progress,
+  });
+}
+
+/**
+ * 提交导入停止请求：真实的后端命令，返回提交后的任务状态。
+ * 只有后端确认后才是 stopped——前端隐藏进度不算已停止。
+ */
+export function importStop(taskId: string): Promise<TransferRunStatus> {
+  return call<TransferRunStatus>("import_stop", { taskId });
+}
+
+/**
+ * 原图导出入口（任务 5.5，设计第十二条）。
+ *
+ * 后端按侧车显示文件名与真实扩展名复制原始字节到使用者明确选择的目标目录，
+ * 库内本体与侧车不被修改。同名冲突以调用方给定的策略落地；覆盖是破坏性操作，
+ * 界面必须先取得使用者的明确确认才允许传 "overwrite"。停止复用 import_stop：
+ * 导入与导出共用同一把库级并发键。
+ */
+export function exportAssets(
+  hashes: string[],
+  targetDir: string,
+  policy: ConflictPolicy,
+  onProgress: (progress: TransferProgress) => void,
+): Promise<ExportOutcome> {
+  const progress = new Channel<TransferProgress>(onProgress);
+  return call<ExportOutcome>("export_assets", {
+    hashes,
+    targetDir,
+    policy,
+    onProgress: progress,
+  });
+}
+
+/** 只读导出冲突规划；使用者确认 policy 前不写目标目录。 */
+export function planExport(hashes: string[], targetDir: string): Promise<PlannedExport[]> {
+  return call<PlannedExport[]>("plan_export", { hashes, targetDir });
+}
+
+/**
+ * 把一张素材的原始位图复制到系统剪贴板（任务 5.6，设计第十二条）。
+ *
+ * 参数刻意是单个哈希而不是数组：复制图像只允许单张，多选不合成、多选出站
+ * 走批量导出——这条规则由 API 形状在结构上锁死。像素全程留在后端，前端
+ * 只见成功或错误码。
+ */
+export function copyAssetToClipboard(hash: string): Promise<void> {
+  return call<void>("copy_asset_to_clipboard", { hash });
+}
+
+/**
+ * 用系统默认程序打开素材原图（任务 5.6）。
+ *
+ * 后端把原始字节复制为应用缓存侧的只读临时副本，只把副本路径交给系统打开；
+ * 库内本体路径绝不离开 Rust 侧。同样只接受单个哈希。
+ */
+export function openWithDefaultApp(hash: string): Promise<void> {
+  return call<void>("open_with_default_app", { hash });
 }
 
 /**
@@ -294,6 +444,11 @@ export function renamePromptFolder(path: string, newName: string): Promise<strin
   return call<string>("rename_prompt_folder", { path, newName });
 }
 
+/** 把完整提示词文件夹子树移动到目标父节点；null 表示提示词文件夹树顶层。 */
+export function movePromptFolder(path: string, destinationParent: string | null): Promise<string> {
+  return call<string>("move_prompt_folder", { path, destinationParent });
+}
+
 /** 删除提示词文件夹子树；提示词素材本身保留并按核心语义回到根位置。 */
 export function deletePromptFolder(path: string): Promise<void> {
   return call<void>("delete_prompt_folder", { path });
@@ -386,20 +541,13 @@ function batchCall(
   return call<BatchReport>(command, { ...args, onProgress: progress });
 }
 
-export function batchAddAssetFolder(
+/** 批量把素材移动到唯一目标文件夹；`folder` 为 null 表示批量移回未分类。 */
+export function batchMoveAssetsToFolder(
   hashes: string[],
-  folder: string,
+  folder: string | null,
   onProgress: (progress: BatchProgress) => void,
 ): Promise<BatchReport> {
-  return batchCall("batch_add_asset_folder", { hashes, folder }, onProgress);
-}
-
-export function batchRemoveAssetFolder(
-  hashes: string[],
-  folder: string,
-  onProgress: (progress: BatchProgress) => void,
-): Promise<BatchReport> {
-  return batchCall("batch_remove_asset_folder", { hashes, folder }, onProgress);
+  return batchCall("batch_move_assets_to_folder", { hashes, folder }, onProgress);
 }
 
 export function batchAddAssetTag(

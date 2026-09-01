@@ -9,6 +9,9 @@
  * 那样就失去了这道检查。
  */
 export const ERROR_TEXT: Readonly<Record<string, string>> = {
+  "transfer.already_running": "当前库已有导入任务正在运行，请等待任务完成。",
+  // viewer 域由前端图片元素报告，不表示导入事务失败。
+  "viewer.decode_failed": "原图字节已读取，但无法显示。请检查文件是否损坏或格式是否受支持。",
   // import 域
   "import.source_unreadable": "读不到源文件。它可能已被移动、删除，或当前账户没有读取权限。",
   "import.unsupported_media_type": "不支持这种图片格式。本版支持 PNG、JPEG、WebP、GIF 与 BMP。",
@@ -19,6 +22,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "import.duplicate_in_library": "库中已有内容完全相同的素材，未重复入库。",
   "import.duplicate_in_trash": "回收站中已有内容完全相同的素材，未重复入库。",
   "import.cancelled": "导入被中断，该素材未入库。",
+  "import.already_running": "已有一个导入任务正在进行。同一时间每个库只能运行一个导入任务，可等待其完成或先停止它。",
 
   // trash 域
   "trash.delete_failed": "把素材移入库内回收站失败。",
@@ -47,6 +51,7 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "library.folder_exists": "同名文件夹已经存在。",
   "library.folder_not_found": "指定的文件夹不存在。",
   "library.tag_invalid": "标签不能为空且不能包含控制字符。",
+  "library.filename_invalid": "显示文件名不能为空、不能包含路径字符，也不能自行伪造图片扩展名。",
   "library.asset_metadata_write_failed": "写入素材组织元数据失败。",
 
   // prompt 域
@@ -75,4 +80,26 @@ export const ERROR_TEXT: Readonly<Record<string, string>> = {
   "migration.sidecar_rewrite_failed": "重写素材元数据失败，已按备份把此前处理过的文件全部恢复原状。",
   "migration.commit_failed": "提交新库版本失败。库仍是旧版本，已处理的文件已恢复原状。",
   "migration.rollback_failed": "迁移回滚失败，库可能同时存在新旧两种元数据。请不要继续使用这个库，保留目录并联系支持。",
+  "migration.resolution_invalid": "文件夹迁移选择无效。每个多归属素材必须且只能选择一个原文件夹。",
+  "migration.plan_stale": "迁移计划生成后库内容发生了变化。请重新扫描并处理新的冲突列表。",
+  "migration.staging_failed": "写入新格式暂存区失败，库内文件未被改动。请确认磁盘可写、空间充足后重试。",
+
+  // clipboard 域
+  "clipboard.busy": "系统剪贴板暂时被其他程序占用，无法读取。请稍后重试。",
+  "clipboard.read_failed": "读取剪贴板内容失败。",
+  "clipboard.image_invalid": "剪贴板里的图片数据不完整或形状异常，无法导入。",
+  "clipboard.image_too_large": "剪贴板里的图片超出本应用支持的像素上限，未导入。",
+  "clipboard.write_failed": "把图片复制到系统剪贴板失败。库内素材未受影响，可重试。",
+
+  // export 域：原图导出（设计第十二条）
+  "export.target_invalid": "导出目标不是可用的文件夹。导出只写入你明确选择的既有文件夹，请重新选择目标位置。",
+  "export.asset_missing": "找不到这张图的原始数据。列表可能已过期——请刷新后重试；其余素材不受影响。",
+  "export.write_failed": "把原图写入目标文件夹失败。已写入的其他文件保持不变，可重试失败的条目。",
+
+  // external 域：默认程序打开（任务 5.6）
+  "external.open_failed": "用系统默认程序打开这张图失败。库内素材未受影响；请检查该图片类型的默认打开方式设置后重试。",
+
+  // transfer 域：导入与导出共享的任务身份
+  "transfer.task_not_active": "这个传输任务已不是当前运行任务，停止请求未作用于其他任务。",
+  "transfer.stop_confirmation_timeout": "后端迟迟没有确认任务已停止。任务仍保持正在停止状态，可继续重试。",
 };

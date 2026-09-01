@@ -1,0 +1,131 @@
+.menu,
+.popover,
+.tooltip {
+  z-index: var(--z-popover);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-panel);
+  animation: overlay-content-in var(--motion-fast) var(--motion-ease);
+}
+
+.menu {
+  min-width: 11rem;
+  max-width: min(20rem, calc(100vw - 1rem));
+  padding: var(--space-1);
+  border-radius: var(--radius-control);
+}
+
+.menuItem,
+.dangerItem {
+  position: relative;
+  display: flex;
+  min-height: 1.875rem;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  outline: 0;
+  font-size: var(--text-size-sm);
+  user-select: none;
+}
+
+.menuItem[data-highlighted],
+.dangerItem[data-highlighted] {
+  background: var(--surface-sunken);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.menuItem[data-disabled],
+.dangerItem[data-disabled] {
+  opacity: 0.44;
+  pointer-events: none;
+}
+
+.dangerItem {
+  color: var(--text-danger);
+}
+
+.itemIcon,
+.indicator {
+  display: grid;
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.itemIcon svg,
+.indicator svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.itemLabel {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut {
+  margin-inline-start: var(--space-4);
+  color: var(--text-tertiary);
+  font-family: var(--font-ui);
+  font-size: var(--text-size-xs);
+}
+
+.menuLabel {
+  padding: 0.4rem 0.5rem 0.3rem;
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  font-weight: 600;
+}
+
+.separator {
+  height: 1px;
+  margin: var(--space-1);
+  background: var(--border-subtle);
+}
+
+.popover {
+  position: relative;
+  width: min(22rem, calc(100vw - 1rem));
+  max-height: min(30rem, calc(100dvh - 1rem));
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-4);
+  border-radius: var(--radius-panel);
+}
+
+.popoverClose {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-end: var(--space-2);
+}
+
+.tooltip {
+  max-width: 18rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: var(--text-size-xs);
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+@keyframes overlay-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu,
+  .popover,
+  .tooltip {
+    animation: none;
+  }
+}

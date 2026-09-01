@@ -26,8 +26,18 @@ tauri-build = { version = "2", features = [] }
 vistash-core = { path = "../crates/vistash-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# 剪贴板位图导入（任务 5.3）：经官方插件的 Rust API 读位图，显示名取本地时间。
+# Rust 侧注册即可满足权限要求；不给 WebView 任何通用剪贴板能力（设计第十一条）。
+tauri-plugin-clipboard-manager = "2.3.2"
+# 默认程序打开（任务 5.6）：只在 Rust 侧经 OpenerExt 打开后端刚创建并校验过的
+# 只读副本路径；不给 WebView 开任何 opener 权限（调研 §3.3 的推荐边界）。
+tauri-plugin-opener = "2"
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_UI_Shell"] }

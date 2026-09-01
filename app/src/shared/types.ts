@@ -38,7 +38,11 @@ export type AssetRow = {
   height: number;
   imported_at: string;
   original_filename: string;
+  /** 可编辑的显示文件名，含由真实媒体类型决定的扩展名。列表与检查器优先呈现它。 */
+  display_filename: string;
   source_path: string | null;
+  /** 唯一文件夹归属；null 即界面所称的"未分类"。 */
+  folder: string | null;
   deleted_at: string | null;
   color_card_status: string;
   color_card_algo_version: number;
@@ -49,7 +53,6 @@ export type AssetRow = {
   /** 二值收藏状态。收藏筛选从这里回答。 */
   favorite: boolean;
   tags: string[];
-  folders: string[];
   colors: ColorRow[];
 };
 
@@ -77,19 +80,62 @@ export type ImportFailure = {
 
 /** `commands::ImportOutcome` */
 export type ImportOutcome = {
+  task_id: string | null;
   imported: number;
   skipped_non_images: number;
+  /** 内容已在库内（或回收站）而未再次复制的来源数；既有素材保持原归属。 */
+  duplicates: number;
+  /** 观察到停止后尚未处理的来源数；不是失败。 */
+  pending_count: number;
   failures: ImportFailure[];
 };
 
-/** `commands::ImportProgress` */
-export type ImportProgress = {
+/** `commands::TransferRunStateDto`：只有后端确认后才是 stopped。 */
+export type TransferRunState = "running" | "stopping" | "stopped";
+
+export type TransferRunStatus = {
+  task_id: string;
+  state: TransferRunState;
+};
+
+/** `commands::TransferProgress` */
+export type TransferProgress = {
+  task_id: string;
   /** 已结束处理的素材数。 */
   done: number;
   /** 本批次展开后的素材总数。 */
   total: number;
   /** 当前即将处理的文件；全部结束时为 null。 */
   current_filename: string | null;
+};
+
+/** `vistash_core::export::ConflictPolicy`：同名冲突的使用者决议。覆盖是破坏性操作，前端必须先取得明确确认。 */
+export type ConflictPolicy = "skip" | "overwrite" | "auto_number";
+
+/** `vistash_core::export::PlannedExport`：只读冲突规划，不写导出目录。 */
+export type PlannedExport = {
+  hash: string;
+  display_filename: string;
+  existing: boolean;
+};
+
+/** `vistash_core::export::ExportFailure` */
+export type ExportFailure = {
+  /** 调用方交来的哈希——失败项的唯一可靠定位符。 */
+  hash: string;
+  /** 能从侧车读出的显示名；侧车本身缺失时为 null。 */
+  display_filename: string | null;
+  error: AppError;
+};
+
+/** `commands::export_assets` 的报告：成功、冲突跳过、失败与未处理四桶数量守恒。 */
+export type ExportOutcome = {
+  task_id: string;
+  /** 成功写出的文件名（相对目标目录）。 */
+  exported: string[];
+  skipped_existing: number;
+  failed: ExportFailure[];
+  pending_count: number;
 };
 
 export type FolderFilter =
@@ -134,6 +180,26 @@ export type MigrationProgress = {
   total: number;
   /** 当前处理的侧车文件名，不含路径。 */
   current_filename: string;
+};
+
+/** `commands::V3MigrationPlanEntryDto`：只暴露素材身份与文件夹决议，不暴露库内路径。 */
+export type V3MigrationPlanEntry = {
+  hash: string;
+  original_filename: string;
+} & (
+  | { kind: "automatic"; folder: string | null }
+  | { kind: "conflict"; candidates: string[] }
+);
+
+/** `commands::V3MigrationPlanDto`：计划是只读扫描结果，生成它不会写库。 */
+export type V3MigrationPlan = {
+  entries: V3MigrationPlanEntry[];
+};
+
+/** 使用者为一个多归属素材选定的唯一保留文件夹。 */
+export type V3FolderResolutionInput = {
+  hash: string;
+  folder: string;
 };
 
 export type RestoreOutcome = {
@@ -266,6 +332,10 @@ export type LinkedImageState = {
   hash: string;
   /** 该图片当前是否在图片库回收站里；关联本身保留，还原后自动回到正常。 */
   deleted: boolean;
+  display_filename: string;
+  folder: string | null;
+  width: number;
+  height: number;
 };
 
 /** `vistash_core::catalog::BatchFailure`：单个目标的批量失败。 */

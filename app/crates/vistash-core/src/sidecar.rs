@@ -23,6 +23,12 @@ pub const SIDECAR_FORMAT_VERSION: u32 = 1;
 /// 正常 v2 文件——后者会让一次误判永久顶替掉使用者真实写过的备注。
 pub const SIDECAR_FORMAT_VERSION_V2: u32 = 2;
 
+/// 图片侧车格式 v3 的版本号。
+///
+/// v3 把来源改成显式判别联合，增加必填显示文件名，并把图片文件夹归属收窄为
+/// 零个或一个。生产别名在完整迁移门禁实现前仍指向 v2。
+pub const SIDECAR_FORMAT_VERSION_V3: u32 = 3;
+
 /// v1 侧车：一个素材在库格式 v1 下的全部权威元数据。
 ///
 /// 形状已冻结，只服务迁移（设计第四条）。生产读写走 [`AssetSidecarV2`]，即类型别名
@@ -105,7 +111,10 @@ impl AssetSidecarV1 {
             std::fs::create_dir_all(parent).map_err(|e| io_err(e, "建立侧车目录失败"))?;
         }
         let json = serde_json::to_vec_pretty(self).map_err(|e| {
-            AppError::detailed(Code::ImportMetadataWriteFailed, format!("序列化侧车失败: {e}"))
+            AppError::detailed(
+                Code::ImportMetadataWriteFailed,
+                format!("序列化侧车失败: {e}"),
+            )
         })?;
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, &json).map_err(|e| io_err(e, "写入临时侧车失败"))?;
@@ -216,14 +225,393 @@ impl AssetSidecarV2 {
         })?;
         Ok(())
     }
+
+    /// 在 v1→v2 迁移的索引重建阶段提供一个只读 v3 视图。
+    ///
+    /// 此时权威侧车已经是 v2，但库尚未提交到 v2/v3 生产格式；索引是派生数据，
+    /// 只需能完成一致重建，最终 v3 提交会再次从权威侧车重建。多归属在这个过渡
+    /// 快照中取稳定的第一个路径，绝不写回侧车或改变迁移计划。
+    pub(crate) fn as_v3_index_view(&self) -> Result<AssetSidecarV3> {
+        let stem = Path::new(&self.original_filename)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                AppError::detailed(
+                    Code::LibraryMetadataCorrupt,
+                    format!("来源文件名无法转换为显示名：{}", self.original_filename),
+                )
+            })?;
+        Ok(AssetSidecarV3 {
+            format_version: SIDECAR_FORMAT_VERSION_V3,
+            hash: self.hash.clone(),
+            hash_algo: self.hash_algo.clone(),
+            media_type: self.media_type,
+            ext: self.ext.clone(),
+            byte_size: self.byte_size,
+            width: self.width,
+            height: self.height,
+            imported_at: self.imported_at,
+            source: AssetSource::Filesystem {
+                path: self.source_path.clone(),
+                filename: self.original_filename.clone(),
+            },
+            display_filename: DisplayFilename::new(stem, self.media_type)?,
+            folder: if self.is_deleted() {
+                None
+            } else {
+                match self.folders.as_slice() {
+                    [] => None,
+                    [folder] => Some(folder.clone()),
+                    // v1/v2 libraries are blocked from opening until the v3 conflict
+                    // plan resolves every multi-folder asset; the temporary derived
+                    // index must not invent an arbitrary ownership here.
+                    _ => None,
+                }
+            },
+            tags: self.tags.clone(),
+            color_card: self.color_card.clone(),
+            note: self.note.clone(),
+            favorite: self.favorite,
+            deleted_at: self.deleted_at,
+            deleted_from_folder: self.deleted_from_folders.as_ref().and_then(|folders| match folders.as_slice() {
+                [folder] => Some(folder.clone()),
+                _ => None,
+            }),
+        })
+    }
+}
+
+/// 图片进入库时的不可变来源。
+///
+/// 文件系统来源保留当时的完整路径与文件名；剪贴板来源没有伪造路径，而是记录捕获
+/// 时间和生成的来源文件名。显示名称由 [`DisplayFilename`] 独立承担。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AssetSource {
+    Filesystem {
+        /// v2 允许来源路径缺失；迁移必须以显式 `null` 保留缺失，不能伪造路径。
+        #[serde(deserialize_with = "deserialize_explicit_option")]
+        path: Option<String>,
+        filename: String,
+    },
+    Clipboard {
+        captured_at: DateTime<Utc>,
+        filename: String,
+    },
+}
+
+impl AssetSource {
+    /// 导入时的不可变来源文件名。
+    pub fn filename(&self) -> &str {
+        match self {
+            Self::Filesystem { filename, .. } | Self::Clipboard { filename, .. } => filename,
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        let filename = self.filename();
+        if invalid_filename_text(filename) {
+            return Err(AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                "素材来源文件名为空或包含非法路径字符",
+            ));
+        }
+        if let Self::Filesystem {
+            path: Some(path), ..
+        } = self
+        {
+            if path.trim().is_empty() {
+                return Err(AppError::detailed(
+                    Code::LibraryMetadataCorrupt,
+                    "文件系统来源路径为空",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 带真实媒体扩展名的显示文件名。
+///
+/// 使用者只提交名称主体，构造函数依据 [`MediaType`] 附加规范扩展名。内部字符串保持
+/// 私有，使生产代码不能绕过校验直接制造伪造格式的显示名。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct DisplayFilename(String);
+
+impl DisplayFilename {
+    /// 从使用者提交的名称主体创建显示文件名。
+    ///
+    /// # Errors
+    ///
+    /// 名称为空、含控制字符或 Windows 路径字符，或者已经带有受支持图片扩展名时，
+    /// 返回 `library.filename_invalid`。
+    pub fn new(stem: &str, media_type: MediaType) -> Result<Self> {
+        let normalized = stem.trim();
+        if invalid_filename_text(normalized)
+            || std::path::Path::new(normalized)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .and_then(MediaType::from_extension)
+                .is_some()
+        {
+            return Err(AppError::detailed(
+                Code::LibraryFilenameInvalid,
+                "显示名称主体为空、含非法路径字符或自带图片扩展名",
+            ));
+        }
+        Ok(Self(format!("{normalized}.{}", media_type.library_ext())))
+    }
+
+    /// 完整显示文件名，包含由真实媒体类型决定的扩展名。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn validate_for_media(&self, media_type: MediaType) -> Result<()> {
+        let path = std::path::Path::new(&self.0);
+        let stem_is_valid = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| !invalid_filename_text(stem));
+        let extension_matches = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension == media_type.library_ext());
+        if !stem_is_valid || !extension_matches {
+            return Err(AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!(
+                    "显示文件名必须使用真实扩展名 .{}：{}",
+                    media_type.library_ext(),
+                    self.0
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for DisplayFilename {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// 图片侧车格式 v3：显式来源、显示文件名与单一图片文件夹归属。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AssetSidecarV3 {
+    pub format_version: u32,
+    pub hash: ContentHash,
+    pub hash_algo: String,
+    pub media_type: MediaType,
+    pub ext: String,
+    pub byte_size: u64,
+    pub width: u32,
+    pub height: u32,
+    pub imported_at: DateTime<Utc>,
+    pub source: AssetSource,
+    pub display_filename: DisplayFilename,
+    /// `None` 表示图片位于界面所称的“未分类”。字段必须显式写为 `null`，不能缺失。
+    #[serde(deserialize_with = "deserialize_explicit_option")]
+    pub folder: Option<String>,
+    pub tags: Vec<String>,
+    pub color_card: ColorCard,
+    pub note: String,
+    pub favorite: bool,
+    #[serde(deserialize_with = "deserialize_explicit_option")]
+    pub deleted_at: Option<DateTime<Utc>>,
+    #[serde(deserialize_with = "deserialize_explicit_option")]
+    pub deleted_from_folder: Option<String>,
+}
+
+impl AssetSidecarV3 {
+    /// 是否处于图片回收站中。
+    pub fn is_deleted(&self) -> bool {
+        self.deleted_at.is_some()
+    }
+
+    /// 修改显示文件名，但不改变来源身份、内容哈希对象或真实媒体类型。
+    ///
+    /// # Errors
+    ///
+    /// 名称主体非法时返回 `library.filename_invalid`，原显示文件名保持不变。
+    pub fn rename_display_filename(&mut self, stem: &str) -> Result<()> {
+        let display_filename = DisplayFilename::new(stem, self.media_type)?;
+        self.display_filename = display_filename;
+        Ok(())
+    }
+
+    /// 把图片移动到唯一逻辑文件夹；`None` 表示移动到“未分类”。
+    ///
+    /// 这里只验证逻辑路径字面值。目标节点是否存在属于迁移后的 Catalog 事务，不由侧车
+    /// 猜测。路径非法时返回 `library.folder_invalid`，原归属保持不变。
+    pub fn move_to_folder(&mut self, folder: Option<&str>) -> Result<()> {
+        let folder = folder.map(normalize_folder_path).transpose()?;
+        self.folder = folder;
+        Ok(())
+    }
+
+    /// 读取并完整校验 v3 侧车。
+    ///
+    /// # Errors
+    ///
+    /// IO 失败返回 `library.io_failed`；JSON、版本或字段不变量失败返回稳定的库错误码。
+    pub fn read(path: &Path) -> Result<Self> {
+        let bytes = std::fs::read(path).map_err(|error| {
+            AppError::detailed(
+                Code::LibraryIoFailed,
+                format!("读取侧车失败 {}: {error}", path.display()),
+            )
+        })?;
+        let sidecar: Self = serde_json::from_slice(&bytes).map_err(|error| {
+            AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!("侧车无法按 v3 解析 {}: {error}", path.display()),
+            )
+        })?;
+        if sidecar.format_version > SIDECAR_FORMAT_VERSION_V3 {
+            return Err(AppError::detailed(
+                Code::LibraryFormatTooNew,
+                format!(
+                    "侧车格式版本 {} 高于程序支持的 {}：{}",
+                    sidecar.format_version,
+                    SIDECAR_FORMAT_VERSION_V3,
+                    path.display()
+                ),
+            ));
+        }
+        if sidecar.format_version < SIDECAR_FORMAT_VERSION_V3 {
+            return Err(AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!(
+                    "侧车格式版本 {} 低于 v3，应由迁移处理：{}",
+                    sidecar.format_version,
+                    path.display()
+                ),
+            ));
+        }
+        sidecar.validate()?;
+        Ok(sidecar)
+    }
+
+    /// 原子写入经过验证的 v3 侧车。
+    ///
+    /// # Errors
+    ///
+    /// 字段不变量或文件系统写入失败时返回明确错误，且不提交半个 JSON。
+    pub fn write_atomic(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let io_error = |error: std::io::Error, action: &str| {
+            AppError::detailed(
+                Code::ImportMetadataWriteFailed,
+                format!("{action} {}: {error}", path.display()),
+            )
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| io_error(error, "建立侧车目录失败"))?;
+        }
+        let json = serde_json::to_vec_pretty(self).map_err(|error| {
+            AppError::detailed(
+                Code::ImportMetadataWriteFailed,
+                format!("序列化侧车失败: {error}"),
+            )
+        })?;
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, &json).map_err(|error| io_error(error, "写入临时侧车失败"))?;
+        std::fs::rename(&temporary, path).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+            io_error(error, "提交侧车失败")
+        })?;
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.ext != self.media_type.library_ext() {
+            return Err(AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                format!(
+                    "侧车扩展名 {} 与媒体类型 {} 不一致",
+                    self.ext,
+                    self.media_type.as_str()
+                ),
+            ));
+        }
+        self.source.validate()?;
+        self.display_filename.validate_for_media(self.media_type)?;
+        if self
+            .folder
+            .as_deref()
+            .is_some_and(|folder| normalize_folder_path(folder).is_err())
+            || self
+                .deleted_from_folder
+                .as_deref()
+                .is_some_and(|folder| normalize_folder_path(folder).is_err())
+        {
+            return Err(AppError::detailed(
+                Code::LibraryMetadataCorrupt,
+                "单一图片文件夹路径为空或包含控制字符",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn deserialize_explicit_option<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+fn invalid_filename_text(value: &str) -> bool {
+    value.trim().is_empty()
+        || value == "."
+        || value == ".."
+        || value
+            .chars()
+            .any(|character| character.is_control() || "\\/:*?\"<>|".contains(character))
+}
+
+pub(crate) fn normalize_folder_path(raw: &str) -> Result<String> {
+    if raw.is_empty() {
+        return Err(invalid_folder_path(raw));
+    }
+    let mut normalized = Vec::new();
+    for segment in raw.split('/') {
+        let segment = segment.trim();
+        if segment.is_empty()
+            || segment == "."
+            || segment == ".."
+            || segment.chars().any(char::is_control)
+        {
+            return Err(invalid_folder_path(raw));
+        }
+        normalized.push(segment);
+    }
+    Ok(normalized.join("/"))
+}
+
+fn invalid_folder_path(raw: &str) -> AppError {
+    AppError::detailed(
+        Code::LibraryFolderInvalid,
+        format!("非法文件夹路径：{raw:?}"),
+    )
 }
 
 /// 生产路径使用的侧车格式。
 ///
-/// 用别名而不是把 v2 直接命名为 `AssetSidecar`：库格式版本会继续往前走，而"生产用哪一版"
+/// 用别名而不是把当前版直接命名为 `AssetSidecar`：库格式版本会继续往前走，而"生产用哪一版"
 /// 这件事应当只在一处改写。索引、导入与编目全部引用这个名字，因此下一次格式升级只需要
 /// 改这一行，而不是再一次全仓库改名。
-pub type AssetSidecar = AssetSidecarV2;
+///
+/// 任务 3.7 起（迁移提交门禁与恢复入口均已就位）生产切换为 v3：显式来源、必填显示
+/// 文件名与单一可选文件夹归属。
+pub type AssetSidecar = AssetSidecarV3;
 
 #[cfg(test)]
 mod tests {

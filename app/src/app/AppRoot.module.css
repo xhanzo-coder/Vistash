@@ -1,0 +1,9 @@
+.root {
+  isolation: isolate;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  color: var(--text-primary);
+  background: var(--surface-canvas);
+  font-family: var(--font-ui);
+}

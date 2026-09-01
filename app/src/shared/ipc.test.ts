@@ -6,9 +6,11 @@ import { Channel } from "@tauri-apps/api/core";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
 import {
-  batchAddAssetFolder,
+  batchMoveAssetsToFolder,
   batchSetPromptFavorite,
   catalogSnapshot,
+  commitV3Migration,
+  copyAssetToClipboard,
   createFolder,
   createPrompt,
   createPromptFolder,
@@ -16,24 +18,34 @@ import {
   deleteFolder,
   deletePrompt,
   deletePromptFolder,
+  exportAssets,
+  planExport,
+  planV3Migration,
+  openWithDefaultApp,
   globalSearch,
   imageDetail,
   importAndLink,
-  importPaths,
+  importSources,
+  importStop,
   linkImages,
   linkedImageStates,
   migrateLibrary,
+  moveAssetToFolder,
+  moveFolder,
+  movePromptFolder,
+  pasteImport,
   promptDetail,
   promptSnapshot,
   purgePromptTrash,
   purgeTrash,
   readLayout,
+  regenerateColorCard,
   renameFolder,
+  renameAssetDisplayFilename,
   renamePromptFolder,
   restoreAsset,
   restorePrompt,
   setAssetFavorite,
-  setAssetFolders,
   setAssetNote,
   setAssetTags,
   setPromptCover,
@@ -50,12 +62,18 @@ import type {
   AssetRow,
   BatchReport,
   CatalogSnapshot,
+  ConflictPolicy,
+  ExportOutcome,
+  PlannedExport,
   FolderMutationProgress,
   GlobalSearchResult,
   ImageDetail,
   ImportAndLinkReport,
   ImportOutcome,
-  ImportProgress,
+  TransferProgress,
+  TransferRunStatus,
+  V3MigrationPlan,
+  V3FolderResolutionInput,
   LibraryStatus,
   MigrationProgress,
   PromptAsset,
@@ -72,9 +90,87 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+test("v3 迁移规划只读返回冲突，提交只发送唯一选择与进度通道", async () => {
+  const plan: V3MigrationPlan = {
+    entries: [
+      {
+        hash: HASH,
+        original_filename: "雨夜街道.png",
+        kind: "conflict",
+        candidates: ["参考", "配色"],
+      },
+    ],
+  };
+  const resolutions: V3FolderResolutionInput[] = [{ hash: HASH, folder: "配色" }];
+  const progress: MigrationProgress = {
+    stage: "replaced",
+    done: 1,
+    total: 1,
+    current_filename: "雨夜街道.png",
+  };
+  const status: LibraryStatus = {
+    path: "E:\\视觉档案",
+    library_id: "018f3c9e-6c00-7000-8000-0000000000aa",
+    recorded_path: "E:\\视觉档案",
+    problem: null,
+  };
+  const calls: Array<{ command: string; payload: unknown }> = [];
+  mockIPC((command, payload) => {
+    calls.push({ command, payload });
+    if (command === "plan_v3_migration") return plan;
+    if (command === "commit_v3_migration") {
+      if (!isRecord(payload)) throw new TypeError("提交迁移参数不是对象");
+      const channel = payload.onProgress;
+      if (channel instanceof Channel) channel.onmessage(progress);
+      return status;
+    }
+    throw new TypeError(`未覆盖命令：${command}`);
+  });
+
+  await expect(planV3Migration("E:\\视觉档案")).resolves.toEqual(plan);
+  const received = vi.fn<(value: MigrationProgress) => void>();
+  await expect(commitV3Migration("E:\\视觉档案", resolutions, received)).resolves.toEqual(status);
+  expect(received).toHaveBeenCalledExactlyOnceWith(progress);
+  expect(calls[0]).toEqual({
+    command: "plan_v3_migration",
+    payload: { path: "E:\\视觉档案" },
+  });
+  expect(calls[1]?.command).toBe("commit_v3_migration");
+  expect(calls[1]?.payload).toMatchObject({
+    path: "E:\\视觉档案",
+    resolutions,
+  });
+});
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+test("显示文件名修改与导出冲突规划使用独立只读 IPC", async () => {
+  const planned: PlannedExport[] = [
+    { hash: HASH, display_filename: "雨夜街道.png", existing: true },
+  ];
+  const calls: Array<{ command: string; payload: unknown }> = [];
+  mockIPC((command, payload) => {
+    calls.push({ command, payload });
+    if (command === "plan_export") return planned;
+    return null;
+  });
+
+  await renameAssetDisplayFilename(HASH, "雨夜街道");
+  await expect(planExport([HASH], "E:\\导出")).resolves.toEqual(planned);
+
+  expect(calls).toEqual([
+    {
+      command: "rename_asset_display_filename",
+      payload: { hash: HASH, stem: "雨夜街道" },
+    },
+    {
+      command: "plan_export",
+      payload: { hashes: [HASH], targetDir: "E:\\导出" },
+    },
+  ]);
+});
 
 test("migrateLibrary 转交迁移进度并使用固定 command 名", async () => {
   const expected: MigrationProgress = {
@@ -110,24 +206,31 @@ test("migrateLibrary 转交迁移进度并使用固定 command 名", async () =>
   expect(received).toHaveBeenCalledExactlyOnceWith(expected);
 });
 
-test("importPaths 把当前文件与数量进度转交给调用方", async () => {
-  const expected: ImportProgress = {
+test("importSources 把路径、当前文件夹与数量进度转交给调用方", async () => {
+  const expected: TransferProgress = {
+    task_id: "task-import-001",
     done: 4,
     total: 10,
     current_filename: "pinterest_005.jpg",
   };
   const outcome: ImportOutcome = {
+    task_id: "task-import-001",
     imported: 10,
-    skipped_non_images: 0,
+    skipped_non_images: 1,
+    duplicates: 2,
+    pending_count: 3,
     failures: [],
   };
 
   mockIPC((command, payload) => {
-    expect(command).toBe("import_paths");
+    expect(command).toBe("import_sources");
     if (!isRecord(payload)) {
-      throw new TypeError("import_paths 的 IPC 参数不是对象");
+      throw new TypeError("import_sources 的 IPC 参数不是对象");
     }
     const args = payload;
+    if (args.currentFolder !== "参考/构图") {
+      throw new TypeError("import_sources 缺少当前文件夹参数");
+    }
     const channel = args.onProgress;
     if (channel instanceof Channel) {
       channel.onmessage(expected);
@@ -135,9 +238,167 @@ test("importPaths 把当前文件与数量进度转交给调用方", async () =>
     return outcome;
   });
 
-  const received = vi.fn<(progress: ImportProgress) => void>();
-  await expect(importPaths(["E:\\素材"], received)).resolves.toEqual(outcome);
+  const received = vi.fn<(progress: TransferProgress) => void>();
+  await expect(
+    importSources(["E:\\素材"], "参考/构图", received),
+  ).resolves.toEqual(outcome);
   expect(received).toHaveBeenCalledExactlyOnceWith(expected);
+});
+
+test("importStop 调用真实停止命令并转交任务状态", async () => {
+  const stopping: TransferRunStatus = { task_id: "task-001", state: "stopping" };
+  mockIPC((command, payload) => {
+    expect(command).toBe("import_stop");
+    expect(payload).toEqual({ taskId: "task-001" });
+    return stopping;
+  });
+  await expect(importStop("task-001")).resolves.toEqual(stopping);
+});
+
+test("pasteImport 走窗口粘贴命令且不携带任何像素参数", async () => {
+  // 设计第十一条：前端只决定按键由谁认领；分流在后端。这里固定的合同是
+  // command 名与参数面——除当前文件夹与进度通道外不得有其他入参，更没有
+  // 像素缓冲的位置。
+  const outcome: ImportOutcome = {
+    task_id: "task-paste-001",
+    imported: 1,
+    skipped_non_images: 0,
+    duplicates: 0,
+    pending_count: 0,
+    failures: [],
+  };
+
+  mockIPC((command, payload) => {
+    expect(command).toBe("paste_import");
+    if (!isRecord(payload)) {
+      throw new TypeError("paste_import 的 IPC 参数不是对象");
+    }
+    if (payload.currentFolder !== null) {
+      throw new TypeError("paste_import 的当前文件夹应为 null");
+    }
+    if (!("onProgress" in payload) || Object.keys(payload).length !== 2) {
+      throw new TypeError("paste_import 的参数面超出约定");
+    }
+    const channel = payload.onProgress;
+    if (channel instanceof Channel) {
+      channel.onmessage({
+        task_id: "task-paste-001",
+        done: 0,
+        total: 1,
+        current_filename: "剪贴板图片 2026-08-26 142530.png",
+      });
+    }
+    return outcome;
+  });
+
+  const received = vi.fn<(progress: TransferProgress) => void>();
+  await expect(pasteImport(null, received)).resolves.toEqual(outcome);
+  expect(received).toHaveBeenCalledExactlyOnceWith({
+    task_id: "task-paste-001",
+    done: 0,
+    total: 1,
+    current_filename: "剪贴板图片 2026-08-26 142530.png",
+  });
+});
+
+test("pasteImport 在剪贴板无可导入内容时转交全零报告", async () => {
+  // 文本/网址/空剪贴板不是错误：后端返回全零报告，前端据此提示而不是弹错。
+  const empty: ImportOutcome = {
+    task_id: null,
+    imported: 0,
+    skipped_non_images: 0,
+    duplicates: 0,
+    pending_count: 0,
+    failures: [],
+  };
+  mockIPC((command) => {
+    expect(command).toBe("paste_import");
+    return empty;
+  });
+  await expect(pasteImport(null, () => {})).resolves.toEqual(empty);
+});
+
+test("exportAssets 使用固定 command、参数面与类型化冲突策略", async () => {
+  // 设计第十二条：导出是只读库的出站操作；策略是类型化枚举值，
+  // 覆盖（overwrite）必须由界面先取得使用者明确确认后才允许传入。
+  const outcome: ExportOutcome = {
+    task_id: "task-export-001",
+    exported: ["风景.png", "人像.jpg"],
+    skipped_existing: 1,
+    failed: [
+      {
+        hash: "0".repeat(64),
+        display_filename: null,
+        error: { code: "export.asset_missing", detail: null },
+      },
+    ],
+    pending_count: 0,
+  };
+
+  mockIPC((command, payload) => {
+    expect(command).toBe("export_assets");
+    if (!isRecord(payload)) {
+      throw new TypeError("export_assets 的 IPC 参数不是对象");
+    }
+    if (payload.policy !== "auto_number") {
+      throw new TypeError(`冲突策略应为类型化枚举值，收到：${String(payload.policy)}`);
+    }
+    if (
+      !Array.isArray(payload.hashes) ||
+      payload.targetDir !== "E:\\导出" ||
+      !("onProgress" in payload) ||
+      Object.keys(payload).length !== 4
+    ) {
+      throw new TypeError("export_assets 的参数面超出约定");
+    }
+    const channel = payload.onProgress;
+    if (channel instanceof Channel) {
+      channel.onmessage({
+        task_id: "task-export-001",
+        done: 0,
+        total: 2,
+        current_filename: "风景.png",
+      });
+    }
+    return outcome;
+  });
+
+  const received = vi.fn<(progress: TransferProgress) => void>();
+  const policy: ConflictPolicy = "auto_number";
+  await expect(
+    exportAssets(["0".repeat(64)], "E:\\导出", policy, received),
+  ).resolves.toEqual(outcome);
+  expect(received).toHaveBeenCalledExactlyOnceWith({
+    task_id: "task-export-001",
+    done: 0,
+    total: 2,
+    current_filename: "风景.png",
+  });
+});
+
+test("copyAssetToClipboard 与 openWithDefaultApp 是单哈希窄命令", async () => {
+  // 任务 5.6：复制图像与默认程序打开都只允许单张——"多选不合成"由参数面
+  // 在结构上锁死：入参只有 hash 一个键，不存在数组形状的入口；多选出站
+  // 只能走 export_assets 的批量通路。
+  const seen: Record<string, Record<string, unknown>> = {};
+  mockIPC((command, payload) => {
+    if (!isRecord(payload)) {
+      throw new TypeError(`${command} 的 IPC 参数不是对象`);
+    }
+    if (Object.keys(payload).length !== 1 || !("hash" in payload)) {
+      throw new TypeError(`${command} 的参数面超出约定（只允许单个 hash）`);
+    }
+    seen[command] = payload;
+    return null;
+  });
+
+  const hash = "b".repeat(64);
+  // 后端返回 Rust 的 unit，经 JSON 序列化到达前端是 null。
+  await expect(copyAssetToClipboard(hash)).resolves.toBeNull();
+  await expect(openWithDefaultApp(hash)).resolves.toBeNull();
+
+  expect(seen.copy_asset_to_clipboard).toEqual({ hash });
+  expect(seen.open_with_default_app).toEqual({ hash });
 });
 
 test("素材编目 IPC 使用固定 command 和参数名称", async () => {
@@ -167,6 +428,13 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
       payload.onProgress.onmessage(renameProgress);
       return "参考";
     }
+    if (command === "move_folder") {
+      if (!isRecord(payload) || !(payload.onProgress instanceof Channel)) {
+        throw new TypeError("move_folder 缺少进度 Channel");
+      }
+      payload.onProgress.onmessage(renameProgress);
+      return "项目 A/构图";
+    }
     if (command === "restore_asset") return restore;
     if (command === "purge_trash") return purge;
     return null;
@@ -182,9 +450,11 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
   await catalogSnapshot(query);
   await createFolder(null, "参考");
   await renameFolder("参考", "灵感", receivedRenameProgress);
+  await moveFolder("灵感/构图", "项目 A", receivedRenameProgress);
   await deleteFolder("灵感");
-  await setAssetFolders("a".repeat(64), ["配色"]);
+  await moveAssetToFolder("a".repeat(64), "配色");
   await setAssetTags("a".repeat(64), ["人物"]);
+  await regenerateColorCard("a".repeat(64));
   await deleteAsset("a".repeat(64));
   await restoreAsset("a".repeat(64));
   await purgeTrash();
@@ -198,6 +468,15 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
     throw new TypeError("rename_folder 调用没有携带进度 Channel");
   }
   const renameChannel = renameCall.payload.onProgress;
+  const moveCall = calls.find((call) => call.command === "move_folder");
+  if (
+    moveCall === undefined ||
+    !isRecord(moveCall.payload) ||
+    !(moveCall.payload.onProgress instanceof Channel)
+  ) {
+    throw new TypeError("move_folder 调用没有携带进度 Channel");
+  }
+  const moveChannel = moveCall.payload.onProgress;
 
   expect(calls).toEqual([
     { command: "catalog_snapshot", payload: { query } },
@@ -206,20 +485,27 @@ test("素材编目 IPC 使用固定 command 和参数名称", async () => {
       command: "rename_folder",
       payload: { path: "参考", newName: "灵感", onProgress: renameChannel },
     },
+    {
+      command: "move_folder",
+      payload: { path: "灵感/构图", destinationParent: "项目 A", onProgress: moveChannel },
+    },
     { command: "delete_folder", payload: { path: "灵感" } },
     {
-      command: "set_asset_folders",
-      payload: { hash: "a".repeat(64), folders: ["配色"] },
+      command: "move_asset_to_folder",
+      payload: { hash: "a".repeat(64), folder: "配色" },
     },
     {
       command: "set_asset_tags",
       payload: { hash: "a".repeat(64), tags: ["人物"] },
     },
+    { command: "regenerate_color_card", payload: { hash: "a".repeat(64) } },
     { command: "delete_asset", payload: { hash: "a".repeat(64) } },
     { command: "restore_asset", payload: { hash: "a".repeat(64) } },
     { command: "purge_trash", payload: {} },
   ]);
-  expect(receivedRenameProgress).toHaveBeenCalledExactlyOnceWith(renameProgress);
+  expect(receivedRenameProgress).toHaveBeenCalledTimes(2);
+  expect(receivedRenameProgress).toHaveBeenNthCalledWith(1, renameProgress);
+  expect(receivedRenameProgress).toHaveBeenNthCalledWith(2, renameProgress);
 });
 
 test("IPC 保留后端错误码与详情", async () => {
@@ -290,6 +576,7 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
     if (command === "create_prompt") return prompt;
     if (command === "create_prompt_folder") return "灵感";
     if (command === "rename_prompt_folder") return "档案";
+    if (command === "move_prompt_folder") return "顶层";
     if (command === "update_prompt") return prompt;
     if (command === "prompt_detail") return prompt;
     if (command === "prompt_snapshot") return snapshot;
@@ -305,6 +592,7 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
   await promptSnapshot(promptQuery);
   await createPromptFolder(null, "灵感");
   await renamePromptFolder("灵感", "档案");
+  await movePromptFolder("档案/顶层", null);
   await deletePromptFolder("档案");
   await setPromptNote(PROMPT_ID, "备注");
   await setPromptFavorite(PROMPT_ID, true);
@@ -326,6 +614,7 @@ test("提示词 CRUD、组织与回收站 IPC 使用固定 command 和参数名�
     { command: "prompt_snapshot", payload: { query: promptQuery } },
     { command: "create_prompt_folder", payload: { parent: null, name: "灵感" } },
     { command: "rename_prompt_folder", payload: { path: "灵感", newName: "档案" } },
+    { command: "move_prompt_folder", payload: { path: "档案/顶层", destinationParent: null } },
     { command: "delete_prompt_folder", payload: { path: "档案" } },
     { command: "set_prompt_note", payload: { id: PROMPT_ID, note: "备注" } },
     { command: "set_prompt_favorite", payload: { id: PROMPT_ID, favorite: true } },
@@ -348,6 +637,7 @@ function sampleAssetRow(): AssetRow {
     height: 32,
     imported_at: "2026-08-21T00:00:00Z",
     original_filename: "逆光.png",
+    display_filename: "逆光.png",
     source_path: null,
     deleted_at: null,
     color_card_status: "ok",
@@ -357,7 +647,7 @@ function sampleAssetRow(): AssetRow {
     note: "",
     favorite: false,
     tags: [],
-    folders: [],
+    folder: null,
     colors: [],
   };
 }
@@ -446,7 +736,7 @@ test("批量命令转交逐项进度并返回统一报告", async () => {
     if (!(payload.onProgress instanceof Channel)) {
       throw new TypeError(`${command} 缺少进度 Channel`);
     }
-    if (command === "batch_add_asset_folder") {
+    if (command === "batch_move_assets_to_folder") {
       payload.onProgress.onmessage(assetProgress);
       return assetReport;
     }
@@ -459,7 +749,7 @@ test("批量命令转交逐项进度并返回统一报告", async () => {
 
   const receivedAsset = vi.fn<(progress: { done: number; total: number }) => void>();
   const receivedPrompt = vi.fn<(progress: { done: number; total: number }) => void>();
-  await expect(batchAddAssetFolder([HASH], "配色", receivedAsset)).resolves.toEqual(assetReport);
+  await expect(batchMoveAssetsToFolder([HASH], "配色", receivedAsset)).resolves.toEqual(assetReport);
   await expect(batchSetPromptFavorite([PROMPT_ID], true, receivedPrompt)).resolves.toEqual(promptReport);
   expect(receivedAsset).toHaveBeenCalledExactlyOnceWith(assetProgress);
   expect(receivedPrompt).toHaveBeenCalledExactlyOnceWith(promptProgress);
