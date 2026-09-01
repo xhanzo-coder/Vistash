@@ -8,11 +8,11 @@
 ## 2. 标签与草稿发布
 
 - [x] 2.1 更新版本发布记录，记录候选文件、工具版本、摘要、用户交互验收和公开前置条件
-- [ ] 2.2 从最新 `main` 创建受 ruleset 保护的 annotated `v0.1.1`，不移动或覆盖 `v0.1.0`
-- [ ] 2.3 等待 `v0.1.1` Windows workflow 完成门禁、双安装器、SHA-256 和草稿 Release，复核资产恰好完整
+- [x] 2.2 从最新 `main` 创建受 ruleset 保护的 annotated `v0.1.1`，不移动或覆盖 `v0.1.0`
+- [x] 2.3 等待 `v0.1.1` Windows workflow 完成门禁、双安装器、SHA-256 和草稿 Release，复核资产恰好完整
 
 ## 3. 终审与归档
 
-- [ ] 3.1 运行 Standards/Spec 双轴 code review，修复阻断项并记录最终结论
-- [ ] 3.2 通过 OpenSpec 全量 strict validate，将 delta spec 同步到 `windows-release-management` 主规格
-- [ ] 3.3 归档 `release-vistash-0-1-1`，保留草稿未公开和签名待后续的边界
+- [x] 3.1 运行 Standards/Spec 双轴 code review，修复阻断项并记录最终结论
+- [x] 3.2 通过 OpenSpec 全量 strict validate，将 delta spec 同步到 `windows-release-management` 主规格
+- [x] 3.3 归档 `release-vistash-0-1-1`，保留草稿未公开和签名待后续的边界
