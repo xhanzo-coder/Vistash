@@ -2,7 +2,7 @@
 
 Vistash 是一个从零开始开发的 Windows 桌面应用，目标是成为本地优先的 Eagle 替代品。Codex 与 Claude 都会参与仓库开发，可复用 Skill 已经通过外部中央库管理。仓库需要一个统一可发现的 Skill 入口，以及一个持久、可审计的开发进度事实来源。
 
-当前 Skill Linker 配置指向 `E:\.118-skill-linker\AgentSkills`，本机已安装 OpenSpec 1.3.0。OpenSpec 会在 `.claude/commands/opsx` 下生成 Claude 命令，并在 `.claude/skills` 下生成工作流 Skill；由于 `.claude/skills` 是共享项目入口的 junction，这些生成的 Skill 会显示在 `.agents/skills` 中。
+当前 Skill Linker 配置指向开发者本机的中央 Skill 库，本机已安装 OpenSpec 1.3.0。OpenSpec 会在 `.claude/commands/opsx` 下生成 Claude 命令，并在 `.claude/skills` 下生成工作流 Skill；由于 `.claude/skills` 是共享项目入口的 junction，这些生成的 Skill 会显示在 `.agents/skills` 中。
 
 ## 目标与非目标
 

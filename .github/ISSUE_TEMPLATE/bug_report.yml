@@ -1,0 +1,70 @@
+name: 缺陷报告
+description: 报告可复现的 Vistash 问题
+title: "[缺陷] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 Issue。不要上传个人图片、素材库、API Key、签名凭据或未脱敏路径。
+  - type: input
+    id: version
+    attributes:
+      label: Vistash 版本
+      placeholder: v0.1.1
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: installer
+    attributes:
+      label: 安装器
+      options:
+        - NSIS setup EXE
+        - MSI
+        - 源码运行
+        - 不确定
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请用最小、可重复的步骤描述问题。
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 错误码与脱敏证据
+      description: 可粘贴稳定错误码、脱敏日志或不含个人数据的截图。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 发布前检查
+      options:
+        - label: 我已移除个人图片、素材库、凭据和本机绝对路径。
+          required: true
