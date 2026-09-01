@@ -90,11 +90,11 @@ git switch main
 git pull --ff-only
 git status --short
 node app/scripts/release.mjs verify --app-root app --tag v0.1.0
-git tag -s v0.1.0 -m "Vistash 0.1.0"
+git tag -a v0.1.0 -m "Vistash 0.1.0"
 git push origin v0.1.0
 ```
 
-若维护者尚未配置可验证的 Git tag 签名，必须先完成签名配置，不把 `-s` 降级为无签名标签。工作流生成草稿后人工复核来源提交、两个安装器、`SHA256SUMS.txt`、数字签名、安装矩阵和发布说明，最后才公开草稿。
+0.1.0 尚未配置 Git 身份签名，经项目所有者确认后使用未签名 annotated tag；其不可变性由上面的 active tag ruleset 强制，工作流在构建前再次验证 ruleset。后续配置 Git tag 签名后改用 `git tag -s`，但不得移动或重建已经发布的 `v0.1.0`。工作流生成草稿后人工复核来源提交、两个安装器、`SHA256SUMS.txt`、安装包签名状态、安装矩阵和发布说明，最后才公开草稿。
 
 ## 6. 热修复与回滚
 
