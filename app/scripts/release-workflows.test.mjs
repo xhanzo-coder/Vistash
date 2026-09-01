@@ -44,13 +44,16 @@ test("版本标签工作流先验签约与门禁，再生成双安装器草稿�
   assert.match(workflow, /contents: write/);
   assert.match(workflow, /repos\/\$env:GITHUB_REPOSITORY\/rulesets\?includes_parents=true/);
   assert.match(workflow, /refs\/tags\/v\*/);
+  assert.match(workflow, /\$detail\.name -ne "immutable-version-tags"/);
   assert.match(workflow, /\$hasNoExclusions = @\(\$detail\.conditions\.ref_name\.exclude\)\.Count -eq 0/);
   assert.match(workflow, /\$includesVersionTags -and \$hasNoExclusions/);
   assert.match(workflow, /\$ruleTypes -contains "update"/);
   assert.match(workflow, /\$ruleTypes -contains "deletion"/);
-  assert.match(workflow, /\$hasNoBypass/);
-  assert.match(workflow, /git merge-base --is-ancestor \$env:GITHUB_SHA origin\/main/);
-  assert.match(workflow, /node scripts\/release\.mjs verify --tag \$env:GITHUB_REF_NAME/);
+  assert.match(workflow, /\$bypassIsVisible = \$detail\.PSObject\.Properties\.Name -contains "bypass_actors"/);
+  assert.match(workflow, /-not \$hasVisibleBypass/);
+  assert.match(workflow, /\$releaseCommit = git rev-parse HEAD/);
+  assert.match(workflow, /git merge-base --is-ancestor \$releaseCommit origin\/main/);
+  assert.match(workflow, /node scripts\/release\.mjs verify --tag \$env:RELEASE_TAG/);
   assert.match(workflow, /pnpm release:build/);
   assert.match(workflow, /pnpm release:checksums/);
   assert.match(workflow, /gh release create/);
@@ -58,7 +61,7 @@ test("版本标签工作流先验签约与门禁，再生成双安装器草稿�
   assert.match(workflow, /--draft/);
   assert.doesNotMatch(workflow, /git tag|git push/);
   assertInOrder(workflow, [
-    "node scripts/release.mjs verify --tag $env:GITHUB_REF_NAME",
+    "node scripts/release.mjs verify --tag $env:RELEASE_TAG",
     "pnpm lint",
     "pnpm typecheck",
     "pnpm test",
@@ -69,4 +72,17 @@ test("版本标签工作流先验签约与门禁，再生成双安装器草稿�
     "pnpm release:checksums",
     "gh release create",
   ]);
+});
+
+test("不可变标签的失败发布可由 main 工作流按原标签安全重跑", () => {
+  const workflow = readWorkflow("release.yml");
+
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /tag:\s*\n\s*description: 要重新发布的既有版本标签/);
+  assert.match(workflow, /RELEASE_TAG: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/);
+  assert.match(workflow, /ref: \$\{\{ inputs\.tag \|\| github\.ref \}\}/);
+  assert.match(workflow, /git rev-parse HEAD/);
+  assert.match(workflow, /node scripts\/release\.mjs verify --tag \$env:RELEASE_TAG/);
+  assert.match(workflow, /gh release create \$env:RELEASE_TAG/);
+  assert.doesNotMatch(workflow, /git tag|git push/);
 });
