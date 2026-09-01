@@ -57,4 +57,3 @@ TBD - created by archiving change prepare-open-source-repository. Update Purpose
 - **WHEN** 贡献者在不同 Windows 用户目录下阅读文档并按贡献指南操作
 - **THEN** 文档不会要求访问项目维护者的磁盘路径或中央 Skill 库
 - **AND** 贡献者可以按仓库相对路径和公开命令定位源码、测试和规格
-
