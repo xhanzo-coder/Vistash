@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
+import { LinkBreakIcon } from "@phosphor-icons/react/dist/csr/LinkBreak";
 import { LinkSimpleIcon } from "@phosphor-icons/react/dist/csr/LinkSimple";
 import { parseAssetId, type LibraryId } from "../../../app/common";
 import { IpcError } from "../../../shared/errors";
@@ -45,9 +46,12 @@ export function AssetPromptLinks({ libraryId, relations, asset, linked, disabled
       <Button className={styles.relationMain} variant="ghost" aria-label={`打开提示词 ${promptTitle(prompt)}`} onClick={() => openTarget.mutate(prompt)}>
         <span className={styles.relationText}><strong>{promptTitle(prompt)}</strong><small>{promptSummary(prompt)}</small><em>{prompt.model ?? "未填写模型"}{prompt.deleted_at === null ? "" : " · 已删除"}</em></span>
       </Button>
-      <Menu trigger={<IconButton size="compact" label={`提示词关联操作 ${promptTitle(prompt)}`} icon={<DotsThreeIcon />} disabled={busy} />}>
-        <MenuItem icon={<LinkSimpleIcon />} destructive onSelect={() => unlink.mutate(prompt.id)}>解除关联</MenuItem>
-      </Menu>
+      <span className={styles.relationActions}>
+        <IconButton className={styles.relationDirectAction} size="compact" title="解除关联" label={`解除与提示词 ${promptTitle(prompt)} 的关联`} icon={<LinkBreakIcon />} disabled={busy} onClick={() => unlink.mutate(prompt.id)} />
+        <Menu trigger={<IconButton size="compact" label={`提示词关联操作 ${promptTitle(prompt)}`} icon={<DotsThreeIcon />} disabled={busy} />}>
+          <MenuItem icon={<LinkSimpleIcon />} destructive onSelect={() => unlink.mutate(prompt.id)}>解除关联</MenuItem>
+        </Menu>
+      </span>
     </li>)}</ul>}
 
     {actionError === null ? null : <p role="alert" className={styles.error}>{actionError.code}：{actionError.detail}</p>}

@@ -55,11 +55,38 @@ def open_asset_association(page: Page) -> None:
     assert_no_horizontal_overflow(page, '[role="dialog"][data-size="wide"]')
 
 
+def open_asset_unlink(page: Page) -> None:
+    page.goto(f"{BASE_URL}/?dev=asset-library", wait_until="networkidle")
+    first_asset = page.locator('[role="option"]').first
+    expect(first_asset).to_be_visible()
+    first_asset.click()
+    information = page.get_by_role("button", name="图片信息", exact=True)
+    if information.is_visible():
+        information.click()
+    relation = page.get_by_role(
+        "button",
+        name="打开提示词 归档提示词",
+        exact=True,
+    )
+    relation.scroll_into_view_if_needed()
+    relation.focus()
+    direct_unlink = page.get_by_role(
+        "button",
+        name="解除与提示词 归档提示词 的关联",
+        exact=True,
+    )
+    expect(direct_unlink).to_be_visible()
+    expect(direct_unlink).to_have_attribute("title", "解除关联")
+    assert_no_horizontal_overflow(page, 'section[aria-label="图片工作区"]:not([hidden])')
+
+
 def open_prompt_gallery(page: Page) -> None:
     page.goto(f"{BASE_URL}/?dev=prompt-library", wait_until="networkidle")
     page.locator('select[name="prompt-sort"]').select_option("title:asc")
     prompt = page.locator('[data-prompt-card][data-id="showcase-prompt-0"]')
     expect(prompt).to_be_visible()
+    expect(prompt.locator(".prompt-cover-frame")).to_have_count(1)
+    expect(prompt.locator(".prompt-card-count")).to_have_text("3 张")
     prompt.click()
     inspector_button = page.get_by_role("button", name="提示词检查器", exact=True)
     if inspector_button.is_visible():
@@ -70,6 +97,13 @@ def open_prompt_gallery(page: Page) -> None:
     expect(second).to_be_visible()
     second.click()
     expect(preview).to_have_attribute("data-preview-hash", "b" * 64)
+    direct_unlink = page.get_by_role(
+        "button",
+        name="解除与图片 柔光人像.png 的关联",
+        exact=True,
+    )
+    expect(direct_unlink).to_be_visible()
+    expect(direct_unlink).to_have_attribute("title", "解除关联")
     expect(page.get_by_role("button", name="打开当前图片", exact=True)).to_be_visible()
     expect(page.locator('[data-ui="prompt-workbench"]')).to_be_visible()
     assert_no_horizontal_overflow(page, "[data-ui=\"prompt-workbench\"]")
@@ -83,6 +117,7 @@ def main() -> None:
         for theme in THEMES:
             for width in WIDTHS:
                 for name, open_state in (
+                    ("asset-unlink", open_asset_unlink),
                     ("asset-association", open_asset_association),
                     ("prompt-gallery", open_prompt_gallery),
                 ):
@@ -121,10 +156,12 @@ def main() -> None:
         raise TypeError("验收报告 console 必须是列表")
     if console_messages:
         raise AssertionError("浏览器控制台不干净：\n" + "\n".join(console_messages))
-    (OUTPUT_DIR / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+    with (OUTPUT_DIR / "report.json").open(
+        "w",
         encoding="utf-8",
-    )
+        newline="\n",
+    ) as report_file:
+        report_file.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 
 
 if __name__ == "__main__":

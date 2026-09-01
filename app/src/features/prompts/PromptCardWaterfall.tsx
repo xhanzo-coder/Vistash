@@ -52,8 +52,8 @@ function coverHashOf(prompt: PromptRow): string | null {
 /**
  * 虚拟化提示词卡片瀑布流（任务 10.1）。
  *
- * 卡片身份是提示词素材而非关联图片（规格）：有关联图片时最多展示一张封面加
- * `+N` 计数，无图片时就是一张可读的纯文本卡片，不要求占位图。选择权威在统一
+ * 卡片身份是提示词素材而非关联图片（规格）：有关联图片时最多展示一张封面，
+ * 多图显示关联总数 `N 张`；无图片时就是可读的纯文本卡片，不要求占位图。选择权威在统一
  * SelectionModel，位置窗口化交给 @tanstack/react-virtual 的 lanes——与图片
  * 瀑布流完全同构。
  *
@@ -250,7 +250,7 @@ export function PromptCardWaterfall({
                     <PromptCoverImage key={cover} coverHash={cover} />
                     {linkedCount > 1 && (
                       <span className="prompt-card-count" aria-hidden="true">
-                        +{linkedCount - 1}
+                        {linkedCount} 张
                       </span>
                     )}
                   </span>

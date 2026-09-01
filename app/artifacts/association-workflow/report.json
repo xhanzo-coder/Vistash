@@ -1,6 +1,12 @@
 {
   "cases": [
     {
+      "name": "asset-unlink",
+      "theme": "light",
+      "width": 1440,
+      "screenshot": "asset-unlink-light-1440.png"
+    },
+    {
       "name": "asset-association",
       "theme": "light",
       "width": 1440,
@@ -11,6 +17,12 @@
       "theme": "light",
       "width": 1440,
       "screenshot": "prompt-gallery-light-1440.png"
+    },
+    {
+      "name": "asset-unlink",
+      "theme": "light",
+      "width": 960,
+      "screenshot": "asset-unlink-light-960.png"
     },
     {
       "name": "asset-association",
@@ -25,6 +37,12 @@
       "screenshot": "prompt-gallery-light-960.png"
     },
     {
+      "name": "asset-unlink",
+      "theme": "light",
+      "width": 760,
+      "screenshot": "asset-unlink-light-760.png"
+    },
+    {
       "name": "asset-association",
       "theme": "light",
       "width": 760,
@@ -35,6 +53,12 @@
       "theme": "light",
       "width": 760,
       "screenshot": "prompt-gallery-light-760.png"
+    },
+    {
+      "name": "asset-unlink",
+      "theme": "dark",
+      "width": 1440,
+      "screenshot": "asset-unlink-dark-1440.png"
     },
     {
       "name": "asset-association",
@@ -49,6 +73,12 @@
       "screenshot": "prompt-gallery-dark-1440.png"
     },
     {
+      "name": "asset-unlink",
+      "theme": "dark",
+      "width": 960,
+      "screenshot": "asset-unlink-dark-960.png"
+    },
+    {
       "name": "asset-association",
       "theme": "dark",
       "width": 960,
@@ -59,6 +89,12 @@
       "theme": "dark",
       "width": 960,
       "screenshot": "prompt-gallery-dark-960.png"
+    },
+    {
+      "name": "asset-unlink",
+      "theme": "dark",
+      "width": 760,
+      "screenshot": "asset-unlink-dark-760.png"
     },
     {
       "name": "asset-association",

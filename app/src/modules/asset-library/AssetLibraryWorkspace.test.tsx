@@ -2659,6 +2659,23 @@ test("普通提示词关联按需加载，失败保留选择，解除不删除�
   expect(prompts).toHaveLength(2);
 });
 
+test("图片侧关联提示词行提供独立直接解除入口且不抢打开主命中", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+  await act(async () => card(H_STREET).click());
+  await vi.waitFor(() => expect(inspector().textContent).toContain("已删除记录"));
+
+  const open = inspector().querySelector<HTMLButtonElement>('button[aria-label="打开提示词 已删除记录"]');
+  const directUnlink = inspector().querySelector<HTMLButtonElement>('button[aria-label="解除与提示词 已删除记录 的关联"]');
+  expect(open).not.toBeNull();
+  expect(directUnlink).not.toBeNull();
+  expect(directUnlink).not.toBe(open);
+
+  await act(async () => directUnlink!.click());
+  await vi.waitFor(() => expect(prompts.find((prompt) => prompt.id === "prompt-1")?.linked_image_hashes).toEqual([]));
+  expect(prompts.find((prompt) => prompt.id === "prompt-1")?.title).toBe("已删除记录");
+});
+
 test("提示词侧写入推进关系 revision 后图片详情立即刷新，关联项可打开对应提示词", async () => {
   await mountWorkspace({ session: makeSession(LIB_A, "甲库"), active: true });
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());

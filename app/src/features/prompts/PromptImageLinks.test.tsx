@@ -395,6 +395,24 @@ test("解除关联走 unlink_image 并刷新权威", async () => {
   await harness.unmount();
 });
 
+test("关联图片缩略图提供独立直接解除入口且不触发预览主命中", async () => {
+  const harness = await setupLinks();
+  const preview = harness.container.querySelector<HTMLButtonElement>('button[aria-label="预览关联图片 aaaa.png"]');
+  const directUnlink = harness.container.querySelector<HTMLButtonElement>('button[aria-label="解除与图片 aaaa.png 的关联"]');
+  expect(preview).not.toBeNull();
+  expect(directUnlink).not.toBeNull();
+  expect(directUnlink).not.toBe(preview);
+
+  await act(async () => directUnlink!.click());
+  await flush();
+  expect(ipcCalls).toContainEqual({
+    command: "unlink_image",
+    payload: { promptId: "prompt-0", hash: HASH_A },
+  });
+  expect(harness.navigation.active).toBe("prompts");
+  await harness.unmount();
+});
+
 test("解除当前预览关系后回落到剩余有效封面", async () => {
   states = [linkedState(HASH_A, false), linkedState(HASH_B, false)];
   const harness = await setupLinks(makePrompt({ cover_image_hash: HASH_B, resolved_cover_hash: HASH_B }));

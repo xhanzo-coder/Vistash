@@ -204,7 +204,7 @@ test("无关联图片的提示词以可读纯文本卡片出现且不显示占�
   await harness.unmount();
 });
 
-test("五张关联图与显式封面只展示该封面与 +4 计数", async () => {
+test("五张关联图与显式封面只展示该封面与 5 张总数", async () => {
   stubGeometry();
   stubScrollTop();
   const prompt = { ...makePrompt(1), cover_image_hash: "c".repeat(64) };
@@ -216,7 +216,7 @@ test("五张关联图与显式封面只展示该封面与 +4 计数", async () =
   );
   const covers = card.querySelectorAll(".prompt-cover-frame");
   expect(covers).toHaveLength(1);
-  expect(card.querySelector(".prompt-card-count")?.textContent).toBe("+4");
+  expect(card.querySelector(".prompt-card-count")?.textContent).toBe("5 张");
 
   await harness.unmount();
 });
