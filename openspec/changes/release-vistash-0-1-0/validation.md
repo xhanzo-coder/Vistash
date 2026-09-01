@@ -61,4 +61,4 @@ node scripts/installer-lifecycle.mjs --nsis target/release/bundle/nsis/Vistash_0
 - 选择并配置可信 Authenticode 方案，同时签名 NSIS 与 MSI；当前候选会触发 SmartScreen 风险。
 - 在 GitHub 启用无 bypass 的 active tag ruleset，目标包含 `refs/tags/v*`、没有 exclusion，并限制 update/deletion；发布工作流会在构建前读取并强制这些条件。
 - 完成提交、合并到清洁 `main`，由标签工作流重新构建；当前本机候选不得上传。
-- 用户确认候选后才创建 `v0.1.0` 签名 tag。本轮没有创建或推送 tag，没有创建 GitHub Release，也没有生成证书或 updater 私钥。
+- 用户确认候选后才在已合并 `main` 上创建受 active ruleset 保护的 `v0.1.0` annotated tag。0.1.0 经用户确认允许 Git tag 暂不做身份签名；本轮候选仍明确为未签名测试候选，不把 Git tag 策略混同于 Authenticode。创建 tag 前没有创建 GitHub Release，也没有生成证书或 updater 私钥。

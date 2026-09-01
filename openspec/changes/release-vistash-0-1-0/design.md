@@ -49,7 +49,7 @@ Vistash 的 `package.json`、Cargo workspace 与 `tauri.conf.json` 已统一为 
 
 ### 4. 版本与分支纪律
 
-正常开发从 `main` 建立 `codex/` 或功能分支，经 CI 和 OpenSpec 审查后合并。发布提交先同步三处版本与发布说明，门禁全绿且工作树清洁后才在 `main` 创建签名标签 `vX.Y.Z`。本变更当前位于功能分支，只生成本机候选，不创建标签。
+正常开发从 `main` 建立 `codex/` 或功能分支，经 CI 和 OpenSpec 审查后合并。发布提交先同步三处版本与发布说明，门禁全绿且工作树清洁后才在 `main` 创建 annotated 标签 `vX.Y.Z`。0.1.0 尚未建立 Git 身份签名基础设施，因此经用户确认后采用未签名 annotated tag，并由 active tag ruleset 禁止 `refs/tags/v*` 的更新与删除且不允许 bypass；后续启用 Git tag 签名时必须继续保留该不可变规则。Windows Authenticode 与 Git tag 身份签名属于不同信任层，本决定不把未签名安装包表述为正式签名版。
 
 补丁热修复从对应发布 tag 建分支，修复通过独立 OpenSpec 变更回到 `main`，递增 patch 后发布新标签；不得覆盖或移动既有 tag。回滚通过撤销发布或发布更高 patch 完成，不让安装器删除使用者数据。
 
