@@ -15,4 +15,4 @@
 
 - [x] 3.1 运行 Standards/Spec 双轴 code review，修复阻断项并记录最终结论
 - [x] 3.2 通过 OpenSpec 全量 strict validate，将 delta spec 同步到 `windows-release-management` 主规格
-- [ ] 3.3 归档 `release-vistash-0-1-1`，保留草稿未公开和签名待后续的边界
+- [x] 3.3 归档 `release-vistash-0-1-1`，保留草稿未公开和签名待后续的边界
