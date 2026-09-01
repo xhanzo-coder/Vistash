@@ -45,6 +45,8 @@ Vistash 的 `package.json`、Cargo workspace 与 `tauri.conf.json` 已统一为 
 
 `.github/workflows/release.yml` 只响应 `v*.*.*` 标签，并先验证标签、版本、OpenSpec 和全部工程门禁，再在 `windows-latest` 构建 `nsis,msi`、生成校验和并创建 GitHub 草稿 Release。草稿状态给维护者检查文件名、SmartScreen 提示和发布说明的机会；人工发布草稿前必须完成签名决策。备选方案“push 到 main 自动发布”会把合并与外部分发耦合，拒绝。
 
+标签受不可变 ruleset 保护后，首次工作流失败不能通过移动或重建同名标签修复。因此发布工作流同时提供带必填 `tag` 的 `workflow_dispatch` 恢复入口：只从当前 `main` 的工作流定义启动，但 checkout、版本校验、main 祖先校验和 Release 全部使用输入的既有标签。恢复入口执行与 tag push 相同的完整门禁，不上传本地旧产物。GitHub Actions 内置 token 只能读取 ruleset 的公开条件和规则，不能读取 `bypass_actors`；workflow 验证固定 ruleset 名称、active tag 目标、include/exclude 及 update/deletion，管理员在首次发布前另行确认 bypass 列表为空。
+
 工作流使用官方 GitHub CLI `gh release create` 上传现有标签的产物，不让 action 隐式创建标签。所有第三方 action 使用明确主版本；Tauri 构建由仓库锁定的本地 CLI 执行，避免全局 CLI 漂移。
 
 ### 4. 版本与分支纪律
@@ -67,7 +69,7 @@ Tauri updater 需要独立 updater 私钥、应用内公钥、HTTPS/GitHub Relea
 
 - [Risk] 未签名候选触发 SmartScreen，降低首次安装信任 → 候选只用于受控测试，文档醒目标记；公开发布前完成 Authenticode。
 - [Risk] Windows runner 或本机首次打包需要下载 WiX/NSIS 工具 → 使用 Tauri 标准 bundle 流程并保留构建日志；CI 失败不降级为只上传裸 EXE。
-- [Risk] GitHub 标签误推会启动发布工作流 → 工作流首先验证三处版本与标签，产物只创建为 draft；保护 `main` 和 release environment 作为仓库侧后续设置。
+- [Risk] GitHub 标签误推或首次工作流失败 → 工作流首先验证三处版本与标签，产物只创建为 draft；active ruleset 禁止更新/删除版本标签，失败后只允许当前 `main` 工作流按原标签完整重跑。
 - [Risk] 安装/卸载测试污染真实配置 → 使用隔离 Windows 配置与临时库，操作前后显式验证路径；真实配置不进入安装器测试。
 - [Risk] 同时维护 NSIS/MSI 增加测试矩阵 → 0.1.0 两种格式共享同一二进制与自动契约，只保留一次人工安装/升级/卸载矩阵记录。
 - [Trade-off] 暂不提供自动更新 → 降低 0.1.0 的密钥和供应链风险，但后续版本需要用户手动下载安装。

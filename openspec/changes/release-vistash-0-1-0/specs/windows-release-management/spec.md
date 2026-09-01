@@ -50,6 +50,12 @@ PR、`main` 与标签发布 MUST 串行执行前端 lint、类型检查、前端
 - **WHEN** 已合并 `main` 的提交被推送合法且与应用版本一致的标签
 - **THEN** Windows 工作流上传 NSIS、MSI 与 SHA-256 清单到同标签的草稿 Release
 
+#### Scenario: 不可变标签的发布恢复
+- **WHEN** 合法版本标签已经不可变但首次发布工作流在创建 Release 前失败
+- **THEN** 维护者可以从当前 `main` 手动调度同一发布工作流并输入原标签
+- **AND** 工作流 checkout 原标签提交、重新执行全部门禁并为原标签创建草稿 Release
+- **AND** 工作流不得移动、删除或重建该标签
+
 ### Requirement: 未签名候选与正式签名边界
 0.1.0 测试候选 MAY 未签名，但文档和发布说明 MUST 标记 SmartScreen 风险；公开正式分发前 MUST 完成可信 Authenticode 签名决策。仓库 MUST NOT 包含签名私钥、证书密码或 updater 私钥。
 

@@ -81,7 +81,7 @@ pnpm release:checksums
 
 `.github/workflows/release.yml` 只响应 `v*.*.*` 标签，并验证标签提交已经进入 `main`、标签等于 `v<应用版本>`。通过全部门禁后生成 NSIS、MSI 和 SHA-256 清单，再用现有标签创建草稿 GitHub Release。工作流不执行 `git tag` 或 `git push`，也不会从普通分支自动发布。
 
-首次发布前，项目所有者必须在 GitHub `Settings → Rules → Rulesets` 创建并启用 tag ruleset：目标包含 `refs/tags/v*`、不设置 exclusion，启用“Restrict updates”和“Restrict deletions”，且不配置 bypass actor。标签工作流会通过 GitHub API 读取并验证这些条件；未配置时在构建之前失败。该远程仓库设置不能由本地提交代替。
+首次发布前，项目所有者必须在 GitHub `Settings → Rules → Rulesets` 创建并启用名为 `immutable-version-tags` 的 tag ruleset：目标包含 `refs/tags/v*`、不设置 exclusion，启用“Restrict updates”和“Restrict deletions”，且不配置 bypass actor。标签工作流会通过 GitHub API 读取并验证公开可见的名称、目标、条件与规则；GitHub Actions 内置 token 看不到 bypass 列表，因此项目所有者必须在首次创建标签前用管理员身份确认它为空。未配置时工作流在构建之前失败。该远程仓库设置不能由本地提交代替。
 
 本地完成以下检查并得到项目所有者明确授权后，才可在清洁 `main` 上创建标签：
 
@@ -95,6 +95,14 @@ git push origin v0.1.0
 ```
 
 0.1.0 尚未配置 Git 身份签名，经项目所有者确认后使用未签名 annotated tag；其不可变性由上面的 active tag ruleset 强制，工作流在构建前再次验证 ruleset。后续配置 Git tag 签名后改用 `git tag -s`，但不得移动或重建已经发布的 `v0.1.0`。工作流生成草稿后人工复核来源提交、两个安装器、`SHA256SUMS.txt`、安装包签名状态、安装矩阵和发布说明，最后才公开草稿。
+
+如果不可变标签的首次 workflow 在创建 Release 前失败，先把修复通过 PR 合并到 `main`，然后从当前 `main` 的工作流按原标签重跑：
+
+```powershell
+gh workflow run release.yml --ref main -f tag=v0.1.0
+```
+
+恢复运行必须 checkout 输入标签并重新执行全部门禁；禁止移动、删除或重建标签来“重试”。
 
 ## 6. 热修复与回滚
 

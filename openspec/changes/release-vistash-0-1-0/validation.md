@@ -62,3 +62,10 @@ node scripts/installer-lifecycle.mjs --nsis target/release/bundle/nsis/Vistash_0
 - 在 GitHub 启用无 bypass 的 active tag ruleset，目标包含 `refs/tags/v*`、没有 exclusion，并限制 update/deletion；发布工作流会在构建前读取并强制这些条件。
 - 完成提交、合并到清洁 `main`，由标签工作流重新构建；当前本机候选不得上传。
 - 用户确认候选后才在已合并 `main` 上创建受 active ruleset 保护的 `v0.1.0` annotated tag。0.1.0 经用户确认允许 Git tag 暂不做身份签名；本轮候选仍明确为未签名测试候选，不把 Git tag 策略混同于 Authenticode。创建 tag 前没有创建 GitHub Release，也没有生成证书或 updater 私钥。
+
+## 2026-09-01 标签与恢复记录
+
+- 仓库已公开；创建 ruleset `immutable-version-tags`（ID `21974334`），目标 `refs/tags/v*`、无 exclusion、无 bypass，并限制 update/deletion。
+- PR #4 与 PR #5 的 Windows 工程门禁均通过并合并；`v0.1.0` annotated tag 已创建并固定到 `main` 提交 `74e4150bb9f1ee56732efd326c6a14909eb3e304`。
+- 首次标签工作流 `33461634057` 在 ruleset 验证阶段失败，尚未构建或创建 Release。根因是 GitHub Actions 内置 token 不返回 `bypass_actors`，PowerShell 对缺失属性执行数组计数得到 1，误判为存在 bypass。
+- 修复后的 workflow 对可见字段验证固定名称、active tag、include/exclude 与 update/deletion；若 API 返回 bypass 字段则拒绝非空值。新增 `workflow_dispatch(tag)`，从当前 `main` 的工作流定义 checkout 原标签并重跑全部门禁，不移动不可变标签。
