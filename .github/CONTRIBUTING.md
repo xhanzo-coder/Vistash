@@ -16,6 +16,12 @@
 - 仓库根目录：Git、OpenSpec 和文档命令；
 - `app/`：pnpm、前端测试和 Cargo 命令。
 
+安装项目固定版本的 OpenSpec CLI：
+
+```powershell
+npm install --global @fission-ai/openspec@1.3.0
+```
+
 首次安装依赖：
 
 ```powershell
@@ -59,6 +65,8 @@ OpenSpec 严格校验在仓库根目录执行：
 ```powershell
 openspec validate --all --strict --no-interactive
 ```
+
+可读文档、任务和代码注释统一使用简体中文；Markdown、YAML、JSON、TOML、HTML、CSS、JavaScript 和 TypeScript 使用 UTF-8 无 BOM。提交前还应运行 `git diff --check`，并检查 README/Markdown 的仓库内相对链接和截图路径均存在。
 
 ## README、截图和文档
 
