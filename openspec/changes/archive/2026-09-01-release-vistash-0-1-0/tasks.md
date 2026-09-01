@@ -9,7 +9,7 @@
 - [x] 2.1 新增 PR/`main` Windows CI，按仓库要求串行运行前端与 Rust 四类门禁
 - [x] 2.2 新增 `vX.Y.Z` 标签发布工作流，在构建前验证版本/tag/OpenSpec，生成 NSIS、MSI、校验和并创建草稿 GitHub Release
 - [x] 2.3 静态验证 workflow 触发器、权限、工作目录、锁文件安装和失败即停止语义，不在本地创建远程 tag 或 Release
-- [ ] 2.4 修复内置 token 隐藏 ruleset bypass 字段的误判，新增按既有不可变标签手动重跑的恢复入口，并以 `v0.1.0` 完成草稿 Release
+- [x] 2.4 修复内置 token 隐藏 ruleset bypass 字段的误判，新增按既有不可变标签手动重跑的恢复入口，并以 `v0.1.0` 完成草稿 Release
 
 ## 3. 发布运行手册
 
