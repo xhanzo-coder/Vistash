@@ -46,3 +46,9 @@
 - `cargo test --workspace`：Tauri crate 12 项、核心 crate 304 项及全部集成/文档测试通过。
 - `openspec validate --all --strict --no-interactive`：通过，10 项规格/变更全部通过。
 - `git diff --check`：通过；文本文件为 UTF-8 无 BOM。
+
+## 双轴终审
+
+- Standards 轴：PASS；许可证文本、元数据、社区文件、README、截图资产、第三方边界和路径匿名化均符合仓库规范，未发现硬违规或 Fowler smell。
+- Spec 轴：PASS；MIT/社区入口、产品展示、路径治理和公开贡献流程均满足当前规格，未发现缺失、scope creep 或错误实现。
+- 审查固定点：`bddd22c`；审查范围覆盖本 change 的全部实现提交及最后的路径/贡献指南修正，未修改运行时代码。
