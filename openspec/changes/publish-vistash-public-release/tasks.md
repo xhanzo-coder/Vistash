@@ -6,13 +6,13 @@
 ## 2. 公开发布说明
 
 - [x] 2.1 更新 `docs/releasing.md`，补充公开预览版的草稿转公开步骤、资产/哈希复核、未签名 SmartScreen 警告、正式签名前置条件和失败撤回策略
-- [ ] 2.2 在当前 change 的 validation 记录中保存公开前检查结果、tag 指向、三个资产摘要、README 检查和签名边界
+- [x] 2.2 在当前 change 的 validation 记录中保存公开前检查结果、tag 指向、三个资产摘要、README 检查和签名边界
 
 ## 3. 公开 v0.1.1 预览
 
-- [ ] 3.1 在清洁 `main` 和已合并文档变更上串行通过 OpenSpec strict、版本发布契约及现有前端/Rust 门禁
-- [ ] 3.2 将 `v0.1.1` 草稿 Release 转为公开预览，保留一个 NSIS、一个 MSI 和一个 `SHA256SUMS.txt`，不移动或覆盖任何 tag
-- [ ] 3.3 复核公开 Release 的 `isDraft=false`、正文首屏的未签名风险、资产 SHA-256、README 下载链接和旧 `v0.1.0` 隔离
+- [x] 3.1 在清洁 `main` 和已合并文档变更上串行通过 OpenSpec strict、版本发布契约及现有前端/Rust 门禁
+- [x] 3.2 将 `v0.1.1` 草稿 Release 转为公开预览，保留一个 NSIS、一个 MSI 和一个 `SHA256SUMS.txt`，不移动或覆盖任何 tag
+- [x] 3.3 复核公开 Release 的 `isDraft=false`、正文首屏的未签名风险、资产 SHA-256、README 下载链接和旧 `v0.1.0` 隔离
 
 ## 4. 终审与归档
 

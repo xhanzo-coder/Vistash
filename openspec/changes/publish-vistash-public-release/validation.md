@@ -11,17 +11,19 @@
 
 ## README 与发布说明
 
-- 根目录 `README.md`：待发布分支合并后复核链接、命令、功能边界、隐私说明和未签名风险。
-- `docs/releases/v0.1.1.md`：待用于 Release 正文，版本和 SHA-256 必须与远程 `SHA256SUMS.txt` 一致。
+- 根目录 `README.md`：已合并到 `main`，GitHub README API 可读取，链接、命令、功能边界、隐私说明和未签名风险已复核。
+- `docs/releases/v0.1.1.md`：已用于 Release 正文，版本和 SHA-256 与远程 `SHA256SUMS.txt` 一致。
 - `docs/releasing.md`：已补充公开预览转公开命令、失败撤回和正式签名边界。
 
 ## 未签名边界
 
 当前没有可信 Authenticode 证书或签名服务凭据。公开对象只能称为“未签名公开预览”，不得声称已签名稳定分发。仓库不包含证书、密码、token、Git signing 私钥或 updater 私钥。
 
-## 公开后待核对
+## 公开结果
 
-- Release `isDraft=false`，标题为 `Vistash v0.1.1 — 公开预览`。
-- 正文首屏明确未签名 SmartScreen 风险，并链接 README。
-- 三个资产名称、字节数和 SHA-256 未改变，`v0.1.0` 与 `v0.1.1` tag 未改变。
-- GitHub 仓库根页面能够直接打开 README，README 中的 Release/Issues 链接有效。
+- PR #12 的 Windows 工程门禁运行 `33490614999` 成功（5 分 35 秒）；合并提交为 `b4385ed4dc94b099c2bc5e138228b5ae2f9687dd`。
+- `v0.1.1` 已转换为公开、非预发布 Release：[`Vistash v0.1.1`](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.1)，`isDraft=false`、`isPrerelease=false`，标题为 `Vistash v0.1.1 — 公开预览`。
+- 正文首屏明确未签名 SmartScreen 风险，并链接根目录 README；公开 Release 资产仍恰好为一个 NSIS、一个 MSI 和一个 `SHA256SUMS.txt`。
+- 远程资产摘要未改变：NSIS `d4e5ca838788a74e103b65ffdc12ccb6bebc9cbe120ed64c2d2e2209d4d124f9`（3,790,988 字节）、MSI `57034d7328829eba26ff6bb6b6439dc16b501bd0d5214e05cad8bb15d06a6cae`（4,960,256 字节）、清单 `281200804574ec4421e0629fd1ea7f8584498524276839a471e0dd185bb84e4d`（188 字节）。
+- `v0.1.0` 与 `v0.1.1` tag 均未改变；`v0.1.0` 旧 Release 仍保持草稿状态。
+- 正式 Authenticode 签名仍未完成；本次公开对象严格称为“未签名公开预览”，没有上传任何签名凭据。
