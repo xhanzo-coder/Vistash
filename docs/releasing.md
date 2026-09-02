@@ -98,33 +98,33 @@ gh workflow run release.yml --ref main -f tag=v0.1.0
 
 恢复运行必须 checkout 输入标签并重新执行全部门禁；禁止移动、删除或重建标签来“重试”。
 
-## 6. v0.1.1 公开预览发布
+## 6. v0.1.2 公开预览发布
 
-`v0.1.1` 已通过真实 Windows 桌面验收、安装生命周期验证和完整前端/Rust 门禁。它可以作为“未签名公开预览”对外提供，但不能被描述为已签名稳定版。
+`v0.1.2` 必须通过真实 Windows 桌面验收、安装生命周期验证和完整前端/Rust 门禁，才可以作为“未签名公开预览”对外提供；它不能被描述为已签名稳定版。
 
 公开前维护者必须确认：
 
-- `v0.1.1` 是不可变 annotated tag，且仍指向已经合并到 `main` 的提交；
-- Release 资产恰好为一个 `Vistash_0.1.1_x64-setup.exe`、一个 `Vistash_0.1.1_x64_en-US.msi` 和一个 `SHA256SUMS.txt`；
+- `v0.1.2` 是不可变 annotated tag，且仍指向已经合并到 `main` 的提交；
+- Release 资产恰好为一个 `Vistash_0.1.2_x64-setup.exe`、一个 `Vistash_0.1.2_x64_en-US.msi` 和一个 `SHA256SUMS.txt`；
 - Release 正文首屏明确未签名 SmartScreen 风险，并链接到根目录 `README.md`；
-- `README.md`、`docs/releases/v0.1.1.md` 和 `SHA256SUMS.txt` 的版本、文件名和 SHA-256 一致；
+- `README.md`、`docs/releases/v0.1.2.md` 和 `SHA256SUMS.txt` 的版本与文件名一致，安装器摘要以 `SHA256SUMS.txt` 为唯一权威来源；
 - 不存在 Authenticode、Git signing 或 updater 私钥，也没有把本机候选重新上传覆盖远程资产。
 
 完成核对后，把现有草稿转为公开预览，并使用版本化发布说明：
 
 ```powershell
-gh release edit v0.1.1 --repo xhanzo-coder/Vistash --title "Vistash v0.1.1 — 公开预览" --notes-file docs/releases/v0.1.1.md --draft=false
+gh release edit v0.1.2 --repo xhanzo-coder/Vistash --title "Vistash v0.1.2 — 公开预览" --notes-file docs/releases/v0.1.2.md --draft=false
 ```
 
 公开后立即复核：
 
 ```powershell
-gh release view v0.1.1 --repo xhanzo-coder/Vistash --json name,tagName,isDraft,assets,body
+gh release view v0.1.2 --repo xhanzo-coder/Vistash --json name,tagName,isDraft,assets,body
 ```
 
-预期 `isDraft=false`，资产仍恰好为三个，正文含“未签名公开预览”和 SmartScreen 提示；`v0.1.0` tag 与 Release 不得改变。若公开后发现阻断问题，先把 Release 改回非公开并记录原因，再通过更高 SemVer 发布修复，不移动旧 tag 或替换旧资产。
+预期 `isDraft=false`，资产仍恰好为三个，正文含“未签名公开预览”和 SmartScreen 提示；`v0.1.0`、`v0.1.1` 的 tag 与 Release 不得改变。若公开后发现阻断问题，先把 Release 改回非公开并记录原因，再通过更高 SemVer 发布修复，不移动旧 tag 或替换旧资产。
 
-当前公开预览的安装、数据和功能边界见根目录 [`README.md`](../README.md)，版本专属说明见 [`docs/releases/v0.1.1.md`](releases/v0.1.1.md)。正式签名分发必须另立变更，选择可信 OV/EV 证书或受托云签名服务，并为更高版本重新构建、签名和验收。
+当前公开预览的安装、数据和功能边界见根目录 [`README.md`](../README.md)，版本专属说明见 [`docs/releases/v0.1.2.md`](releases/v0.1.2.md)。正式签名分发必须另立变更，选择可信 OV/EV 证书或受托云签名服务，并为更高版本重新构建、签名和验收。
 
 ## 7. 热修复与回滚
 

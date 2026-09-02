@@ -1,12 +1,13 @@
 """库生命周期欢迎、失败、迁移与直接恢复的浏览器取证。"""
 
 from pathlib import Path
+import re
 
 from playwright.sync_api import sync_playwright
 
 
 ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "artifacts" / "library-lifecycle"
-BASE_URL = "http://127.0.0.1:1420/?dev=library-lifecycle"
+BASE_URL = "http://localhost:1420/?dev=library-lifecycle"
 
 
 def goto_state(page, state: str) -> None:
@@ -27,7 +28,7 @@ def main() -> None:
         page.on("pageerror", lambda error: page_errors.append(str(error)))
 
         goto_state(page, "welcome")
-        page.get_by_role("heading", name="本地视觉档案").wait_for()
+        page.get_by_role("heading", name=re.compile(r"把散落的图片.*一座库")).wait_for()
         assert "图片会复制进库" in page.locator("main").inner_text()
         assert "库会占用磁盘空间" in page.locator("main").inner_text()
         assert "源文件不会被修改" in page.locator("main").inner_text()

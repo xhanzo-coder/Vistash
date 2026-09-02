@@ -40,6 +40,7 @@ cargo metadata --format-version 1
 ## Vistash 自有资产
 
 - `app/src-tauri/icons/` 与 `docs/assets/vistash-icon-256.png`：Vistash 项目标识资产，按根目录 `LICENSE` 的自有资产范围发布。
+- `app/src/assets/welcome/`：项目维护者提供并确认有权发布的匿名欢迎页展示图片，按根目录 `LICENSE` 的自有资产范围发布。
 - `docs/assets/screenshots/`：使用匿名 fixture 生成的产品界面截图，不包含个人素材或用户库。
 - 应用使用 Windows 系统字体栈，不重新分发 Microsoft 字体文件。
 

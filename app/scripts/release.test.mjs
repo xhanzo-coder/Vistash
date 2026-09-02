@@ -82,7 +82,7 @@ test("identifier 或双安装器目标缺失时发布契约失败", () => {
   );
 });
 
-test("0.1.0 发布契约拒绝任一层 updater 配置", () => {
+test("发布契约拒绝任一层 updater 配置", () => {
   const fixtures = [
     createAppFixture({ packageDependencies: { "@tauri-apps/plugin-updater": "2" } }),
     createAppFixture({ tauriPlugins: { updater: { active: true } } }),
@@ -91,7 +91,7 @@ test("0.1.0 发布契约拒绝任一层 updater 配置", () => {
   ];
 
   for (const appRoot of fixtures) {
-    assert.throws(() => verifyReleaseContract({ appRoot }), /0\.1\.0 不得包含 updater/);
+    assert.throws(() => verifyReleaseContract({ appRoot }), /当前发布不得包含 updater/);
   }
 });
 

@@ -223,7 +223,7 @@ function WorkspaceApp({
         path: context.path,
         formatVersion: context.formatVersion,
       }}
-      appVersion="0.1.0"
+      appVersion="0.1.2"
       onImportImages={() => queueImport("images")}
       onImportFolder={() => queueImport("folder")}
       onCreateNewLibrary={() => {
