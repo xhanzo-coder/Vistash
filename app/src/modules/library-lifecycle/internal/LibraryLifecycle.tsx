@@ -1,8 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArchiveIcon } from "@phosphor-icons/react/dist/csr/Archive";
+import { ArrowRightIcon } from "@phosphor-icons/react/dist/csr/ArrowRight";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { ImagesIcon } from "@phosphor-icons/react/dist/csr/Images";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
+import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 
 import { asAppError, formatError } from "../../../shared/errors";
@@ -14,6 +17,9 @@ import { ConfirmDialog } from "../../../ui/dialog/Dialog";
 import { Progress } from "../../../ui/progress/Progress";
 import { WindowControls } from "../../../app/shell/WindowControls";
 import brandMark from "../../../assets/brand/vistash-mark.svg";
+import sampleDunes from "../../../assets/welcome/sample-dunes.jpg";
+import sampleForest from "../../../assets/welcome/sample-forest.jpg";
+import sampleSea from "../../../assets/welcome/sample-sea.jpg";
 import type {
   MigrationProgress,
   V3FolderResolutionInput,
@@ -99,8 +105,8 @@ function Welcome({
         <div className={styles.wordmark} translate="no">
           <img
             src={brandMark}
-            width="38"
-            height="38"
+            width="34"
+            height="34"
             alt=""
             aria-hidden="true"
             fetchPriority="high"
@@ -108,25 +114,70 @@ function Welcome({
           <span>Vistash</span>
         </div>
         <p className={styles.eyebrow}>LOCAL VISUAL ARCHIVE</p>
-        <h1>本地视觉档案</h1>
-        <p className={styles.lead}>把散落在电脑里的图片集中整理成一个可迁移、可重建的本地库。</p>
-        <ul className={styles.promises}>
-          <li>图片会复制进库</li>
-          <li>库会占用磁盘空间</li>
-          <li>源文件不会被修改</li>
-        </ul>
+        <h1>把散落的图片，收进<span className={styles.headlineAccent}>一座库</span>。</h1>
+        <p className={styles.lead}>
+          选一个文件夹作为库的位置。素材会被复制进去并建立索引，库可以整体搬走、随时重建，源文件始终保持原样。
+        </p>
         <div className={styles.actions}>
-          <Button variant="primary" startIcon={<PlusIcon />} onClick={() => onChoose("create")}>
-            创建新库
-          </Button>
-          <Button startIcon={<FolderOpenIcon />} onClick={() => onChoose("open")}>
-            打开已有库
-          </Button>
+          <button
+            type="button"
+            aria-label="创建新库"
+            className={`${styles.actionCard} ${styles.actionPrimary}`}
+            onClick={() => onChoose("create")}
+          >
+            <span className={styles.actionIcon}><PlusIcon aria-hidden="true" /></span>
+            <span className={styles.actionTitle}>
+              创建新库
+              <ArrowRightIcon className={styles.actionArrow} aria-hidden="true" />
+            </span>
+            <span className={styles.actionDesc}>选一个空文件夹，从零开始建立你的视觉档案。</span>
+          </button>
+          <button
+            type="button"
+            aria-label="打开已有库"
+            className={styles.actionCard}
+            onClick={() => onChoose("open")}
+          >
+            <span className={styles.actionIcon}><FolderOpenIcon aria-hidden="true" /></span>
+            <span className={styles.actionTitle}>
+              打开已有库
+              <ArrowRightIcon className={styles.actionArrow} aria-hidden="true" />
+            </span>
+            <span className={styles.actionDesc}>指向已有的 Vistash 库目录，直接继续工作。</span>
+          </button>
         </div>
+        <ul className={styles.promises}>
+          <li><CheckIcon aria-hidden="true" />图片会复制进库，源文件不会被修改</li>
+          <li><CheckIcon aria-hidden="true" />库会占用磁盘空间，请留足余量</li>
+          <li><CheckIcon aria-hidden="true" />库可整体迁移、随时重建</li>
+        </ul>
       </section>
-      <aside className={styles.welcomeMark} aria-hidden="true">
-        <ArchiveIcon />
-        <span>素材与可读元数据保存在你选择的位置</span>
+      <aside className={styles.welcomeVisual} aria-hidden="true">
+        <div className={styles.visualStage}>
+          <div className={styles.stack}>
+            <figure className={`${styles.photo} ${styles.photoBack}`}>
+              <div className={styles.photoImg}><img src={sampleForest} alt="" loading="lazy" /></div>
+              <figcaption className={styles.photoCaption}><span>IMG_2041</span><span>RAW</span></figcaption>
+            </figure>
+            <figure className={`${styles.photo} ${styles.photoMid}`}>
+              <div className={styles.photoImg}><img src={sampleSea} alt="" loading="lazy" /></div>
+              <figcaption className={styles.photoCaption}><span>SCAN_0073</span><span>TIFF</span></figcaption>
+            </figure>
+            <figure className={`${styles.photo} ${styles.photoFront}`}>
+              <div className={styles.photoImg}><img src={sampleDunes} alt="" loading="lazy" /></div>
+              <figcaption className={styles.photoCaption}><span>DSCF_1892</span><span>JPEG</span></figcaption>
+            </figure>
+          </div>
+          <span className={`${styles.chip} ${styles.chipTop}`}>
+            <ImagesIcon aria-hidden="true" />
+            <span><strong>1,248</strong> 张素材已索引</span>
+          </span>
+          <span className={`${styles.chip} ${styles.chipBottom}`}>
+            <ShieldCheckIcon aria-hidden="true" />
+            <span>元数据可读，永不锁定</span>
+          </span>
+        </div>
+        <p className={styles.visualCaption}>素材与元数据保存在你选择的位置</p>
       </aside>
     </main></LifecycleWindowFrame>
   );

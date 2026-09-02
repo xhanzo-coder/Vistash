@@ -140,7 +140,7 @@ test("首次运行解释本地库语义，创建新库后直接进入图片工�
   expect(container?.textContent).toContain("库会占用磁盘空间");
   expect(container?.textContent).toContain("源文件不会被修改");
   const create = [...(container?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
-    (button) => button.textContent === "创建新库",
+    (button) => button.textContent?.includes("创建新库") ?? false,
   );
   await act(async () => create?.click());
 

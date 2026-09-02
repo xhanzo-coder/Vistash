@@ -59,7 +59,7 @@ export function verifyReleaseContract({ appRoot, tag }) {
     throw new Error(`发布标签必须为 v${version}，实际为 ${tag}`);
   }
   if (tauriConfig.identifier !== "com.vistash.app") {
-    throw new Error(`0.1.0 必须保留 identifier com.vistash.app，实际为 ${String(tauriConfig.identifier)}`);
+    throw new Error(`发布必须保留 identifier com.vistash.app，实际为 ${String(tauriConfig.identifier)}`);
   }
   if (!Array.isArray(tauriConfig.bundle?.targets)) {
     throw new TypeError("tauri.conf.json 的 bundle.targets 必须是数组");
@@ -80,7 +80,7 @@ export function verifyReleaseContract({ appRoot, tag }) {
     encoding: "utf8",
   }).includes("tauri-plugin-updater");
   if (updaterEvidence || cargoHasUpdater) {
-    throw new Error("0.1.0 不得包含 updater 依赖、插件或权限");
+    throw new Error("当前发布不得包含 updater 依赖、插件或权限");
   }
 
   return { identifier: tauriConfig.identifier, targets, version };

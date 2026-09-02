@@ -9,11 +9,11 @@
 Vistash 把图片、提示词和它们之间的可选关系放在同一个本地素材库里。它适合需要长期整理视觉参考、反复复用提示词、并希望保留文件原始身份的创作者。
 
 [![CI](https://github.com/xhanzo-coder/Vistash/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xhanzo-coder/Vistash/actions/workflows/ci.yml)
-[![最新公开预览](https://img.shields.io/badge/preview-v0.1.1-e8664a)](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.1)
+[![最新公开预览](https://img.shields.io/badge/preview-v0.1.2-e8664a)](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.2)
 
-[下载 v0.1.1](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.1) · [参与贡献](.github/CONTRIBUTING.md) · [报告安全问题](.github/SECURITY.md) · [提交 Issue](https://github.com/xhanzo-coder/Vistash/issues)
+[下载 v0.1.2](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.2) · [参与贡献](.github/CONTRIBUTING.md) · [报告安全问题](.github/SECURITY.md) · [提交 Issue](https://github.com/xhanzo-coder/Vistash/issues)
 
-> ⚠️ **v0.1.1 是未签名的公开预览版。** Windows 可能显示 SmartScreen 警告。请从本 README 或 GitHub Release 下载，并在安装前核对 SHA-256；正式 Authenticode 签名将在后续发布流程中单独完成。
+> ⚠️ **v0.1.2 是未签名的公开预览版。** Windows 可能显示 SmartScreen 警告。请从本 README 或 GitHub Release 下载，并在安装前核对 SHA-256；正式 Authenticode 签名将在后续发布流程中单独完成。
 
 ## 它解决什么问题
 
@@ -78,7 +78,7 @@ Vistash 把图片、提示词和它们之间的可选关系放在同一个本地
 
 ## 安装
 
-前往 [v0.1.1 公开预览 Release](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.1)，选择一种 Windows 安装器：
+前往 [v0.1.2 公开预览 Release](https://github.com/xhanzo-coder/Vistash/releases/tag/v0.1.2)，选择一种 Windows 安装器：
 
 - **NSIS setup EXE**：适合大多数使用者，双击即可安装。
 - **MSI**：适合需要 Windows Installer 的管理或部署场景。
@@ -86,16 +86,11 @@ Vistash 把图片、提示词和它们之间的可选关系放在同一个本地
 下载后建议先在 PowerShell 核对哈希：
 
 ```powershell
-Get-FileHash .\Vistash_0.1.1_x64-setup.exe -Algorithm SHA256
-Get-FileHash .\Vistash_0.1.1_x64_en-US.msi -Algorithm SHA256
+Get-FileHash .\Vistash_0.1.2_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\Vistash_0.1.2_x64_en-US.msi -Algorithm SHA256
 ```
 
-当前公开预览资产的 SHA-256：
-
-| 文件 | SHA-256 |
-| --- | --- |
-| `Vistash_0.1.1_x64-setup.exe` | `d4e5ca838788a74e103b65ffdc12ccb6bebc9cbe120ed64c2d2e2209d4d124f9` |
-| `Vistash_0.1.1_x64_en-US.msi` | `57034d7328829eba26ff6bb6b6439dc16b501bd0d5214e05cad8bb15d06a6cae` |
+Release 同时提供 `SHA256SUMS.txt`。下载后请确认本机 `Get-FileHash` 输出与该附件中的对应文件完全一致；若不一致，请不要安装。
 
 安装器目前没有 Authenticode 签名，因此 Windows 的“Windows 已保护你的电脑”提示属于预期风险。只有在你确认下载来源和 SHA-256 后，才应选择继续安装。
 
@@ -110,7 +105,7 @@ Get-FileHash .\Vistash_0.1.1_x64_en-US.msi -Algorithm SHA256
 
 ## 当前明确不支持
 
-`v0.1.1` 是图片与提示词管理的公开预览，不包含以下能力：
+`v0.1.2` 是图片与提示词管理的公开预览，不包含以下能力：
 
 - 图像反推提示词、图像生成或模型 provider 配置。
 - 从单张成图恢复历史原始提示词字符串。
@@ -119,7 +114,7 @@ Get-FileHash .\Vistash_0.1.1_x64_en-US.msi -Algorithm SHA256
 - 智能文件夹、相似搜索、EXIF 检索、图片编辑、评分体系和通用撤销历史。
 - macOS/Linux 正式支持。当前公开预览以 Windows 桌面行为为验收目标。
 
-Vistash 的长期目标是“生成能在指定生图模型上重建相似视觉语言的控制提示词”；这不是 `v0.1.1` 已提供的功能，也不应被理解为恢复过往生成记录。
+Vistash 的长期目标是“生成能在指定生图模型上重建相似视觉语言的控制提示词”；这不是 `v0.1.2` 已提供的功能，也不应被理解为恢复过往生成记录。
 
 ## 从源码运行
 
