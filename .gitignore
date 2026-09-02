@@ -12,6 +12,7 @@ coverage/
 # 本机开发与工具产物
 .playwright-mcp/
 .codex/skills/
+/.workbuddy/
 .claude/skills/
 .vscode/
 .idea/
