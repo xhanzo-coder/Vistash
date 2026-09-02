@@ -205,6 +205,11 @@ function record(value: unknown): Record<string, unknown> {
   return value;
 }
 
+/** 与后端一致的父路径推导：顶层文件夹的父级是 null。 */
+function parentOf(value: string): string | null {
+  return value.includes("/") ? value.slice(0, value.lastIndexOf("/")) : null;
+}
+
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value) || !value.every((item): item is string => typeof item === "string")) throw new TypeError("测试合同要求字符串数组");
   return value;
@@ -618,6 +623,43 @@ beforeEach(() => {
         snapshotsByLibrary[currentLibrary] = { ...snapshot, folders: snapshot.folders.filter((folder) => !removed(folder)), assets: snapshot.assets.map((asset) => ({ ...asset, folder: asset.folder !== null && removed(asset.folder) ? null : asset.folder })) };
         return undefined;
       }
+      case "reorder_folder": {
+        if (rejectFolderMutation) throw { code: "library.io_failed", detail: "文件夹元数据只读" };
+        const snapshot = snapshotsByLibrary[currentLibrary];
+        const path = request.path;
+        const direction = request.direction;
+        if (snapshot === undefined || typeof path !== "string" || (direction !== "up" && direction !== "down")) throw new TypeError("排序请求非法");
+        // 与后端一致：同级交换后按深度优先重建整份清单。
+        const parentKey = parentOf(path);
+        const siblings = snapshot.folders.filter((folder) => parentOf(folder) === parentKey);
+        const index = siblings.indexOf(path);
+        const swapWith = direction === "up" ? index - 1 : index + 1;
+        if (index === -1 || swapWith < 0 || swapWith >= siblings.length) return undefined;
+        const reordered = [...siblings];
+        const forward = reordered[index];
+        const backward = reordered[swapWith];
+        if (forward === undefined || backward === undefined) throw new TypeError("排序交换越界");
+        reordered[index] = backward;
+        reordered[swapWith] = forward;
+        const remapped = new Map<string, string>(siblings.map((folder, siblingIndex) => [folder, reordered[siblingIndex] ?? folder]));
+        const childrenOf = new Map<string | null, string[]>();
+        for (const folder of snapshot.folders) {
+          const key = parentOf(folder);
+          const list = childrenOf.get(key) ?? [];
+          list.push(key === parentKey ? remapped.get(folder) ?? folder : folder);
+          childrenOf.set(key, list);
+        }
+        const ordered: string[] = [];
+        const emit = (key: string | null): void => {
+          for (const folder of childrenOf.get(key) ?? []) {
+            ordered.push(folder);
+            emit(folder);
+          }
+        };
+        emit(null);
+        snapshotsByLibrary[currentLibrary] = { ...snapshot, folders: ordered };
+        return undefined;
+      }
       case "batch_move_assets_to_folder": {
         const snapshot = snapshotsByLibrary[currentLibrary];
         const hashes = request.hashes;
@@ -824,7 +866,8 @@ test("文件夹树明确区分父子层级，瀑布流信息作为图片内部�
   await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
   expect(folderButton("参考").dataset.depth).toBe("0");
   expect(folderButton("参考/构图").dataset.depth).toBe("1");
-  expect(folderButton("参考/构图").style.paddingInlineStart).not.toBe(folderButton("参考").style.paddingInlineStart);
+  // 缩进现在落在行容器上（按钮旁还要放折叠箭头），不再直接写在按钮上。
+  expect(folderButton("参考/构图").parentElement?.style.paddingInlineStart).not.toBe(folderButton("参考").parentElement?.style.paddingInlineStart);
   expect(folderButton("参考/构图").dataset.treeGuide).toBe("vertical");
   expect(folderButton("参考/构图").querySelector("[data-tree-branch]")).toBeNull();
   const caption = card(H_STREET).querySelector<HTMLElement>('[data-card-caption="overlay"]');
@@ -1360,6 +1403,58 @@ test("文件夹右键菜单提供子文件夹、重命名和删除，并把节�
   const creator = container?.querySelector<HTMLElement>('[data-inline-folder-creator]');
   expect(creator?.dataset.parent).toBe("参考/构图");
   expect(creator?.querySelector<HTMLInputElement>('input[name="inline-folder-name"]')).not.toBeNull();
+});
+
+test("父文件夹可以折叠与展开，折叠后子节点从树中隐藏", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
+  await vi.waitFor(() => expect(folderButton("参考/构图")).toBeDefined());
+  const nav = container?.querySelector<HTMLElement>('[aria-label="图片导航"]');
+  const caret = (): HTMLButtonElement => {
+    const button = nav?.querySelector<HTMLButtonElement>('button[aria-label="折叠文件夹 参考"], button[aria-label="展开文件夹 参考"]');
+    if (button === null || button === undefined) throw new Error("缺少折叠箭头");
+    return button;
+  };
+  expect(caret().getAttribute("aria-expanded")).toBe("true");
+  await act(async () => caret().click());
+  expect(caret().getAttribute("aria-label")).toBe("展开文件夹 参考");
+  expect(caret().getAttribute("aria-expanded")).toBe("false");
+  expect(nav?.querySelector('[data-folder="参考/构图"]')).toBeNull();
+  // 父节点本身仍在，只是子树收起。
+  expect(nav?.querySelector('[data-folder="参考"]')).not.toBeNull();
+  await act(async () => caret().click());
+  await vi.waitFor(() => expect(folderButton("参考/构图")).toBeDefined());
+});
+
+test("文件夹右键菜单的上移下移按存储顺序重排同级节点", async () => {
+  snapshotsByLibrary[LIB_A] = { ...SNAPSHOT_A, folders: [...SNAPSHOT_A.folders, "配色"] };
+  await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
+  await vi.waitFor(() => expect(folderButton("配色")).toBeDefined());
+  // 初始顺序即 folders.json 的存储顺序：参考（含子树）在前，配色在后。
+  expect(folderButton("参考").compareDocumentPosition(folderButton("配色")) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+
+  const up = await folderMenuItem("配色", "上移");
+  expect(up.getAttribute("aria-disabled")).not.toBe("true");
+  const down = await folderMenuItem("配色", "下移");
+  // 配色已是同级末尾：下移不可用。
+  expect(down.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => up.click());
+  await vi.waitFor(() => {
+    const call = ipcCalls.find((entry) => entry.command === "reorder_folder");
+    expect(record(call?.payload)).toMatchObject({ path: "配色", direction: "up" });
+  });
+  await vi.waitFor(() => {
+    expect(folderButton("配色").compareDocumentPosition(folderButton("参考")) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
+  // 交换后配色成为同级首位：上移不可用，下移恢复可用。
+  const upAgain = await folderMenuItem("配色", "上移");
+  expect(upAgain.getAttribute("aria-disabled")).toBe("true");
+  const downAgain = await folderMenuItem("配色", "下移");
+  expect(downAgain.getAttribute("aria-disabled")).not.toBe("true");
+  await act(async () => downAgain.click());
+  await vi.waitFor(() => {
+    expect(folderButton("参考").compareDocumentPosition(folderButton("配色")) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
 });
 
 test("文件夹右键移动使用明确目标并提交完整子树移动命令", async () => {
@@ -2071,9 +2166,10 @@ test("集合方向键移动焦点并选择图片，Shift 扩展范围，Esc 保�
   expect(selectedHashes()).toEqual([H_STREET]);
 });
 
-test("在当前文件夹新建子文件夹并按后端返回的路径更新导航", async () => {
+test("顶栏新建文件夹始终落在根目录，与当前浏览的文件夹无关", async () => {
   await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
   await vi.waitFor(() => expect(folderButton("参考")).toBeDefined());
+  // 先进入一个具体文件夹：回归点是“+”不再把当前文件夹当作默认父级。
   await act(async () => folderButton("参考").click());
   await vi.waitFor(() => {
     const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find((candidate) => candidate.textContent === "新建文件夹")
@@ -2086,15 +2182,33 @@ test("在当前文件夹新建子文件夹并按后端返回的路径更新导�
   await act(async () => createButton.click());
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   const creator = container?.querySelector<HTMLElement>('[data-inline-folder-creator]');
-  expect(creator?.dataset.parent).toBe("参考");
+  expect(creator?.dataset.parent).toBe("");
   const name = creator?.querySelector<HTMLInputElement>('input[name="inline-folder-name"]');
   if (name === undefined || name === null) throw new Error("缺少文件夹名称输入");
   await act(async () => setInput(name, "灵感"));
   const submit = creator?.querySelector<HTMLButtonElement>('button[aria-label="创建文件夹"]');
   await act(async () => submit?.click());
-  await vi.waitFor(() => expect(folderButton("参考/灵感")).toBeDefined());
-  expect(lastQuery()?.folder).toEqual({ kind: "path", path: "参考/灵感" });
+  await vi.waitFor(() => expect(folderButton("灵感")).toBeDefined());
+  expect(lastQuery()?.folder).toEqual({ kind: "path", path: "灵感" });
   expect(container?.querySelector('[data-inline-folder-creator]')).toBeNull();
+});
+
+test("右键新建子文件夹仍以该文件夹为父级", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true });
+  await vi.waitFor(() => expect(folderButton("参考")).toBeDefined());
+  const createChild = await folderMenuItem("参考", "新建子文件夹");
+  await act(async () => createChild.click());
+  const creator = container?.querySelector<HTMLElement>('[data-inline-folder-creator]');
+  expect(creator?.dataset.parent).toBe("参考");
+  const name = creator?.querySelector<HTMLInputElement>('input[name="inline-folder-name"]');
+  if (name === undefined || name === null) throw new Error("缺少文件夹名称输入");
+  // 子文件夹的内联输入框挂载后必须持有焦点（右键菜单关闭会把焦点还给触发按钮）。
+  await vi.waitFor(() => expect(document.activeElement).toBe(name));
+  await act(async () => setInput(name, "光影"));
+  const submit = creator?.querySelector<HTMLButtonElement>('button[aria-label="创建文件夹"]');
+  await act(async () => submit?.click());
+  await vi.waitFor(() => expect(folderButton("参考/光影")).toBeDefined());
+  expect(lastQuery()?.folder).toEqual({ kind: "path", path: "参考/光影" });
 });
 
 test("全部图片首次导入成功后清除隐藏条件并保持在全部图片", async () => {
@@ -2349,6 +2463,38 @@ test("卡片右键打开快捷菜单并提供批量动作入口", async () => {
     expect(payload.hash).toBe(H_STREET);
     expect(payload.favorite).toBe(false);
   });
+});
+
+test("卡片右键菜单提供复制图像与重命名入口", async () => {
+  await mountWorkspace({ session: makeSession(LIB_A, "视觉档案"), active: true, entry: { kind: "resume" } });
+  await vi.waitFor(() => expect(card(H_STREET)).toBeDefined());
+
+  await act(async () => {
+    card(H_STREET).dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+    );
+  });
+  const menu = document.body.querySelector('[role="menu"]');
+  if (menu === null) throw new Error("右键未打开快捷菜单");
+  const copyItem = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    .find((candidate) => candidate.textContent?.trim() === "复制图像");
+  if (copyItem === undefined) throw new Error("快捷菜单缺少复制图像入口");
+  await act(async () => copyItem.click());
+  await vi.waitFor(() => expect(ipcCalls.some((call) => call.command === "copy_asset_to_clipboard")).toBe(true));
+
+  await act(async () => {
+    card(H_STREET).dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+    );
+  });
+  const renameItem = [...(document.body.querySelector('[role="menu"]')?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])]
+    .find((candidate) => candidate.textContent?.trim() === "重命名");
+  if (renameItem === undefined) throw new Error("快捷菜单缺少重命名入口");
+  await act(async () => renameItem.click());
+  // 与 F2 相同的重命名对话框：编辑名称主体，来源文件名保持可见。
+  await vi.waitFor(() => expect(document.querySelector('input[name="display-filename-stem"]')).not.toBeNull());
+  const input = document.querySelector<HTMLInputElement>('input[name="display-filename-stem"]');
+  expect(input?.value).toBe("晨光街道");
 });
 
 test("F2 编辑单图名称主体，保存后显示新名且来源文件名与选择不变", async () => {

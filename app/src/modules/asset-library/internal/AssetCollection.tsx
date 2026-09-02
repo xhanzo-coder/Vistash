@@ -45,6 +45,8 @@ export function AssetThumbnail({ asset }: { asset: AssetRow }): ReactNode {
 export type AssetContextMenuActions = {
   onFavorite: (id: AssetId, value: boolean) => void;
   onTrash: (id: AssetId) => void;
+  onCopy: (id: AssetId) => void;
+  onRename: (id: AssetId) => void;
 };
 
 type CollectionProps = {
@@ -276,6 +278,18 @@ export function AssetCollection(props: CollectionProps): ReactNode {
         <ContextMenu.Trigger asChild>{button}</ContextMenu.Trigger>
         <ContextMenu.Portal>
           <ContextMenu.Content className={styles.contextMenu} aria-label="素材快捷菜单">
+            <ContextMenu.Item
+              className={styles.contextMenuItem}
+              onSelect={() => contextMenu.onCopy(parseAssetId(asset.hash))}
+            >
+              复制图像
+            </ContextMenu.Item>
+            <ContextMenu.Item
+              className={styles.contextMenuItem}
+              onSelect={() => contextMenu.onRename(parseAssetId(asset.hash))}
+            >
+              重命名
+            </ContextMenu.Item>
             <ContextMenu.Item
               className={styles.contextMenuItem}
               onSelect={() => contextMenu.onFavorite(parseAssetId(asset.hash), !asset.favorite)}

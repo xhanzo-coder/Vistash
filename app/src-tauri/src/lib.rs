@@ -65,6 +65,7 @@ pub fn run() {
             commands::rename_folder,
             commands::move_folder,
             commands::delete_folder,
+            commands::reorder_folder,
             commands::move_asset_to_folder,
             commands::rename_asset_display_filename,
             commands::set_asset_tags,

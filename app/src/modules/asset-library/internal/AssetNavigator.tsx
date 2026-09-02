@@ -9,7 +9,7 @@ import type { FolderFilter } from "../../../shared/types";
 import { Button, IconButton } from "../../../ui/button/Button";
 import { Tooltip } from "../../../ui/overlays/Tooltip";
 import styles from "./AssetLibraryWorkspace.module.css";
-import { FolderTree, type FolderTreeAction } from "../../../features/workspace/FolderTree";
+import { FolderTree, type FolderReorderDirection, type FolderTreeAction } from "../../../features/workspace/FolderTree";
 
 type TagUsage = { tag: string; count: number };
 export type FolderNodeAction = FolderTreeAction;
@@ -39,6 +39,7 @@ type NavigatorProps = {
   onFolderAction: (action: FolderNodeAction, path: string) => void;
   folderInteractionDisabled: boolean;
   onFolderMove: (source: string, destinationParent: string | null) => void;
+  onFolderReorder: (path: string, direction: FolderReorderDirection) => void;
   folderCreator: { parent: string | null; node: ReactNode } | null;
 };
 
@@ -59,7 +60,7 @@ const ALL_ASSETS_PATCH = {
  * 清空旧文本与标签。每个范围入口原子写入全部查询轴，避免上一范围静默残留。
  * 重复点击当前范围是幂等选择而非反选。
  */
-export function AssetNavigator({ folderActions, width, collapsed, onToggleCollapsed, folders, tagUsage, trashCount, scope, onChange, dropTarget, presentation, onFolderAction, folderInteractionDisabled, onFolderMove, folderCreator }: NavigatorProps): ReactNode {
+export function AssetNavigator({ folderActions, width, collapsed, onToggleCollapsed, folders, tagUsage, trashCount, scope, onChange, dropTarget, presentation, onFolderAction, folderInteractionDisabled, onFolderMove, onFolderReorder, folderCreator }: NavigatorProps): ReactNode {
   // 排序保证父路径先于后代出现；先复制副本再就地排序（与 assetSort 相同写法）。
   const sortedTags: TagUsage[] = [...tagUsage];
   // 批量移除最后一个标签后，当前筛选仍须可见、可取消；完整用量中不存在即为零。
@@ -100,7 +101,7 @@ export function AssetNavigator({ folderActions, width, collapsed, onToggleCollap
           currentPath={browsingActive && !favoritesCurrent && scope.folder.kind === "path" ? scope.folder.path : null}
           disabled={folderInteractionDisabled} navEntryClassName={styles.navEntry!} creator={folderCreator} externalDropTarget={dropTarget}
           onSelect={(path) => onChange({ text: "", tags: [], favorite: null, folder: { kind: "path", path }, location: "active" })}
-          onMove={onFolderMove} onAction={onFolderAction} /> : <p className={styles.navigationHint}>还没有文件夹</p>}
+          onMove={onFolderMove} onAction={onFolderAction} onReorder={onFolderReorder} /> : <p className={styles.navigationHint}>还没有文件夹</p>}
         </div>
       {sortedTags.length > 0 ? (
         <div className={styles.tagSection}>

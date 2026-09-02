@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use vistash_core::catalog::{
     AssetLocation, AssetQuery, BatchProgress, BatchReport, Catalog, CatalogSnapshot, FolderFilter,
-    FolderMutationProgress, FolderName, FolderPath, GlobalSearchResult, ImageDetail,
+    FolderMutationProgress, FolderName, FolderPath, FolderReorder, GlobalSearchResult, ImageDetail,
     ImportAndLinkReport, LinkedImageState, NewPrompt, PromptEdit, PromptLocation, PromptQuery,
     PromptPurgeReport, PromptRestoreOutcome, PromptSnapshot, PurgeReport, RestoreOutcome, Tag,
 };
@@ -668,6 +668,19 @@ pub async fn move_folder(
 pub async fn delete_folder(path: String, state: tauri::State<'_, Shared>) -> Result<()> {
     let path = FolderPath::parse(&path)?;
     with_catalog(state, move |catalog| catalog.delete_folder(&path)).await
+}
+
+#[tauri::command]
+pub async fn reorder_folder(
+    path: String,
+    direction: FolderReorder,
+    state: tauri::State<'_, Shared>,
+) -> Result<()> {
+    let path = FolderPath::parse(&path)?;
+    with_catalog(state, move |catalog| {
+        catalog.reorder_folder(&path, direction)
+    })
+    .await
 }
 
 #[tauri::command]

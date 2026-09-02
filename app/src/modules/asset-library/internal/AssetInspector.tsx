@@ -2,10 +2,13 @@ import { useId, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { parseAssetId, type LibraryId } from "../../../app/common";
+import { appPlatform } from "../../../app/runtime";
 import { imageDetail, regenerateColorCard } from "../../../shared/ipc";
 import { IpcError } from "../../../shared/errors";
 import type { AssetRow } from "../../../shared/types";
 import { Button } from "../../../ui/button/Button";
+import { ContextMenu, ContextMenuItem } from "../../../ui/overlays/Menu";
+import { useToast } from "../../../ui/toast/Toast";
 import { FileInformation } from "./AssetFilename";
 import { INSPECTOR_SECTIONS, type InspectorSection, type InspectorSections } from "./preferences";
 import { assetKeys } from "./queryKeys";
@@ -116,10 +119,35 @@ export function AssetInspector({ libraryId, relations, asset, count, active, edi
     enabled: active && asset !== null,
     staleTime: Infinity,
   });
+  const toast = useToast();
+  /** 摘要预览的快捷出站动作；反馈走全局通知，与工具条的状态行互不挤压布局。 */
+  const previewOutbound = async (hash: string, action: "copy" | "open"): Promise<void> => {
+    try {
+      if (action === "copy") {
+        await appPlatform.copyImageToClipboard(hash);
+        toast.publish({ tone: "success", title: "已复制图片到剪贴板" });
+      } else {
+        await appPlatform.openWithDefaultApp(hash);
+        toast.publish({ tone: "success", title: "已交给 Windows 默认程序打开" });
+      }
+    } catch (raw) {
+      if (!(raw instanceof IpcError)) throw raw;
+      toast.publish({ tone: "warning", title: action === "copy" ? "复制图片失败" : "用默认程序打开失败", description: raw.message });
+    }
+  };
   if (detail.error !== null && !(detail.error instanceof IpcError)) throw detail.error;
   if (asset === null) return <div className={styles.empty}><h2 tabIndex={-1} data-inspector-heading>图片检查器</h2><p>{count > 1 ? `已选 ${count} 项。请从底部操作栏批量整理，单张信息仅在单选时显示。` : "选择一张图片，查看色卡、组织与来源信息。"}</p></div>;
+  const preview = active && sections?.summary !== false
+    ? <div className={styles.preview}><AssetThumbnail key={asset.hash} asset={asset} /></div>
+    : null;
+  const summaryPreview = preview !== null && actions !== undefined && asset.deleted_at === null
+    ? <ContextMenu label="图片快捷菜单" content={<>
+        <ContextMenuItem onSelect={() => void previewOutbound(asset.hash, "copy")}>复制图像</ContextMenuItem>
+        <ContextMenuItem onSelect={() => void previewOutbound(asset.hash, "open")}>用默认程序打开</ContextMenuItem>
+      </>}>{preview}</ContextMenu>
+    : preview;
   const contents: Record<InspectorSection, ReactNode> = {
-    summary: <>{active && sections?.summary !== false ? <div className={styles.preview}><AssetThumbnail key={asset.hash} asset={asset} /></div> : null}<div className={styles.summaryHeading}><div><p className={styles.filename}>{asset.display_filename}</p><p className={styles.hint}>{asset.width} × {asset.height} · {asset.ext.toUpperCase()}{asset.deleted_at === null ? "" : " · 回收站"}</p></div>{actions}</div></>,
+    summary: <>{summaryPreview}<div className={styles.summaryHeading}><div><p className={styles.filename}>{asset.display_filename}</p><p className={styles.hint}>{asset.width} × {asset.height} · {asset.ext.toUpperCase()}{asset.deleted_at === null ? "" : " · 回收站"}</p></div>{actions}</div></>,
     colors: <Colors libraryId={libraryId} asset={asset} editable={editable} />,
     organization: <><AssetOrganization key={asset.hash} libraryId={libraryId} asset={asset} folders={folders} disabled={!editable} />{asset.deleted_at === null ? null : <Button size="compact" disabled={!restorable} onClick={onRestore}>还原图片</Button>}</>,
     note: <NoteEditor asset={asset} notes={notes} disabled={!editable} />,

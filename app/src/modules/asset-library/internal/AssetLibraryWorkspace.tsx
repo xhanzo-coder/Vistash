@@ -12,6 +12,7 @@ import { SidebarSimpleIcon } from "@phosphor-icons/react/dist/csr/SidebarSimple"
 import { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { parseAssetId, type AssetId } from "../../../app/common";
+import { appPlatform } from "../../../app/runtime";
 import { catalogSnapshot, readLayout, writeLayout } from "../../../shared/ipc";
 import { IpcError } from "../../../shared/errors";
 import { Button, IconButton } from "../../../ui/button/Button";
@@ -19,6 +20,7 @@ import { SearchField } from "../../../ui/search-field/SearchField";
 import { ConfirmDialog, Dialog } from "../../../ui/dialog/Dialog";
 import { Tooltip } from "../../../ui/overlays/Tooltip";
 import { Menu, MenuItem } from "../../../ui/overlays/Menu";
+import { useToast } from "../../../ui/toast/Toast";
 import type { AssetLibraryWorkspaceProps } from "../index";
 import { assetKeys } from "./queryKeys";
 import { assetScrollScopeKey, defaultAssetPreferences, INSPECTOR_WIDTH, NAVIGATION_WIDTH, parseLibraryPreferences, queryFromPreferences, type AssetPreferences, type LibraryPreferences } from "./preferences";
@@ -29,7 +31,7 @@ import { sortAssets } from "./collectionSort";
 import { initialSelection, selectionReducer } from "./selection";
 import type { CollectionSort } from "./preferences";
 import { ActionResults, useAssetActions } from "./useAssetActions";
-import { DeleteFolderDialog, FolderEditor, InlineFolderCreator, type FolderChange } from "./FolderEditor";
+import { DeleteFolderDialog, FolderEditor, InlineFolderCreator, useReorderFolder, type FolderChange } from "./FolderEditor";
 import { MoveAssetsDialog } from "./MoveAssetsDialog";
 import { useFolderDrag } from "./useFolderDrag";
 import { RenameAssetDialog, filenameTarget, type FilenameTarget } from "./AssetFilename";
@@ -215,6 +217,27 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
     renameOrigin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setRenameTarget(filenameTarget(singleAsset));
   }, [canRename, singleAsset, renameTarget]);
+  const toast = useToast();
+  /** 卡片快捷菜单改名入口：目标素材先成为唯一选中，再打开同一个改名会话。 */
+  const openRenameFor = useCallback((id: AssetId): void => {
+    if (writesDisabled || layout.location !== "active" || renameTarget !== null) return;
+    const asset = orderedAssets.find((candidate) => candidate.hash === id);
+    if (asset === undefined || asset.deleted_at !== null) return;
+    renameOrigin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dispatchSelection({ kind: "selectOne", id: asset.hash });
+    setRenameTarget(filenameTarget(asset));
+  }, [writesDisabled, layout.location, renameTarget, orderedAssets]);
+  const copyImageToClipboard = useCallback((id: AssetId): void => {
+    void (async () => {
+      try {
+        await appPlatform.copyImageToClipboard(id);
+        toast.publish({ tone: "success", title: "已复制图片到剪贴板" });
+      } catch (raw) {
+        if (!(raw instanceof IpcError)) throw raw;
+        toast.publish({ tone: "warning", title: "复制图片失败", description: raw.message });
+      }
+    })();
+  }, [toast]);
   const inspectorActions = singleAsset === null || activeAssetId === null || layout.location !== "active" ? undefined : <div className={styles.inspectorActions} aria-label="当前图片操作">
     <AssetOutboundControls libraryId={session.id} assets={[singleAsset]} active={active} disabled={writesDisabled} />
     <Tooltip content="修改显示文件名"><IconButton size="compact" label="修改显示文件名" icon={<PencilSimpleIcon />} disabled={!canRename} onClick={openRename} /></Tooltip>
@@ -267,11 +290,17 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
   if (draggedFolderMove.error !== null && !(draggedFolderMove.error instanceof IpcError)) {
     throw draggedFolderMove.error;
   }
+  const folderReorder = useReorderFolder(session.id, async () => {
+    await client.invalidateQueries({ queryKey: assetKeys.collections(session.id) });
+  });
+  if (folderReorder.error !== null && !(folderReorder.error instanceof IpcError)) {
+    throw folderReorder.error;
+  }
   const navigatorProps = {
     width: layout.navigationWidth,
     collapsed: layout.navigationCollapsed,
     onToggleCollapsed: (): void => changeLayout({ ...layout, navigationCollapsed: !layout.navigationCollapsed }),
-    folderActions: <Tooltip content={layout.folder.kind === "path" ? "新建子文件夹" : "新建文件夹"}><IconButton size="compact" label="新建文件夹" icon={<PlusIcon />} disabled={writesDisabled || collection.isPending || collection.isError || organizationBusy} onClick={() => setCreateFolderParent(layout.folder.kind === "path" ? layout.folder.path : null)} /></Tooltip>,
+    folderActions: <Tooltip content="新建文件夹"><IconButton size="compact" label="新建文件夹" icon={<PlusIcon />} disabled={writesDisabled || collection.isPending || collection.isError || organizationBusy} onClick={() => setCreateFolderParent(null)} /></Tooltip>,
     folders: snapshot?.folders ?? [],
     tagUsage: snapshot?.tags ?? [],
     trashCount: snapshot?.trash_count ?? 0,
@@ -281,9 +310,12 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
       if (kind === "create-child") setCreateFolderParent(path);
       else setFolderNodeAction({ kind, path });
     },
-    folderInteractionDisabled: writesDisabled || collection.isPending || collection.isError || organizationBusy || draggedFolderMove.isPending,
+    folderInteractionDisabled: writesDisabled || collection.isPending || collection.isError || organizationBusy || draggedFolderMove.isPending || folderReorder.isPending,
     onFolderMove: (path: string, destinationParent: string | null): void => {
       draggedFolderMove.mutate({ path, destinationParent });
+    },
+    onFolderReorder: (path: string, direction: "up" | "down"): void => {
+      folderReorder.mutate({ path, direction });
     },
     folderCreator: createFolderParent === undefined ? null : {
       parent: createFolderParent,
@@ -532,6 +564,8 @@ function LoadedWorkspace({ session, active, entry, importRequest, onImportReques
                 onScrollOffset={persistScrollOffset}
                 contextMenu={layout.location === "active" && !writesDisabled
                   ? {
+                      onCopy: copyImageToClipboard,
+                      onRename: openRenameFor,
                       onFavorite: (id, value) => actions.run({ kind: "favorite-one", hash: id, value }),
                       onTrash: (id) => actions.run({ kind: "trash", hashes: [id] }),
                     }

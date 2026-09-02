@@ -6,7 +6,7 @@ import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import type { LibraryId } from "../../../app/common";
 import { appTaskCenter } from "../../../app/runtime";
 import type { TaskOutcome } from "../../../app/taskCenter";
-import { createFolder, deleteFolder, renameFolder } from "../../../shared/ipc";
+import { createFolder, deleteFolder, renameFolder, reorderFolder } from "../../../shared/ipc";
 import { asAppError, IpcError } from "../../../shared/errors";
 import { Button } from "../../../ui/button/Button";
 import { ConfirmDialog, Dialog } from "../../../ui/dialog/Dialog";
@@ -138,6 +138,35 @@ export function FolderEditor({ mode, libraryId, currentFolder, folders, disabled
       <Button type="submit" variant="primary" disabled={save.isPending || name.trim().length === 0 || (mode === "rename" && parent === null)}>{save.isPending ? "正在保存…" : mode === "create" ? "创建文件夹" : "保存名称"}</Button>
     </form>
   </Dialog>;
+}
+
+export type ReorderFolderRequest = { path: string; direction: "up" | "down" };
+
+/** 同级相邻交换的文件夹排序 mutation；与移动/重命名共用同一组织作用域。 */
+export function useReorderFolder(libraryId: LibraryId, onCommitted: () => Promise<void>) {
+  const taskIds = useRef(new WeakMap<object, string>());
+  return useMutation({
+    scope: { id: `asset-organization:${libraryId}` },
+    mutationFn: async (request: ReorderFolderRequest) => {
+      const registration = appTaskCenter.register({ kind: "folder_mutation", title: "调整文件夹顺序", libraryId, stoppable: false, concurrencyKey: null });
+      if (registration.kind !== "registered") throw new Error("调整文件夹顺序任务意外触发并发拒绝");
+      taskIds.current.set(request, registration.record.id);
+      return reorderFolder(request.path, request.direction);
+    },
+    onSuccess: async (_result, request) => {
+      const taskId = taskIds.current.get(request);
+      if (taskId === undefined) throw new Error("调整文件夹顺序成功但缺少任务中心标识");
+      appTaskCenter.complete(taskId, { counts: { succeeded: 1, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: null });
+      await onCommitted();
+    },
+    onError: (error, request) => {
+      const taskId = taskIds.current.get(request);
+      if (taskId === undefined) throw new Error("调整文件夹顺序失败但缺少任务中心标识");
+      const appError = asAppError(error);
+      appTaskCenter.complete(taskId, { counts: { succeeded: 0, skipped: 0, failed: 0, unprocessed: 0 }, failures: [], error: appError });
+      if (!(error instanceof IpcError)) throw error;
+    },
+  });
 }
 
 /** 删除只作用于逻辑组织；二次确认明确告知子树范围与图片保留语义。 */

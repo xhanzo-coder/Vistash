@@ -30,7 +30,7 @@ mod query;
 mod testing;
 
 pub use batch::{BatchFailure, BatchProgress, BatchReport, SilentProgress};
-pub use image_metadata::{FolderMutationProgress, FolderName, FolderPath, Tag};
+pub use image_metadata::{FolderMutationProgress, FolderName, FolderPath, FolderReorder, Tag};
 pub use lifecycle::{PurgeFailure, PurgeReport, RestoreOutcome};
 pub use prompt_lifecycle::{PromptPurgeFailure, PromptPurgeReport, PromptRestoreOutcome};
 pub use linking::{ImportAndLinkItem, ImportAndLinkOutcome, ImportAndLinkReport};

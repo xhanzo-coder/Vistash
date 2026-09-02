@@ -180,6 +180,11 @@ export function deleteFolder(path: string): Promise<void> {
   return call<void>("delete_folder", { path });
 }
 
+/** 同级相邻交换文件夹顺序；到达分组边界时后端保持原顺序。 */
+export function reorderFolder(path: string, direction: "up" | "down"): Promise<void> {
+  return call<void>("reorder_folder", { path, direction });
+}
+
 /** 把素材移动到唯一目标文件夹；`folder` 为 null 表示移回未分类。 */
 export function moveAssetToFolder(hash: string, folder: string | null): Promise<void> {
   return call<void>("move_asset_to_folder", { hash, folder });

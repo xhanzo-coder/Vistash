@@ -13,10 +13,19 @@ use crate::hashing::ContentHash;
 use crate::library::FolderList;
 use crate::sidecar::AssetSidecar;
 use crate::{colorcard, colorcard::ColorCard, media};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::Catalog;
+
+/// 同级相邻交换方向；序列化词与前端调用约定一致（"up" / "down"）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FolderReorder {
+    Up,
+    Down,
+}
 
 /// 一个经过验证的逻辑文件夹名称段。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -113,6 +122,46 @@ fn invalid_folder_path(raw: &str) -> AppError {
     )
 }
 
+/// 按父路径分组（保持传入的相对顺序）；父路径缺失的孤儿条目按根节点处理，
+/// 与前端树构建保持同一兜底。
+fn folder_children_map(paths: &[FolderPath]) -> HashMap<Option<String>, Vec<FolderPath>> {
+    let known: HashSet<&str> = paths.iter().map(|path| path.as_str()).collect();
+    let mut children: HashMap<Option<String>, Vec<FolderPath>> = HashMap::new();
+    for path in paths {
+        let key = match path.parent() {
+            Some(parent) if known.contains(parent.as_str()) => {
+                Some(parent.as_str().to_owned())
+            }
+            _ => None,
+        };
+        children.entry(key).or_default().push(path.clone());
+    }
+    children
+}
+
+/// 以深度优先顺序展开分组：父节点先于整棵子树，同级保持分组内的相对顺序。
+fn emit_folder_order(children: &HashMap<Option<String>, Vec<FolderPath>>) -> Vec<String> {
+    fn emit(
+        path: &FolderPath,
+        children: &HashMap<Option<String>, Vec<FolderPath>>,
+        next: &mut Vec<String>,
+    ) {
+        next.push(path.as_str().to_owned());
+        if let Some(offspring) = children.get(&Some(path.as_str().to_owned())) {
+            for child in offspring {
+                emit(child, children, next);
+            }
+        }
+    }
+    let mut next = Vec::new();
+    if let Some(roots) = children.get(&None).cloned() {
+        for root in &roots {
+            emit(root, children, &mut next);
+        }
+    }
+    next
+}
+
 /// 一个经过规范化与验证的素材标签。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Tag(String);
@@ -198,8 +247,23 @@ impl Catalog {
                 format!("文件夹已经存在：{}", target.as_str()),
             ));
         }
-        list.folders.push(target.as_str().to_owned());
-        list.folders.sort();
+        // 清单顺序即界面呈现顺序（同级手动排序的权威记录）：新子文件夹插到父子树
+        // 末尾，顶层文件夹追加到清单末尾；不再字母排序，避免覆盖使用者的排列。
+        let insert_at = match parent {
+            Some(parent) => list
+                .folders
+                .iter()
+                .rposition(|path| {
+                    path == parent.as_str()
+                        || FolderPath::parse(path)
+                            .map(|path| path.is_descendant_of(parent))
+                            .unwrap_or(false)
+                })
+                .map(|index| index + 1)
+                .unwrap_or(list.folders.len()),
+            None => list.folders.len(),
+        };
+        list.folders.insert(insert_at, target.as_str().to_owned());
         self.library.write_folders(&list)?;
         if let Err(error) = self.index_mut()?.set_folders(&list) {
             self.rebuild_after_index_failure(error)?;
@@ -504,8 +568,14 @@ impl Catalog {
                 Ok(mapped.as_str().to_owned())
             })
             .collect::<Result<Vec<_>>>()?;
-        next_folders.sort();
+        // 保持清单相对顺序：子树在原地完成路径改写，使用者的同级排列不被重置。
         next_folders.dedup();
+        // 原地改写可能让子树越过其新父节点；按深度优先重整，同级相对顺序不变。
+        let reparented: Vec<FolderPath> = next_folders
+            .iter()
+            .map(|path| FolderPath::parse(path))
+            .collect::<Result<Vec<_>>>()?;
+        let next_folders = emit_folder_order(&folder_children_map(&reparented));
         let next_list = FolderList {
             format_version: original_list.format_version,
             folders: next_folders,
@@ -585,6 +655,66 @@ impl Catalog {
             changed_sidecars.push((sidecar_path, sidecar));
         }
         self.commit_metadata(&changed_sidecars, &next_list, |_, _| Ok(()))
+    }
+
+    /// 同级相邻交换文件夹顺序。
+    ///
+    /// 只改动 `folders.json` 的条目顺序，不触碰任何侧车与图片归属；到达同级分组
+    /// 边界时是安静的无操作（界面可能持有过期快照，重复点击不应报错）。交换以
+    /// 深度优先重建整份清单：被移动节点的完整子树随它一起换位置，其余节点的
+    /// 相对顺序保持不变。
+    pub fn reorder_folder(&mut self, source: &FolderPath, direction: FolderReorder) -> Result<()> {
+        let list = self.library.read_folders()?;
+        if !list.folders.iter().any(|path| path == source.as_str()) {
+            return Err(AppError::detailed(
+                Code::LibraryFolderNotFound,
+                format!("文件夹不存在：{}", source.as_str()),
+            ));
+        }
+        let paths: Vec<FolderPath> = list
+            .folders
+            .iter()
+            .map(|path| FolderPath::parse(path))
+            .collect::<Result<Vec<_>>>()?;
+        let mut children = folder_children_map(&paths);
+        let source_parent = children
+            .iter()
+            .find(|(_, group)| group.iter().any(|path| path == source))
+            .map(|(key, _)| key.clone())
+            .expect("源文件夹已校验存在于清单，必然出现在某个父级分组中");
+        let mut siblings = children
+            .get(&source_parent)
+            .cloned()
+            .expect("源文件夹所在分组必然存在");
+        let position = siblings
+            .iter()
+            .position(|path| path == source)
+            .expect("源文件夹已校验存在于清单，必然出现在其同级分组中");
+        match direction {
+            FolderReorder::Up => {
+                if position == 0 {
+                    return Ok(());
+                }
+                siblings.swap(position, position - 1);
+            }
+            FolderReorder::Down => {
+                if position + 1 >= siblings.len() {
+                    return Ok(());
+                }
+                siblings.swap(position, position + 1);
+            }
+        }
+        children.insert(source_parent, siblings);
+        let next = emit_folder_order(&children);
+        let next_list = FolderList {
+            format_version: list.format_version,
+            folders: next,
+        };
+        self.library.write_folders(&next_list)?;
+        if let Err(error) = self.index_mut()?.set_folders(&next_list) {
+            self.rebuild_after_index_failure(error)?;
+        }
+        Ok(())
     }
 
 

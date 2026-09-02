@@ -1,5 +1,12 @@
 .tree { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1); }
-.node { position: relative; width: 100%; touch-action: none; }
+.row { display: flex; align-items: center; min-width: 0; }
+.caret { display: inline-flex; flex: 0 0 1.15rem; align-items: center; justify-content: center; width: 1.15rem; height: 1.75rem; padding: 0; border: 0; background: transparent; color: var(--text-secondary); cursor: default; }
+.caret:hover:not(:disabled) { color: var(--text-primary); }
+.caret:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; border-radius: var(--radius-control); }
+.caret svg { width: .85rem; height: .85rem; transition: transform 120ms ease; }
+.caret[data-collapsed="true"] svg { transform: rotate(-90deg); }
+.caretSpacer { flex: 0 0 1.15rem; }
+.node { position: relative; flex: 1 1 auto; min-width: 0; touch-action: none; }
 .node[data-folder-tree-drop="true"] { outline: 2px solid var(--focus-ring); outline-offset: -2px; background: var(--selection-surface); }
 .label { display: inline-flex; min-width: 0; align-items: center; gap: var(--space-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .guide { width: .7rem; height: 1.5rem; flex: 0 0 .7rem; margin-inline-start: -.35rem; border-inline-start: 1px solid var(--border-strong); opacity: .42; }

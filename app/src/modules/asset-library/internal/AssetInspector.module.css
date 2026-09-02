@@ -13,7 +13,7 @@
 .sectionBody > section { padding: 0; }
 .filename { font-weight: 600; overflow-wrap: anywhere; }
 .summaryHeading { display: flex; align-items: start; justify-content: space-between; gap: var(--space-3); }
-.summaryHeading > div:first-child { min-width: 0; }
+.summaryHeading > div:first-child { min-width: 0; flex: 1 1 auto; }
 .inspectorActions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-1); }
 .preview { height: 9rem; margin-bottom: var(--space-3); display: flex; align-items: center; justify-content: center; background: var(--surface-sunken); overflow: hidden; }
 .preview img { width: 100%; height: 100%; object-fit: contain; }
