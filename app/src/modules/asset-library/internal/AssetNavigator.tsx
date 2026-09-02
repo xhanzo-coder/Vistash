@@ -74,10 +74,10 @@ export function AssetNavigator({ folderActions, width, collapsed, onToggleCollap
     <aside className={presentation === "sidebar" ? styles.navigationRail : styles.dialogNavigator}
       data-collapsed={presentation === "sidebar" && collapsed ? "true" : undefined}
       style={presentation === "sidebar" ? { flexBasis: collapsed ? "3.5rem" : `${width}px` } : undefined}>
+      {presentation === "sidebar" ? <div className={styles.panelHeader}>
+        <Tooltip content={collapsed ? "展开图片导航" : "收起图片导航"}><IconButton size="compact" label={collapsed ? "展开图片导航" : "收起图片导航"} icon={<SidebarSimpleIcon />} onClick={onToggleCollapsed} /></Tooltip>
+      </div> : null}
       <nav aria-label="图片导航" className={styles.navigator}>
-        {presentation === "sidebar" ? <div className={styles.panelHeader}>
-          <Tooltip content={collapsed ? "展开图片导航" : "收起图片导航"}><IconButton size="compact" label={collapsed ? "展开图片导航" : "收起图片导航"} icon={<SidebarSimpleIcon />} onClick={onToggleCollapsed} /></Tooltip>
-        </div> : null}
         <div className={styles.navGroup}>
           <Button size="compact" variant="ghost" className={styles.navEntry} title="全部图片" startIcon={<ImagesIcon />}
             aria-current={browsingActive && !favoritesCurrent && scope.folder.kind === "all" ? "true" : undefined}

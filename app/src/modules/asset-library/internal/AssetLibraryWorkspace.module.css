@@ -18,7 +18,7 @@
 .sortSelect { height: 32px; padding-inline: var(--space-3); background: var(--surface-panel); color: inherit; border: 1px solid var(--border-subtle); border-radius: var(--radius-control); font-size: var(--text-size-sm); }
 .columns { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .content { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
-.navigationRail { display: flex; flex: 0 0 13.5rem; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border-subtle); background: var(--surface-sunken); }
+.navigationRail { position: relative; display: flex; flex: 0 0 13.5rem; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border-subtle); background: var(--surface-sunken); }
 .dialogNavigator { display: grid; gap: var(--space-4); }
 .mobileNavigation { display: none; }
 .filenameInspector { display: flex; flex: 0 0 18rem; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--border-subtle); background: var(--surface-panel); }
@@ -33,7 +33,8 @@
 /* 状态/错误文本独占一行：不再把文件名挤压成逐字竖排。 */
 .inspectorActions > p { flex-basis: 100%; margin: 0; text-align: end; overflow-wrap: anywhere; }
 .navigator { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: var(--space-5); overflow: auto; padding: var(--space-4) var(--space-3); background: var(--surface-sunken); }
-.panelHeader { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+/* 收起按钮悬浮在导航右上角，不再独占一行；底色避免滚动内容从图标下透出。 */
+.panelHeader { position: absolute; z-index: 1; inset-block-start: var(--space-3); inset-inline-end: var(--space-3); display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: var(--space-2); border-radius: var(--radius-control); background: var(--surface-sunken); }
 .sectionHeading, .navigationHint { color: var(--text-tertiary); font-size: var(--text-size-sm); }
 .sectionHeading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-1); min-height: 32px; padding-inline-start: var(--space-2); margin-block-end: var(--space-2); }
 .folderActions { display: flex; align-items: center; }
@@ -109,7 +110,7 @@
 .navEntry[data-drop-target="true"] { outline: 2px solid var(--focus-ring); outline-offset: -2px; background: var(--selection-surface); }
 .navEntry[data-folder-tree-drop="true"] { outline: 2px solid var(--focus-ring); outline-offset: -2px; background: var(--selection-surface); }
 .navigationRail[data-collapsed="true"] .navigator { padding-inline: var(--space-2); }
-.navigationRail[data-collapsed="true"] .panelHeader { justify-content: center; }
+.navigationRail[data-collapsed="true"] .panelHeader { position: static; justify-content: center; padding: var(--space-4) var(--space-2) 0; }
 .navigationRail[data-collapsed="true"] .folderSection, .navigationRail[data-collapsed="true"] .tagSection, .navigationRail[data-collapsed="true"] .trashBadge { display: none; }
 .navigationRail[data-collapsed="true"] .navEntry { position: relative; justify-content: center; padding-inline: 0; }
 .navigationRail[data-collapsed="true"] .navEntry > span:not([aria-hidden]) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
