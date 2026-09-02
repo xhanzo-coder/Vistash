@@ -39,14 +39,27 @@ def main():
                           const nav = workspace.querySelector('nav');
                           const heading = workspace.querySelector('h1').parentElement;
                           const inspector = workspace.querySelector('aside[aria-label="图片检查器"]');
+                          const collapseButton = workspace.querySelector('button[aria-label="收起图片导航"]');
+                          const firstEntry = nav.querySelector('button[title="全部图片"]');
+                          if (collapseButton === null || firstEntry === null) {
+                            throw new Error('缺少图片导航收起按钮或全部图片入口');
+                          }
+                          const collapseRect = collapseButton.getBoundingClientRect();
+                          const firstEntryRect = firstEntry.getBoundingClientRect();
+                          const verticalOverlap = collapseRect.bottom > firstEntryRect.top && collapseRect.top < firstEntryRect.bottom;
+                          const horizontalOverlap = collapseRect.right > firstEntryRect.left && collapseRect.left < firstEntryRect.right;
                           return {
                             workspaceTop: workspace.getBoundingClientRect().top,
                             navigationTop: nav.getBoundingClientRect().top,
                             headingTop: heading.getBoundingClientRect().top,
                             inspectorTop: inspector?.getBoundingClientRect().top,
-                            scrollWidth: document.documentElement.scrollWidth
+                            scrollWidth: document.documentElement.scrollWidth,
+                            collapseButton: { top: collapseRect.top, right: collapseRect.right, bottom: collapseRect.bottom, left: collapseRect.left },
+                            firstEntry: { top: firstEntryRect.top, right: firstEntryRect.right, bottom: firstEntryRect.bottom, left: firstEntryRect.left },
+                            collapseOverlapsFirstEntry: verticalOverlap && horizontalOverlap,
                           };
                         }""")
+                        assert not geometry["collapseOverlapsFirstEntry"], geometry
                         assert abs(geometry["navigationTop"] - geometry["workspaceTop"]) <= 1, geometry
                         assert abs(geometry["headingTop"] - geometry["workspaceTop"]) <= 1, geometry
                         if width > 780:
@@ -86,6 +99,31 @@ def main():
                               const box = document.querySelector('[data-waterfall-item]').getBoundingClientRect();
                               return Math.abs(box.width - box.height) <= 1;
                             }""")
+                        if width > 1050:
+                            collapse = page.get_by_role("button", name="收起图片导航", exact=True)
+                            expect(collapse).to_be_visible()
+                            collapse.click()
+                            expand = page.get_by_role("button", name="展开图片导航", exact=True)
+                            expect(expand).to_be_visible()
+                            collapsed_geometry = page.evaluate("""() => {
+                              const workspace = document.querySelector('[aria-label="图片工作区"]');
+                              const nav = workspace.querySelector('nav');
+                              const collapseButton = workspace.querySelector('button[aria-label="展开图片导航"]');
+                              const firstEntry = nav.querySelector('button[title="全部图片"]');
+                              if (collapseButton === null || firstEntry === null) {
+                                throw new Error('收起态缺少展开按钮或全部图片入口');
+                              }
+                              const collapseRect = collapseButton.getBoundingClientRect();
+                              const firstEntryRect = firstEntry.getBoundingClientRect();
+                              return {
+                                collapseButton: { top: collapseRect.top, right: collapseRect.right, bottom: collapseRect.bottom, left: collapseRect.left },
+                                firstEntry: { top: firstEntryRect.top, right: firstEntryRect.right, bottom: firstEntryRect.bottom, left: firstEntryRect.left },
+                                collapseOverlapsFirstEntry: collapseRect.bottom > firstEntryRect.top && collapseRect.top < firstEntryRect.bottom && collapseRect.right > firstEntryRect.left && collapseRect.left < firstEntryRect.right,
+                              };
+                            }""")
+                            assert not collapsed_geometry["collapseOverlapsFirstEntry"], collapsed_geometry
+                            expand.click()
+                            expect(page.get_by_role("button", name="收起图片导航", exact=True)).to_be_visible()
                         assert not errors, errors
                         report = {"theme": theme, "width": width, "height": height, "source": "production-component-memory-fixture", "geometry": geometry}
                         reports.append(report)
